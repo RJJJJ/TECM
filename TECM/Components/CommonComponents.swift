@@ -480,3 +480,139 @@ struct BookingSummaryCard: View {
         }
     }
 }
+
+struct OutlineCard<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            content
+        }
+        .padding(Theme.Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .stroke(Theme.Colors.line, style: StrokeStyle(lineWidth: 1, dash: [6, 4]))
+        }
+        .background(Theme.Colors.warmSurface.opacity(0.7))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+    }
+}
+
+struct CourseCard: View {
+    let course: Course
+
+    var body: some View {
+        ElevatedCard {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                HStack(alignment: .top) {
+                    Text(course.title)
+                        .font(Theme.Typography.cardTitle)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                    Spacer()
+                    StatusChip(title: course.level, color: Theme.Colors.primary)
+                }
+
+                Text(course.summary)
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .lineLimit(2)
+
+                HStack(spacing: Theme.Spacing.xs) {
+                    ForEach(course.focusTags, id: \.self) { tag in
+                        StatusChip(title: tag, color: Theme.Colors.accent)
+                    }
+                }
+
+                Text("\(course.schedule) ・ \(course.campus)")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+        }
+    }
+}
+
+struct FAQRow: View {
+    let item: FAQItem
+    @Binding var expandedID: UUID?
+
+    private var isExpanded: Bool {
+        expandedID == item.id
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expandedID = isExpanded ? nil : item.id
+                }
+            } label: {
+                HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.topic)
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.blueGray)
+                        Text(item.question)
+                            .font(Theme.Typography.body.weight(.semibold))
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer()
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.blueGray)
+                        .padding(.top, 2)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Text(item.answer)
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(Theme.Spacing.md)
+        .background(Theme.Colors.card)
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .stroke(Theme.Colors.line.opacity(0.5), lineWidth: 0.8)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+    }
+}
+
+struct EmptyState: View {
+    let title: String
+    let message: String
+    var icon: String = "tray"
+
+    var body: some View {
+        VStack(spacing: Theme.Spacing.xs) {
+            Image(systemName: icon)
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(Theme.Colors.blueGray)
+                .padding(.bottom, 2)
+            Text(title)
+                .font(Theme.Typography.cardTitle)
+                .foregroundStyle(Theme.Colors.textPrimary)
+            Text(message)
+                .font(Theme.Typography.body)
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(Theme.Spacing.lg)
+        .frame(maxWidth: .infinity)
+        .background(Theme.Colors.warmSurface)
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .stroke(Theme.Colors.line.opacity(0.6), lineWidth: 0.8)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+    }
+}
