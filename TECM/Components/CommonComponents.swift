@@ -18,9 +18,56 @@ struct SectionHeader: View {
     }
 }
 
+struct RefinedPrimaryButtonStyle: ButtonStyle {
+    var disabled: Bool = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.white.opacity(disabled ? 0.75 : 1))
+            .padding(.vertical, Theme.Spacing.sm)
+            .frame(maxWidth: .infinity)
+            .background(
+                LinearGradient(
+                    colors: disabled
+                    ? [Theme.Colors.blueGray.opacity(0.45), Theme.Colors.blueGray.opacity(0.35)]
+                    : [Theme.Colors.primary, Theme.Colors.primary.opacity(0.85)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                    .stroke(.white.opacity(disabled ? 0.08 : 0.24), lineWidth: 0.8)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.984 : 1)
+            .opacity(configuration.isPressed ? 0.95 : 1)
+            .shadow(color: Theme.Colors.primary.opacity(configuration.isPressed ? 0.08 : 0.2), radius: configuration.isPressed ? 5 : 10, y: configuration.isPressed ? 2 : 6)
+            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
+    }
+}
+
+struct RefinedSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(Theme.Colors.primary)
+            .padding(.vertical, Theme.Spacing.sm)
+            .frame(maxWidth: .infinity)
+            .background(Theme.Colors.mistBlue.opacity(0.5))
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                    .stroke(Theme.Colors.line.opacity(0.8), lineWidth: 0.8)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.986 : 1)
+            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
+    }
+}
+
 struct PrimaryButton: View {
     let title: String
     var icon: String?
+    var isDisabled: Bool = false
     var action: () -> Void
 
     var body: some View {
@@ -33,13 +80,9 @@ struct PrimaryButton: View {
                 Text(title)
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
             }
-            .foregroundStyle(.white)
-            .padding(.vertical, Theme.Spacing.sm)
-            .frame(maxWidth: .infinity)
-            .background(Theme.Colors.primary)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
         }
-        .buttonStyle(PressableScaleStyle())
+        .disabled(isDisabled)
+        .buttonStyle(RefinedPrimaryButtonStyle(disabled: isDisabled))
     }
 }
 
@@ -51,13 +94,8 @@ struct SecondaryButton: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
-                .foregroundStyle(Theme.Colors.primary)
-                .padding(.vertical, Theme.Spacing.sm)
-                .frame(maxWidth: .infinity)
-                .background(Theme.Colors.mistBlue.opacity(0.65))
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
         }
-        .buttonStyle(PressableScaleStyle())
+        .buttonStyle(RefinedSecondaryButtonStyle())
     }
 }
 
@@ -72,11 +110,10 @@ struct QuietCard<Content: View>: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) { content }
             .padding(Theme.Spacing.md)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.Colors.warmSurface)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+            .background(.ultraThinMaterial.opacity(0.6), in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                    .stroke(Theme.Colors.line.opacity(0.4), lineWidth: 0.8)
+                    .stroke(Theme.Colors.line.opacity(0.5), lineWidth: 0.8)
             }
     }
 }
@@ -92,28 +129,36 @@ struct ElevatedCard<Content: View>: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) { content }
             .padding(Theme.Spacing.md)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.Colors.card)
+            .background(
+                LinearGradient(colors: [Theme.Colors.card, Theme.Colors.warmSurface], startPoint: .topLeading, endPoint: .bottomTrailing)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                    .stroke(Theme.Colors.line.opacity(0.55), lineWidth: 0.8)
+            }
             .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
             .subtleCardShadow()
     }
 }
 
-struct OutlineCard<Content: View>: View {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
+struct BookingStatusChip: View {
+    let status: BookingStatus
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) { content }
-            .padding(Theme.Spacing.md)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.clear)
-            .overlay {
-                RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                    .stroke(Theme.Colors.line, lineWidth: 1)
-            }
+        HStack(spacing: 6) {
+            Image(systemName: status.icon)
+                .font(.system(size: 10, weight: .semibold))
+            Text(status.rawValue)
+                .font(Theme.Typography.chip)
+        }
+        .foregroundStyle(status.color)
+        .padding(.horizontal, Theme.Spacing.sm)
+        .padding(.vertical, Theme.Spacing.xxs + 2)
+        .background(status.color.opacity(0.13))
+        .overlay {
+            Capsule().stroke(status.color.opacity(0.35), lineWidth: 0.7)
+        }
+        .clipShape(Capsule())
     }
 }
 
@@ -132,27 +177,23 @@ struct StatusChip: View {
     }
 }
 
-struct QuickActionTile: View {
-    let title: String
-    let subtitle: String
-    let icon: String
+struct FloatingFeedbackToast: View {
+    let message: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Image(systemName: icon)
-                .font(.system(size: Theme.Icon.md, weight: .semibold))
-                .foregroundStyle(Theme.Colors.primary)
-            Text(title)
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                .foregroundStyle(Theme.Colors.textPrimary)
-            Text(subtitle)
-                .font(Theme.Typography.caption)
-                .foregroundStyle(Theme.Colors.textSecondary)
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+            Text(message)
+                .font(Theme.Typography.caption.weight(.semibold))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Theme.Spacing.md)
-        .background(Theme.Colors.card)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+        .foregroundStyle(Theme.Colors.success)
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, Theme.Spacing.sm)
+        .background(Theme.Colors.warmSurface)
+        .overlay {
+            Capsule().stroke(Theme.Colors.success.opacity(0.35), lineWidth: 0.8)
+        }
+        .clipShape(Capsule())
         .subtleCardShadow()
     }
 }
@@ -183,8 +224,7 @@ struct QuickActionGrid: View {
                             .font(.system(size: Theme.Icon.md, weight: .semibold))
                             .foregroundStyle(item.tint)
                             .padding(10)
-                            .background(item.tint.opacity(0.12))
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+                            .background(item.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
                         Text(item.title)
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
                             .foregroundStyle(Theme.Colors.textPrimary)
@@ -196,6 +236,10 @@ struct QuickActionGrid: View {
                     .padding(Theme.Spacing.md)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.Colors.card)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                            .stroke(Theme.Colors.line.opacity(0.5), lineWidth: 0.8)
+                    }
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
                     .subtleCardShadow()
                 }
@@ -217,7 +261,7 @@ struct CompactPreviewCard: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(tint)
                 .frame(width: 34, height: 34)
-                .background(tint.opacity(0.14))
+                .background(tint.opacity(0.13))
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
@@ -236,11 +280,11 @@ struct CompactPreviewCard: View {
         .padding(Theme.Spacing.md)
         .frame(width: 280)
         .background(Theme.Colors.warmSurface)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                 .stroke(Theme.Colors.line.opacity(0.45), lineWidth: 0.8)
         }
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
     }
 }
 
@@ -259,26 +303,25 @@ struct FeaturedNewsCard: View {
             Text(item.title)
                 .font(.system(size: 21, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white)
-            Text(item.summary)
-                .font(Theme.Typography.body)
-                .foregroundStyle(.white.opacity(0.9))
                 .lineLimit(2)
-
-            HStack(spacing: 6) {
+            Text(item.summary)
+                .font(Theme.Typography.caption)
+                .foregroundStyle(.white.opacity(0.88))
+                .lineLimit(2)
+            HStack {
                 Text("查看詳情")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(Theme.Typography.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                Spacer()
             }
-            .foregroundStyle(.white.opacity(0.95))
-            .padding(.top, Theme.Spacing.xs)
         }
-        .padding(Theme.Spacing.lg)
+        .padding(Theme.Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LinearGradient(colors: [Theme.Colors.primary, Theme.Colors.blueGray], startPoint: .topLeading, endPoint: .bottomTrailing)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous))
+        .background(LinearGradient(colors: [Theme.Colors.primary, Theme.Colors.blueGray], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
         .subtleCardShadow()
     }
 }
@@ -288,54 +331,125 @@ struct SupportingNewsCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            StatusChip(title: item.category, color: Theme.Colors.blueGray)
+            HStack {
+                StatusChip(title: item.category, color: Theme.Colors.accent)
+                Spacer()
+                Text(item.date)
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.blueGray)
+            }
             Text(item.title)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(2)
             Text(item.summary)
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .lineLimit(2)
-            Text(item.date)
+            HStack {
+                Text("查看詳情")
+                    .font(Theme.Typography.caption.weight(.semibold))
+                    .foregroundStyle(Theme.Colors.primary)
+                Spacer()
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.primary)
+            }
+        }
+        .padding(Theme.Spacing.md)
+        .frame(width: 250, alignment: .leading)
+        .background(Theme.Colors.card)
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .stroke(Theme.Colors.line.opacity(0.5), lineWidth: 0.8)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+    }
+}
+
+struct QuickActionTile: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: icon)
+                .font(.system(size: Theme.Icon.md, weight: .semibold))
+                .foregroundStyle(Theme.Colors.primary)
+                .frame(width: 34, height: 34)
+                .background(Theme.Colors.mistBlue.opacity(0.45), in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Text(subtitle)
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            Spacer()
+        }
+        .padding(Theme.Spacing.md)
+        .background(Theme.Colors.card)
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .stroke(Theme.Colors.line.opacity(0.45), lineWidth: 0.8)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+    }
+}
+
+struct ParentDashboardTile: View {
+    let title: String
+    let value: String
+    let note: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.textSecondary)
+            Text(value)
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                .foregroundStyle(Theme.Colors.primary)
+            Text(note)
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.blueGray)
         }
         .padding(Theme.Spacing.md)
-        .frame(width: 240, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.Colors.card)
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .stroke(Theme.Colors.line.opacity(0.5), lineWidth: 0.8)
+        }
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
-        .subtleCardShadow()
     }
 }
 
-struct CourseCard: View {
-    let course: Course
+struct InternalDemoBadge: View {
+    var body: some View {
+        Text("Internal Demo")
+            .font(Theme.Typography.chip)
+            .foregroundStyle(Theme.Colors.primary)
+            .padding(.horizontal, Theme.Spacing.sm)
+            .padding(.vertical, Theme.Spacing.xxs + 2)
+            .background(Theme.Colors.mistBlue.opacity(0.55))
+            .clipShape(Capsule())
+    }
+}
+
+struct LockedState: View {
+    let title: String
+    let message: String
 
     var body: some View {
-        ElevatedCard {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                    Text(course.title)
-                        .font(Theme.Typography.cardTitle)
-                    Text(course.summary)
-                        .font(Theme.Typography.body)
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                }
-                Spacer()
-                if course.recommended {
-                    StatusChip(title: "推薦", color: Theme.Colors.primary)
-                }
-            }
-
-            HStack(spacing: Theme.Spacing.xs) {
-                StatusChip(title: course.category, color: Theme.Colors.accent)
-                StatusChip(title: course.level, color: Theme.Colors.blueGray)
-                StatusChip(title: course.ageGroup, color: Theme.Colors.primary)
-            }
-
-            Text("\(course.schedule) ・ \(course.campus)")
-                .font(Theme.Typography.caption)
+        QuietCard {
+            Text(title)
+                .font(Theme.Typography.cardTitle)
+                .foregroundStyle(Theme.Colors.textPrimary)
+            Text(message)
+                .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
     }
@@ -348,152 +462,21 @@ struct BookingSummaryCard: View {
     let status: BookingStatus?
 
     var body: some View {
-        QuietCard {
-            Text("預約摘要")
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+        ElevatedCard {
+            HStack {
+                Text("本次預約摘要")
+                    .font(Theme.Typography.cardTitle)
+                Spacer()
+                if let status {
+                    BookingStatusChip(status: status)
+                }
+            }
             Text(course)
-                .font(Theme.Typography.cardTitle)
-            Text("\(campus) ・ \(dateText)")
-                .font(Theme.Typography.caption)
-                .foregroundStyle(Theme.Colors.textSecondary)
-            if let status {
-                StatusChip(title: status.rawValue, color: status.color)
-            }
-        }
-    }
-}
-
-struct FAQRow: View {
-    let item: FAQItem
-    @Binding var expandedID: UUID?
-
-    var isExpanded: Bool { expandedID == item.id }
-
-    var body: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.22)) {
-                expandedID = isExpanded ? nil : item.id
-            }
-        } label: {
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                HStack {
-                    Text(item.question)
-                        .font(.system(size: 16, weight: .medium, design: .rounded))
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                    Spacer()
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .foregroundStyle(Theme.Colors.blueGray)
-                }
-                if isExpanded {
-                    Text(item.answer)
-                        .font(Theme.Typography.body)
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-            }
-            .padding(Theme.Spacing.md)
-            .background(Theme.Colors.card)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
-            .subtleCardShadow()
-        }
-        .buttonStyle(PressableScaleStyle())
-    }
-}
-
-struct EmptyState: View {
-    let title: String
-    let message: String
-
-    var body: some View {
-        QuietCard {
-            Image(systemName: "circle.grid.2x2")
-                .font(.system(size: Theme.Icon.lg))
-                .foregroundStyle(Theme.Colors.accent)
-            Text(title)
-                .font(Theme.Typography.cardTitle)
-            Text(message)
+                .font(Theme.Typography.body.weight(.semibold))
+                .foregroundStyle(Theme.Colors.textPrimary)
+            Text("\(campus) · \(dateText)")
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
-    }
-}
-
-struct LockedState: View {
-    let title: String
-    let message: String
-
-    var body: some View {
-        OutlineCard {
-            Image(systemName: "lock.shield")
-                .font(.system(size: Theme.Icon.lg))
-                .foregroundStyle(Theme.Colors.blueGray)
-            Text(title)
-                .font(Theme.Typography.cardTitle)
-            Text(message)
-                .font(Theme.Typography.caption)
-                .foregroundStyle(Theme.Colors.textSecondary)
-        }
-    }
-}
-
-struct ParentDashboardTile: View {
-    let title: String
-    let value: String
-    let note: String
-
-    var body: some View {
-        QuietCard {
-            Text(title)
-                .font(Theme.Typography.caption)
-                .foregroundStyle(Theme.Colors.textSecondary)
-            Text(value)
-                .font(.system(size: 22, weight: .semibold, design: .rounded))
-            Text(note)
-                .font(Theme.Typography.caption)
-                .foregroundStyle(Theme.Colors.blueGray)
-        }
-    }
-}
-
-struct HeroBanner: View {
-    let title: String
-    let subtitle: String
-
-    var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                .fill(
-                    LinearGradient(colors: [Theme.Colors.primary, Theme.Colors.accent], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
-            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                Text("TECM EDUCATION")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.8))
-                Text(title)
-                    .font(Theme.Typography.heroTitle)
-                    .foregroundStyle(.white)
-                Text(subtitle)
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(.white.opacity(0.92))
-            }
-            .padding(Theme.Spacing.lg)
-        }
-        .frame(height: 230)
-        .subtleCardShadow()
-    }
-}
-
-struct InternalDemoBadge: View {
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "lock.open.display")
-            Text("Internal Demo")
-        }
-        .font(.system(size: 11, weight: .semibold, design: .rounded))
-        .foregroundStyle(Theme.Colors.blueGray)
-        .padding(.horizontal, Theme.Spacing.sm)
-        .padding(.vertical, Theme.Spacing.xxs + 1)
-        .background(Theme.Colors.mistBlue.opacity(0.5))
-        .clipShape(Capsule())
     }
 }
