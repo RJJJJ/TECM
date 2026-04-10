@@ -1,60 +1,89 @@
 import SwiftUI
 
 struct AgentView: View {
-    @State private var selectedFAQ: FAQItem?
+    @State private var keyword = ""
+    @State private var selectedTopic = "全部"
+    @State private var expandedID: UUID?
+
+    private var topics: [String] {
+        ["全部"] + Array(Set(MockDataStore.faq.map(\.topic))).sorted()
+    }
+
+    private var filteredFAQ: [FAQItem] {
+        MockDataStore.faq.filter { item in
+            let topicMatch = selectedTopic == "全部" || item.topic == selectedTopic
+            let keywordMatch = keyword.isEmpty || item.question.localizedCaseInsensitiveContains(keyword)
+            return topicMatch && keywordMatch
+        }
+    }
 
     var body: some View {
         ScreenContainer(title: "TECM AGENT") {
-            InfoCard {
-                Text("智能常見問題助理")
-                    .font(.headline)
-                Text("現階段提供 FAQ 快速解答。未來將升級為完整對話式 AI 顧問。")
+            QuietCard {
+                Text("FAQ 助理")
+                    .font(Theme.Typography.cardTitle)
+                Text("現階段提供穩定且可追溯的常見問題解答，未來將升級為對話式 AI Agent。")
+                    .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
 
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(Theme.Colors.blueGray)
+                TextField("搜尋問題", text: $keyword)
+            }
+            .padding(Theme.Spacing.sm)
+            .background(Theme.Colors.card)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+            .subtleCardShadow()
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.Spacing.xs) {
+                    ForEach(topics, id: \.self) { topic in
+                        Button(topic) { selectedTopic = topic }
+                            .font(Theme.Typography.chip)
+                            .foregroundStyle(selectedTopic == topic ? .white : Theme.Colors.primary)
+                            .padding(.horizontal, Theme.Spacing.sm)
+                            .padding(.vertical, Theme.Spacing.xs)
+                            .background(selectedTopic == topic ? Theme.Colors.primary : Theme.Colors.mistBlue.opacity(0.5))
+                            .clipShape(Capsule())
+                            .buttonStyle(PressableScaleStyle())
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                SectionHeader(title: "熱門提問", subtitle: nil)
+                let popularItems = MockDataStore.faq.filter(\.popular)
+                ForEach(popularItems) { item in
+                    Text("• \(item.question)")
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                }
+            }
+
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                SectionHeader(title: "快捷問題", subtitle: nil)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        ForEach(MockDataStore.faq) { faq in
-                            Button {
-                                selectedFAQ = faq
-                            } label: {
-                                TagChip(title: faq.question, isSelected: selectedFAQ?.id == faq.id)
-                            }
-                            .buttonStyle(.plain)
-                        }
+                SectionHeader(title: "FAQ", subtitle: "點擊展開答案")
+                if filteredFAQ.isEmpty {
+                    EmptyState(title: "找不到相關問題", message: "可嘗試其他關鍵字，或直接聯絡中心顧問。")
+                } else {
+                    ForEach(filteredFAQ) { item in
+                        FAQRow(item: item, expandedID: $expandedID)
                     }
                 }
             }
 
-            if let selectedFAQ {
-                FAQItemCard(question: selectedFAQ.question, answer: selectedFAQ.answer)
-            } else {
-                EmptyStateView(title: "請選擇一條常見問題", message: "點選上方快捷問題，即可查看 TECM AGENT 建議答案。")
-            }
-
-            InfoCard {
-                Text("未來對話輸入區（示意）")
-                    .font(.subheadline.weight(.semibold))
-                RoundedRectangle(cornerRadius: Theme.CornerRadius.button, style: .continuous)
-                    .fill(Theme.Colors.softBlue)
-                    .frame(height: 48)
-                    .overlay(alignment: .leading) {
-                        Text("未來可在此輸入問題…")
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                            .padding(.horizontal)
-                    }
-                HStack(spacing: Theme.Spacing.sm) {
-                    NavigationLink(destination: BookingView()) {
-                        Text("前往預約試堂")
-                            .fontWeight(.semibold)
-                    }
-                    Spacer()
-                    Button("聯絡我們") { }
-                }
-                .foregroundStyle(Theme.Colors.primaryBlue)
+            OutlineCard {
+                Text("AI 升級預留區")
+                    .font(Theme.Typography.cardTitle)
+                Text("未來可接入對話紀錄、上下文理解與轉人工服務。")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textSecondary)
             }
         }
     }
+}
+
+#Preview {
+    NavigationStack { AgentView() }
 }

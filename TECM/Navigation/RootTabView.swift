@@ -38,6 +38,6 @@ struct RootTabView: View {
                 Label("家長中心", systemImage: "person.crop.circle.fill")
             }
         }
-        .tint(Theme.Colors.primaryBlue)
+        .tint(Theme.Colors.primary)
     }
 }
