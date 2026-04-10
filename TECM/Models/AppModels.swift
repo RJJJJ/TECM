@@ -14,26 +14,71 @@ struct Course: Identifiable {
 }
 
 struct BookingRecord: Identifiable {
-    let id = UUID()
-    let parentName: String
-    let childName: String
-    let childAgeGroup: String
-    let courseName: String
-    let campus: String
-    let timeSlot: String
-    let status: BookingStatus
+    let id: UUID
+    var parentName: String
+    var childName: String
+    var childAgeGroup: String
+    var courseName: String
+    var campus: String
+    var teacherName: String
+    var bookingDate: Date
+    var note: String
+    var status: BookingStatus
+
+    init(id: UUID = UUID(),
+         parentName: String,
+         childName: String,
+         childAgeGroup: String,
+         courseName: String,
+         campus: String,
+         teacherName: String,
+         bookingDate: Date,
+         note: String,
+         status: BookingStatus) {
+        self.id = id
+        self.parentName = parentName
+        self.childName = childName
+        self.childAgeGroup = childAgeGroup
+        self.courseName = courseName
+        self.campus = campus
+        self.teacherName = teacherName
+        self.bookingDate = bookingDate
+        self.note = note
+        self.status = status
+    }
+
+    var dateText: String {
+        bookingDate.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    var timeText: String {
+        bookingDate.formatted(date: .omitted, time: .shortened)
+    }
 }
 
-enum BookingStatus: String {
+enum BookingStatus: String, CaseIterable, Identifiable {
     case pending = "待確認"
     case confirmed = "已確認"
     case completed = "已完成"
+    case cancelled = "已取消"
+
+    var id: String { rawValue }
 
     var color: Color {
         switch self {
         case .pending: return Theme.Colors.warning
         case .confirmed: return Theme.Colors.success
         case .completed: return Theme.Colors.primary
+        case .cancelled: return Theme.Colors.blueGray
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .pending: return "clock"
+        case .confirmed: return "checkmark.circle"
+        case .completed: return "checkmark.seal"
+        case .cancelled: return "xmark.circle"
         }
     }
 }

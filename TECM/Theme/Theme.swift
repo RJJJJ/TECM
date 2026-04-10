@@ -2,18 +2,18 @@ import SwiftUI
 
 enum Theme {
     enum Colors {
-        static let background = Color(hex: "#F7F5F0")
-        static let warmSurface = Color(hex: "#FCFAF5")
+        static let background = Color(hex: "#F8F6F1")
+        static let warmSurface = Color(hex: "#FCFAF6")
         static let card = Color(hex: "#FFFFFF")
-        static let primary = Color(hex: "#20344B")
-        static let mistBlue = Color(hex: "#E4EAF0")
-        static let blueGray = Color(hex: "#637586")
-        static let textPrimary = Color(hex: "#1D2A37")
-        static let textSecondary = Color(hex: "#647180")
-        static let line = Color(hex: "#D5DDE5")
-        static let accent = Color(hex: "#6F8D8C")
-        static let success = Color(hex: "#496C5B")
-        static let warning = Color(hex: "#9B7E58")
+        static let primary = Color(hex: "#23384D")
+        static let mistBlue = Color(hex: "#E6ECF1")
+        static let blueGray = Color(hex: "#6E7D8E")
+        static let textPrimary = Color(hex: "#1E2935")
+        static let textSecondary = Color(hex: "#657585")
+        static let line = Color(hex: "#D7DFE6")
+        static let accent = Color(hex: "#6E948D")
+        static let success = Color(hex: "#557566")
+        static let warning = Color(hex: "#A08863")
     }
 
     enum Spacing {
@@ -34,7 +34,7 @@ enum Theme {
     }
 
     enum Shadow {
-        static let subtle = Color.black.opacity(0.04)
+        static let subtle = Color.black.opacity(0.05)
     }
 
     enum Icon {
@@ -57,8 +57,9 @@ enum Theme {
 struct PressableScaleStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
-            .opacity(configuration.isPressed ? 0.92 : 1)
+            .scaleEffect(configuration.isPressed ? 0.986 : 1)
+            .opacity(configuration.isPressed ? 0.94 : 1)
+            .shadow(color: .black.opacity(configuration.isPressed ? 0.04 : 0.09), radius: configuration.isPressed ? 3 : 8, y: configuration.isPressed ? 1 : 4)
             .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }

@@ -38,10 +38,13 @@ struct BookingView: View {
                         ForEach(slots, id: \.self) { slot in
                             Button(slot) { selectedSlot = slot }
                                 .font(Theme.Typography.caption.weight(.semibold))
-                                .foregroundStyle(selectedSlot == slot ? .white : Theme.Colors.primary)
+                                .foregroundStyle(selectedSlot == slot ? Theme.Colors.primary : Theme.Colors.textSecondary)
                                 .padding(.horizontal, Theme.Spacing.sm)
                                 .padding(.vertical, Theme.Spacing.xs)
-                                .background(selectedSlot == slot ? Theme.Colors.primary : Theme.Colors.mistBlue.opacity(0.55))
+                                .background(selectedSlot == slot ? Theme.Colors.warmSurface : Theme.Colors.mistBlue.opacity(0.4))
+                                .overlay {
+                                    Capsule().stroke(selectedSlot == slot ? Theme.Colors.primary.opacity(0.5) : .clear, lineWidth: 0.8)
+                                }
                                 .clipShape(Capsule())
                                 .buttonStyle(PressableScaleStyle())
                         }
@@ -57,14 +60,11 @@ struct BookingView: View {
                 TextField("聯絡電話", text: $phone)
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.phonePad)
-                PrimaryButton(title: submitted ? "已提交" : "確認預約", icon: "paperplane.fill") {
-                    submitted = true
-                }
             }
 
             if submitted {
                 QuietCard {
-                    StatusChip(title: "待確認", color: Theme.Colors.warning)
+                    BookingStatusChip(status: .pending)
                     Text("預約已送出，顧問將盡快與您聯絡。")
                         .font(Theme.Typography.body)
                     Text("此流程設計旨在降低等待焦慮，您可於家長中心追蹤狀態。")
@@ -72,6 +72,15 @@ struct BookingView: View {
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
+        }
+        .safeAreaInset(edge: .bottom) {
+            PrimaryButton(title: submitted ? "已提交" : "確認預約", icon: submitted ? "checkmark.circle.fill" : "paperplane.fill", isDisabled: submitted || parentName.isEmpty || phone.isEmpty) {
+                submitted = true
+            }
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
+            .background(Theme.Colors.background.opacity(0.95))
         }
     }
 

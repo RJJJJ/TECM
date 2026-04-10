@@ -8,10 +8,19 @@ enum MockDataStore {
         .init(title: "學術閱讀工作坊", category: "語文閱讀", level: "Core", ageGroup: "9-12歲", focusTags: ["閱讀", "摘要"], summary: "訓練重點整理與精準理解，協助孩子建立長期學習方法。", schedule: "星期日 11:00-12:30", campus: "澳門半島校區", recommended: false)
     ]
 
+    private static func makeDate(_ date: String, _ time: String) -> Date {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_Hant_TW")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy/MM/dd HH:mm"
+        return formatter.date(from: "\(date) \(time)") ?? .now
+    }
+
     static let bookings: [BookingRecord] = [
-        .init(parentName: "陳太", childName: "昊昊", childAgeGroup: "6-8歲", courseName: "小學數理思維", campus: "澳門半島校區", timeSlot: "2026/04/18 16:00", status: .pending),
-        .init(parentName: "李先生", childName: "芊芊", childAgeGroup: "3-5歲", courseName: "幼兒雙語啟蒙", campus: "氹仔校區", timeSlot: "2026/04/13 10:00", status: .confirmed),
-        .init(parentName: "黃太", childName: "子言", childAgeGroup: "9-12歲", courseName: "公開演說與表達", campus: "路氹城校區", timeSlot: "2026/04/05 17:00", status: .completed)
+        .init(parentName: "陳太", childName: "昊昊", childAgeGroup: "6-8歲", courseName: "小學數理思維", campus: "澳門半島校區", teacherName: "林老師", bookingDate: makeDate("2026/04/18", "16:00"), note: "孩子對數學文字題較焦慮，請先安排基礎評估。", status: .pending),
+        .init(parentName: "李先生", childName: "芊芊", childAgeGroup: "3-5歲", courseName: "幼兒雙語啟蒙", campus: "氹仔校區", teacherName: "何老師", bookingDate: makeDate("2026/04/13", "10:00"), note: "第一次試堂，希望先觀察專注度。", status: .confirmed),
+        .init(parentName: "黃太", childName: "子言", childAgeGroup: "9-12歲", courseName: "公開演說與表達", campus: "路氹城校區", teacherName: "陳老師", bookingDate: makeDate("2026/04/05", "17:00"), note: "希望強化上台語速與結構表達。", status: .completed),
+        .init(parentName: "周先生", childName: "凱晴", childAgeGroup: "6-8歲", courseName: "小學數理思維", campus: "路氹城校區", teacherName: "張老師", bookingDate: makeDate("2026/04/20", "14:00"), note: "臨時外遊，需改期。", status: .cancelled)
     ]
 
     static let notifications: [ParentNotification] = [

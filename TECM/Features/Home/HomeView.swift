@@ -16,17 +16,9 @@ struct HomeView: View {
         Array(MockDataStore.courses.filter(\.recommended).prefix(3))
     }
 
-    private var newsItems: [NewsItem] {
-        MockDataStore.news
-    }
-
-    private var featuredNews: NewsItem? {
-        newsItems.first(where: \.isFeatured)
-    }
-
-    private var supportingNews: [NewsItem] {
-        newsItems.filter { !$0.isFeatured }
-    }
+    private var newsItems: [NewsItem] { MockDataStore.news }
+    private var featuredNews: NewsItem? { newsItems.first(where: \.isFeatured) }
+    private var supportingNews: [NewsItem] { newsItems.filter { !$0.isFeatured }.prefix(2).map { $0 } }
 
     private let dashboardActions: [DashboardActionItem] = [
         .init(title: "立即預約", subtitle: "安排體驗課時段", icon: "calendar.badge.plus", tint: Theme.Colors.primary),
@@ -48,11 +40,9 @@ struct HomeView: View {
                 HStack {
                     InternalDemoBadge()
                     Spacer()
-                    NavigationLink("管理預覽入口") {
-                        AdminPreviewView(hasInternalAccess: true)
-                    }
-                    .font(Theme.Typography.caption.weight(.semibold))
-                    .foregroundStyle(Theme.Colors.primary)
+                    NavigationLink("管理預覽入口") { AdminPreviewView(hasInternalAccess: true) }
+                        .font(Theme.Typography.caption.weight(.semibold))
+                        .foregroundStyle(Theme.Colors.primary)
                 }
                 .transition(.opacity)
             }
@@ -67,9 +57,15 @@ struct HomeView: View {
     private var heroSection: some View {
         ZStack(alignment: .bottomLeading) {
             RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                .fill(
-                    LinearGradient(colors: [Theme.Colors.primary, Theme.Colors.blueGray], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
+                .fill(LinearGradient(colors: [Theme.Colors.primary, Color(hex: "#3A4F66")], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .overlay(alignment: .topTrailing) {
+                    Circle()
+                        .fill(.white.opacity(0.14))
+                        .frame(width: 180)
+                        .blur(radius: 2)
+                        .offset(x: 50, y: -70)
+                }
+
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 Text("TECM EDUCATION")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
@@ -121,14 +117,10 @@ struct HomeView: View {
             SectionHeader(title: "今天可以做什麼", subtitle: "以 dashboard 方式快速進入常用任務")
             QuickActionGrid(actions: dashboardActions) { item in
                 switch item.title {
-                case "立即預約":
-                    return AnyView(BookingView())
-                case "課程地圖":
-                    return AnyView(CoursesView())
-                case "家長中心":
-                    return AnyView(ParentCenterView())
-                default:
-                    return AnyView(AgentView())
+                case "立即預約": return AnyView(BookingView())
+                case "課程地圖": return AnyView(CoursesView())
+                case "家長中心": return AnyView(ParentCenterView())
+                default: return AnyView(AgentView())
                 }
             }
         }
@@ -170,22 +162,15 @@ struct HomeView: View {
             }
 
             if let featuredNews {
-                NavigationLink(destination: ParentCenterView()) {
-                    FeaturedNewsCard(item: featuredNews)
-                }
-                .buttonStyle(PressableScaleStyle())
+                NavigationLink(destination: ParentCenterView()) { FeaturedNewsCard(item: featuredNews) }
+                    .buttonStyle(PressableScaleStyle())
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Theme.Spacing.md) {
-                    ForEach(supportingNews) { item in
-                        NavigationLink(destination: ParentCenterView()) {
-                            SupportingNewsCard(item: item)
-                        }
+            HStack(spacing: Theme.Spacing.md) {
+                ForEach(supportingNews) { item in
+                    NavigationLink(destination: ParentCenterView()) { SupportingNewsCard(item: item) }
                         .buttonStyle(PressableScaleStyle())
-                    }
                 }
-                .padding(.vertical, 2)
             }
         }
     }
@@ -219,12 +204,7 @@ struct HomeView: View {
         switch selectedSegment {
         case .featuredCourses:
             return featuredCourses.map {
-                (
-                    title: $0.title,
-                    summary: $0.summary,
-                    hint: "\($0.level) ・ \($0.ageGroup)",
-                    destination: AnyView(CoursesView())
-                )
+                (title: $0.title, summary: $0.summary, hint: "\($0.level) ・ \($0.ageGroup)", destination: AnyView(CoursesView()))
             }
         case .trialBooking:
             return [
@@ -265,6 +245,10 @@ struct HomeView: View {
         .padding(Theme.Spacing.md)
         .frame(width: 270, height: 170, alignment: .leading)
         .background(Theme.Colors.card)
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .stroke(Theme.Colors.line.opacity(0.5), lineWidth: 0.8)
+        }
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
         .subtleCardShadow()
     }
