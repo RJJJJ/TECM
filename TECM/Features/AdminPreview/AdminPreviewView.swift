@@ -3,15 +3,6 @@ import SwiftUI
 struct AdminPreviewView: View {
     var body: some View {
         ScreenContainer(title: "管理預覽頁") {
-            InfoCard {
-                HStack {
-                    Image(systemName: "lock.shield")
-                        .foregroundStyle(Theme.Colors.warning)
-                    Text("此頁只供中心內部示範使用")
-                        .font(.subheadline.weight(.semibold))
-                }
-            }
-
             SectionHeader(title: "新預約列表", subtitle: "示範中心端查看 incoming bookings")
             ForEach(MockDataStore.bookings) { record in
                 InfoCard {

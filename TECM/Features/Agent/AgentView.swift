@@ -22,7 +22,7 @@ struct AgentView: View {
                             } label: {
                                 TagChip(title: faq.question, isSelected: selectedFAQ?.id == faq.id)
                             }
-                            .buttonStyle(PressableScaleStyle())
+                            .buttonStyle(.plain)
                         }
                     }
                 }
