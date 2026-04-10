@@ -28,4 +28,23 @@ enum MockDataStore {
         .init(title: "您的試堂預約已提交，正在確認中", time: "2小時前"),
         .init(title: "下週家長日提醒：請於 App 確認出席", time: "昨天")
     ]
+
+
+    static let multipleChoiceQuestions: [MultipleChoiceQuestion] = [
+        .init(
+            prompt: "孩子在閱讀英文短文時，先做哪一步最有助理解內容？",
+            options: ["先看標題與圖片", "先逐字翻譯", "直接背誦全文"],
+            correctIndex: 0,
+            explanation: "先看標題與圖片能快速建立語境，再閱讀細節會更容易掌握重點。"
+        )
+    ]
+
+    static let trueFalseQuestions: [TrueFalseQuestion] = [
+        .init(
+            prompt: "固定而短時間的日常練習，通常比一次長時間學習更有效。",
+            answer: true,
+            explanation: "穩定而可持續的練習有助記憶鞏固，也更符合孩子日常節奏。"
+        )
+    ]
+
 }

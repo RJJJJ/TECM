@@ -20,7 +20,7 @@ struct CoursesView: View {
                         } label: {
                             TagChip(title: group, isSelected: selectedAge == group)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableScaleStyle())
                     }
                 }
             }
