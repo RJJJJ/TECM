@@ -1,15 +1,12 @@
 import SwiftUI
 
 struct ParentCenterView: View {
-    @EnvironmentObject private var accessState: DemoAccessState
-
     var body: some View {
         ScreenContainer(title: "家長中心") {
             profileSummary
             bookingRecords
             notifications
             upcomingClass
-            learningShortcut
             actionButtons
         }
     }
@@ -61,43 +58,18 @@ struct ParentCenterView: View {
         }
     }
 
-    private var learningShortcut: some View {
-        NavigationLink(destination: LearningCenterView()) {
-            InfoCard {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("學習中心")
-                            .font(.headline)
-                        Text("課後練習支援（選擇題 / 判斷題示範）")
-                            .font(Theme.Typography.caption)
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                }
-            }
-        }
-        .buttonStyle(PressableScaleStyle())
-    }
-
     private var actionButtons: some View {
         VStack(spacing: Theme.Spacing.sm) {
             SecondaryButton(title: "聯絡中心") { }
-
-            if accessState.isInternal {
-                NavigationLink(destination: AdminPreviewView()) {
-                    Text("管理預約（內部示範）")
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, Theme.Spacing.sm)
-                        .background(Theme.Colors.softBlue)
-                        .foregroundStyle(Theme.Colors.primaryBlue)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.button, style: .continuous))
-                }
-                .buttonStyle(PressableScaleStyle())
+            NavigationLink(destination: AdminPreviewView()) {
+                Text("管理預約（管理預覽）")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .background(Theme.Colors.softBlue)
+                    .foregroundStyle(Theme.Colors.primaryBlue)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.button, style: .continuous))
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: accessState.isInternal)
     }
 }

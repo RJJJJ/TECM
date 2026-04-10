@@ -38,7 +38,7 @@ struct PrimaryButton: View {
             .background(Theme.Colors.primaryBlue)
             .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.button, style: .continuous))
         }
-         .buttonStyle(PressableScaleStyle())
+        .buttonStyle(.plain)
     }
 }
 
@@ -56,7 +56,7 @@ struct SecondaryButton: View {
                 .background(Theme.Colors.softBlue)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.button, style: .continuous))
         }
-         .buttonStyle(PressableScaleStyle())
+        .buttonStyle(.plain)
     }
 }
 

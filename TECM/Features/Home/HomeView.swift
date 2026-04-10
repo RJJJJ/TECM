@@ -1,45 +1,12 @@
 import SwiftUI
 
 struct HomeView: View {
-    @EnvironmentObject private var accessState: DemoAccessState
-
     var body: some View {
         ScreenContainer(title: "首頁") {
-            roleSwitchSection
             heroSection
             latestNewsSection
             quickActionsSection
-            learningCenterSection
             coursePreviewSection
-        }
-    }
-
-    private var roleSwitchSection: some View {
-        InfoCard {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("示範身份")
-                        .font(.subheadline.weight(.semibold))
-                    Text(accessState.role.rawValue)
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                }
-                Spacer()
-                Button(accessState.isInternal ? "切換為家長" : "切換為中心") {
-                    accessState.toggleRole()
-                }
-                .buttonStyle(PressableScaleStyle())
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, Theme.Spacing.sm)
-                .padding(.vertical, Theme.Spacing.xs)
-                .background(Theme.Colors.softBlue)
-                .clipShape(Capsule())
-            }
-            if accessState.isInternal {
-                Text("內部示範模式可查看「管理預覽頁」，只供中心演示使用。")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.warning)
-            }
         }
     }
 
@@ -60,12 +27,9 @@ struct HomeView: View {
                         .background(Theme.Colors.primaryBlue)
                         .clipShape(Capsule())
                 }
-                .buttonStyle(PressableScaleStyle())
-
                 NavigationLink(destination: AgentView()) {
                     TagChip(title: "了解 TECM AGENT", isSelected: false)
                 }
-                .buttonStyle(PressableScaleStyle())
             }
         }
     }
@@ -92,39 +56,10 @@ struct HomeView: View {
                 NavigationLink(destination: BookingView()) {
                     quickActionCard(title: "預約試堂", icon: "calendar")
                 }
-                .buttonStyle(PressableScaleStyle())
-
-                if accessState.isInternal {
-                    NavigationLink(destination: AdminPreviewView()) {
-                        quickActionCard(title: "管理預覽", icon: "lock.shield")
-                    }
-                    .buttonStyle(PressableScaleStyle())
+                NavigationLink(destination: AdminPreviewView()) {
+                    quickActionCard(title: "管理預覽", icon: "list.bullet.rectangle")
                 }
             }
-        }
-        .animation(.easeInOut(duration: 0.2), value: accessState.isInternal)
-    }
-
-    private var learningCenterSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            SectionHeader(title: "學習中心", subtitle: "輔助學習示範（次要功能）")
-            NavigationLink(destination: LearningCenterView()) {
-                InfoCard {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("前往學習中心")
-                                .font(.headline)
-                            Text("包含選擇題與判斷題示範，作為課後支援工具")
-                                .font(Theme.Typography.caption)
-                                .foregroundStyle(Theme.Colors.textSecondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    }
-                }
-            }
-            .buttonStyle(PressableScaleStyle())
         }
     }
 

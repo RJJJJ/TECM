@@ -30,9 +30,7 @@ struct BookingView: View {
                     .keyboardType(.phonePad)
 
                 PrimaryButton(title: "確認預約") {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        submitted = true
-                    }
+                    submitted = true
                 }
             }
 
@@ -47,7 +45,6 @@ struct BookingView: View {
                     Text("我們會盡快與您確認 \(courseType) 之試堂安排。")
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
-                .transition(.opacity)
             }
         }
     }
