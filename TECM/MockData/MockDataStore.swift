@@ -19,6 +19,14 @@ enum MockDataStore {
         .init(title: "課前提醒", detail: "下週課程需攜帶閱讀教材，詳見課程通知。", time: "昨天")
     ]
 
+
+    static let news: [NewsItem] = [
+        .init(category: "中心活動", title: "春季成果發表日完成，家長回饋滿意度 96%", summary: "本週完成跨課程成果展示，家長普遍肯定孩子表達自信與專注度提升。", date: "2026/04/08", isFeatured: true),
+        .init(category: "學生成果", title: "小學數理班本月解題策略達成率提升", summary: "導師團隊公布三週觀察，孩子在拆題與步驟表達上明顯進步。", date: "2026/04/06", isFeatured: false),
+        .init(category: "家長講座", title: "4 月家長講座：如何建立孩子穩定學習節奏", summary: "講座將分享家庭可執行的陪伴框架與每週微調方法。", date: "2026/04/03", isFeatured: false),
+        .init(category: "新課程", title: "TECM 新增雙語表達工作坊，5 月開班", summary: "以低壓互動方式強化口語輸出，現已開放體驗預約。", date: "2026/04/01", isFeatured: false)
+    ]
+
     static let faq: [FAQItem] = [
         .init(topic: "預約", question: "如何預約試堂？", answer: "前往「預約」頁面選擇課程與時段後提交，顧問會於 24 小時內確認。", popular: true),
         .init(topic: "收費", question: "試堂需要收費嗎？", answer: "部分課程提供體驗名額，實際收費會在預約確認時清楚說明。", popular: true),
