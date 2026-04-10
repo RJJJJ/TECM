@@ -60,15 +60,74 @@ struct LearningResource: Identifiable {
     let estimatedTime: String
 }
 
-struct MCQQuestion: Identifiable {
-    let id = UUID()
-    let question: String
-    let options: [String]
-    let answerIndex: Int
+enum PracticeQuestionType: String, Codable {
+    case singleChoice
+    case trueFalse
+
+    var label: String {
+        switch self {
+        case .singleChoice: return "選擇題"
+        case .trueFalse: return "判斷題"
+        }
+    }
 }
 
-struct TFQuestion: Identifiable {
+struct PracticeQuestion: Identifiable {
     let id = UUID()
-    let statement: String
-    let isTrue: Bool
+    let type: PracticeQuestionType
+    let prompt: String
+    let options: [String]
+    let correctAnswer: Int
+    let explanation: String
+    let note: String?
+
+    init(type: PracticeQuestionType,
+         prompt: String,
+         options: [String] = [],
+         correctAnswer: Int,
+         explanation: String,
+         note: String? = nil) {
+        self.type = type
+        self.prompt = prompt
+        self.options = options
+        self.correctAnswer = correctAnswer
+        self.explanation = explanation
+        self.note = note
+    }
+
+    var normalizedOptions: [String] {
+        switch type {
+        case .singleChoice: return options
+        case .trueFalse: return ["正確", "錯誤"]
+        }
+    }
+}
+
+struct PracticePaper: Identifiable {
+    let id = UUID()
+    let subjectId: String
+    let title: String
+    let levelLabel: String
+    let audience: String
+    let estimatedMinutes: Int
+    let questions: [PracticeQuestion]
+
+    var questionCount: Int { questions.count }
+
+    var singleChoiceCount: Int {
+        questions.filter { $0.type == .singleChoice }.count
+    }
+
+    var trueFalseCount: Int {
+        questions.filter { $0.type == .trueFalse }.count
+    }
+}
+
+struct PracticeSubject: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let iconName: String
+    let description: String
+    let papers: [PracticePaper]
 }
