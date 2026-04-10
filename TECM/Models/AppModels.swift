@@ -60,6 +60,15 @@ struct LearningResource: Identifiable {
     let estimatedTime: String
 }
 
+struct NewsItem: Identifiable {
+    let id = UUID()
+    let category: String
+    let title: String
+    let summary: String
+    let date: String
+    let isFeatured: Bool
+}
+
 enum PracticeQuestionType: String, Codable {
     case singleChoice
     case trueFalse
