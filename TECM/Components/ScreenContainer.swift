@@ -1,10 +1,10 @@
 import SwiftUI
 
 struct ScreenContainer<Content: View>: View {
-    let title: String
+    let title: String?
     let content: Content
 
-    init(title: String, @ViewBuilder content: () -> Content) {
+    init(title: String? = nil, @ViewBuilder content: () -> Content) {
         self.title = title
         self.content = content()
     }
@@ -12,10 +12,12 @@ struct ScreenContainer<Content: View>: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                Text(title)
-                    .font(Theme.Typography.pageTitle)
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .padding(.top, Theme.Spacing.xs)
+                if let title {
+                    Text(title)
+                        .font(Theme.Typography.pageTitle)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .padding(.top, Theme.Spacing.xs)
+                }
                 content
             }
             .padding(.horizontal, Theme.Spacing.md)

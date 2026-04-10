@@ -254,6 +254,7 @@ struct CompactPreviewCard: View {
     let subtitle: String
     let icon: String
     let tint: Color
+    private var cardWidth: CGFloat { min(UIScreen.main.bounds.width * 0.72, 260) }
 
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
@@ -278,7 +279,7 @@ struct CompactPreviewCard: View {
                 .foregroundStyle(Theme.Colors.blueGray)
         }
         .padding(Theme.Spacing.md)
-        .frame(width: 280)
+        .frame(width: cardWidth)
         .background(Theme.Colors.warmSurface)
         .overlay {
             RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
@@ -328,6 +329,7 @@ struct FeaturedNewsCard: View {
 
 struct SupportingNewsCard: View {
     let item: NewsItem
+    private var cardWidth: CGFloat { min(UIScreen.main.bounds.width * 0.74, 248) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
@@ -357,7 +359,7 @@ struct SupportingNewsCard: View {
             }
         }
         .padding(Theme.Spacing.md)
-        .frame(width: 250, alignment: .leading)
+        .frame(width: cardWidth, alignment: .leading)
         .background(Theme.Colors.card)
         .overlay {
             RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)

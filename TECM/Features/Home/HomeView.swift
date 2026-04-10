@@ -26,9 +26,10 @@ struct HomeView: View {
         .init(title: "家長中心", subtitle: "查看近期安排", icon: "person.crop.circle", tint: Theme.Colors.blueGray),
         .init(title: "TECM AGENT", subtitle: "常見問題導引", icon: "message.badge", tint: Theme.Colors.success)
     ]
+    private var serviceCardWidth: CGFloat { min(UIScreen.main.bounds.width * 0.74, 260) }
 
     var body: some View {
-        ScreenContainer(title: "首頁") {
+        ScreenContainer {
             heroSection
                 .onLongPressGesture(minimumDuration: 1.2) {
                     withAnimation(.easeInOut(duration: 0.25)) {
@@ -68,16 +69,18 @@ struct HomeView: View {
 
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 Text("TECM EDUCATION")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.8))
 
                 Text("精緻學習服務中樞")
-                    .font(.system(size: 30, weight: .semibold, design: .rounded))
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
+                    .lineLimit(2)
 
                 Text("為家長整合課程、預約與學習追蹤入口，第一眼就掌握孩子本週重點。")
-                    .font(Theme.Typography.body)
+                    .font(Theme.Typography.caption)
                     .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(2)
 
                 HStack(spacing: Theme.Spacing.sm) {
                     NavigationLink(destination: BookingView()) {
@@ -108,7 +111,7 @@ struct HomeView: View {
             }
             .padding(Theme.Spacing.lg)
         }
-        .frame(height: 290)
+        .frame(height: 232)
         .subtleCardShadow()
     }
 
@@ -166,11 +169,14 @@ struct HomeView: View {
                     .buttonStyle(PressableScaleStyle())
             }
 
-            HStack(spacing: Theme.Spacing.md) {
-                ForEach(supportingNews) { item in
-                    NavigationLink(destination: ParentCenterView()) { SupportingNewsCard(item: item) }
-                        .buttonStyle(PressableScaleStyle())
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.Spacing.md) {
+                    ForEach(supportingNews) { item in
+                        NavigationLink(destination: ParentCenterView()) { SupportingNewsCard(item: item) }
+                            .buttonStyle(PressableScaleStyle())
+                    }
                 }
+                .padding(.vertical, 2)
             }
         }
     }
@@ -243,7 +249,7 @@ struct HomeView: View {
             }
         }
         .padding(Theme.Spacing.md)
-        .frame(width: 270, height: 170, alignment: .leading)
+        .frame(width: serviceCardWidth, minHeight: 152, alignment: .leading)
         .background(Theme.Colors.card)
         .overlay {
             RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
