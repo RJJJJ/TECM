@@ -54,3 +54,31 @@ struct ParentNotification: Identifiable {
     let title: String
     let time: String
 }
+
+
+struct MCOption: Identifiable {
+    let id = UUID()
+    let text: String
+}
+
+struct MultipleChoiceQuestion: Identifiable {
+    let id = UUID()
+    let prompt: String
+    let options: [MCOption]
+    let correctOptionID: UUID
+    let explanation: String
+
+    init(prompt: String, optionTexts: [String], correctIndex: Int, explanation: String) {
+        self.prompt = prompt
+        self.options = optionTexts.map { MCOption(text: $0) }
+        self.correctOptionID = self.options[correctIndex].id
+        self.explanation = explanation
+    }
+}
+
+struct TrueFalseQuestion: Identifiable {
+    let id = UUID()
+    let prompt: String
+    let answer: Bool
+    let explanation: String
+}

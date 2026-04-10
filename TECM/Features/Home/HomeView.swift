@@ -56,8 +56,8 @@ struct HomeView: View {
                 NavigationLink(destination: BookingView()) {
                     quickActionCard(title: "預約試堂", icon: "calendar")
                 }
-                NavigationLink(destination: AdminPreviewView()) {
-                    quickActionCard(title: "管理預覽", icon: "list.bullet.rectangle")
+                NavigationLink(destination: LearningCenterView()) {
+                    quickActionCard(title: "學習中心", icon: "text.book.closed")
                 }
             }
         }

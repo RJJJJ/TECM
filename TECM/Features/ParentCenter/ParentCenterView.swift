@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct ParentCenterView: View {
+    @State private var revealTapCount = 0
+    @State private var showsInternalEntry = false
+
     var body: some View {
         ScreenContainer(title: "家長中心") {
             profileSummary
@@ -8,6 +11,7 @@ struct ParentCenterView: View {
             notifications
             upcomingClass
             actionButtons
+            internalAccessFooter
         }
     }
 
@@ -61,8 +65,8 @@ struct ParentCenterView: View {
     private var actionButtons: some View {
         VStack(spacing: Theme.Spacing.sm) {
             SecondaryButton(title: "聯絡中心") { }
-            NavigationLink(destination: AdminPreviewView()) {
-                Text("管理預約（管理預覽）")
+            NavigationLink(destination: LearningCenterView()) {
+                Text("前往學習中心")
                     .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Theme.Spacing.sm)
@@ -70,6 +74,45 @@ struct ParentCenterView: View {
                     .foregroundStyle(Theme.Colors.primaryBlue)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.button, style: .continuous))
             }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var internalAccessFooter: some View {
+        VStack(spacing: Theme.Spacing.sm) {
+            if showsInternalEntry {
+                InfoCard {
+                    Text("內部示範入口")
+                        .font(.subheadline.weight(.semibold))
+                    Text("僅供職員／演示使用")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+
+                    NavigationLink(destination: InternalAccessGateView()) {
+                        Text("開啟內部示範")
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, Theme.Spacing.sm)
+                            .background(Theme.Colors.softBlue)
+                            .foregroundStyle(Theme.Colors.primaryBlue)
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.button, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
+            Text("版本資訊")
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.textSecondary.opacity(0.7))
+                .onTapGesture {
+                    revealTapCount += 1
+                    if revealTapCount >= 5 {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            showsInternalEntry = true
+                        }
+                    }
+                }
         }
     }
 }

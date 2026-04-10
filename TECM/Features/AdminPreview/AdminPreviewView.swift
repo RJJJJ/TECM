@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct AdminPreviewView: View {
+struct ManagementPreviewView: View {
     var body: some View {
         ScreenContainer(title: "管理預覽頁") {
             SectionHeader(title: "新預約列表", subtitle: "示範中心端查看 incoming bookings")
@@ -26,3 +26,6 @@ struct AdminPreviewView: View {
         }
     }
 }
+
+// 向後相容舊命名，避免其他示例程式引用時編譯失敗。
+typealias AdminPreviewView = ManagementPreviewView
