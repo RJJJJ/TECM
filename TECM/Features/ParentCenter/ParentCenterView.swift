@@ -3,73 +3,48 @@ import SwiftUI
 struct ParentCenterView: View {
     var body: some View {
         ScreenContainer(title: "家長中心") {
-            profileSummary
-            bookingRecords
-            notifications
-            upcomingClass
-            actionButtons
-        }
-    }
-
-    private var profileSummary: some View {
-        InfoCard {
-            Text("家長資訊")
-                .font(.headline)
-            Text("陳太 ・ 會員編號 P-1024")
-            Text("主要聯絡方式：+853 6XXX XXXX")
-                .foregroundStyle(Theme.Colors.textSecondary)
-        }
-    }
-
-    private var bookingRecords: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            SectionHeader(title: "預約紀錄", subtitle: nil)
-            InfoCard {
-                ForEach(MockDataStore.bookings.prefix(2)) { item in
-                    BookingRow(item: item)
-                }
-            }
-        }
-    }
-
-    private var notifications: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            SectionHeader(title: "最新通知", subtitle: nil)
-            ForEach(MockDataStore.notifications) { item in
-                InfoCard {
-                    Text(item.title)
-                    Text(item.time)
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                }
-            }
-        }
-    }
-
-    private var upcomingClass: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            SectionHeader(title: "即將上課", subtitle: nil)
-            InfoCard {
-                Text("小學數理思維")
-                    .font(.headline)
-                Text("2026/04/13（一）16:00 - 澳門半島校區")
+            ElevatedCard {
+                Text("歡迎回來，陳太")
+                    .font(Theme.Typography.cardTitle)
+                Text("孩子：昊昊（6-8歲） ・ 會員編號 P-1024")
+                    .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
-        }
-    }
 
-    private var actionButtons: some View {
-        VStack(spacing: Theme.Spacing.sm) {
-            SecondaryButton(title: "聯絡中心") { }
-            NavigationLink(destination: AdminPreviewView()) {
-                Text("管理預約（管理預覽）")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, Theme.Spacing.sm)
-                    .background(Theme.Colors.softBlue)
-                    .foregroundStyle(Theme.Colors.primaryBlue)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.button, style: .continuous))
+            HStack(spacing: Theme.Spacing.md) {
+                ParentDashboardTile(title: "近期預約", value: "2 筆", note: "1 筆待確認")
+                ParentDashboardTile(title: "本月課程", value: "4 堂", note: "下次課程：4/13")
+            }
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                SectionHeader(title: "最近動態", subtitle: "預約、通知與課程摘要")
+                ForEach(MockDataStore.notifications) { notification in
+                    QuietCard {
+                        Text(notification.title)
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        Text(notification.detail)
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                        Text(notification.time)
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.blueGray)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                SectionHeader(title: "服務入口", subtitle: nil)
+                NavigationLink(destination: LearningCenterView()) {
+                    QuickActionTile(title: "學習中心", subtitle: "查看延伸學習資源", icon: "sparkles")
+                }
+                .buttonStyle(PressableScaleStyle())
+
+                SecondaryButton(title: "聯絡中心") { }
             }
         }
     }
+}
+
+#Preview {
+    NavigationStack { ParentCenterView() }
 }

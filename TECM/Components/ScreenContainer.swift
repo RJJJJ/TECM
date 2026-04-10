@@ -10,14 +10,16 @@ struct ScreenContainer<Content: View>: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                 Text(title)
                     .font(Theme.Typography.pageTitle)
                     .foregroundStyle(Theme.Colors.textPrimary)
+                    .padding(.top, Theme.Spacing.xs)
                 content
             }
-            .padding(Theme.Spacing.md)
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.bottom, Theme.Spacing.xxl)
         }
         .background(Theme.Colors.background.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
