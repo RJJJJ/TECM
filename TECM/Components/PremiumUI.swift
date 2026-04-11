@@ -37,8 +37,27 @@ struct BrandHeroSection: View {
     let subtitle: String
     let primaryTitle: String
     let secondaryTitle: String
+    let logoURL: URL?
     let primaryAction: () -> Void
     let secondaryAction: () -> Void
+
+    init(
+        title: String,
+        subtitle: String,
+        primaryTitle: String,
+        secondaryTitle: String,
+        logoURL: URL? = nil,
+        primaryAction: @escaping () -> Void,
+        secondaryAction: @escaping () -> Void
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.primaryTitle = primaryTitle
+        self.secondaryTitle = secondaryTitle
+        self.logoURL = logoURL
+        self.primaryAction = primaryAction
+        self.secondaryAction = secondaryAction
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
@@ -47,9 +66,36 @@ struct BrandHeroSection: View {
                 .tracking(0.7)
                 .foregroundStyle(Theme.Colors.brandOrange)
 
-            Text(title)
-                .font(Theme.Typography.heroTitle)
-                .foregroundStyle(Theme.Colors.textPrimary)
+            HStack(alignment: .center, spacing: Theme.Spacing.sm) {
+                if let logoURL {
+                    AsyncImage(url: logoURL) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        default:
+                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                                .fill(Theme.Colors.mistBlue.opacity(0.7))
+                                .overlay {
+                                    Image(systemName: "building.2")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(Theme.Colors.blueGray)
+                                }
+                        }
+                    }
+                    .frame(width: 34, height: 34)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                            .stroke(Theme.Colors.line.opacity(0.7), lineWidth: 0.8)
+                    }
+                }
+
+                Text(title)
+                    .font(Theme.Typography.heroTitle)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+            }
 
             Text(subtitle)
                 .font(Theme.Typography.body)
