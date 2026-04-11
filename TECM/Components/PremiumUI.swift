@@ -143,6 +143,7 @@ private struct BrandLogoView: View {
 
 struct PrimaryCTAButton: View {
     let title: String
+    var isDisabled: Bool = false
     var action: () -> Void
 
     var body: some View {
@@ -150,8 +151,10 @@ struct PrimaryCTAButton: View {
             Text(title)
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(RefinedPrimaryButtonStyle())
+        .disabled(isDisabled)
+        .buttonStyle(RefinedPrimaryButtonStyle(disabled: isDisabled))
     }
 }
 
@@ -164,6 +167,7 @@ struct SecondaryCTAButton: View {
             Text(title)
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
         }
         .buttonStyle(RefinedSecondaryButtonStyle())
     }
@@ -256,8 +260,9 @@ struct ConciergeStepHeader: View {
             }
             .frame(height: 6)
         }
-        .padding(Theme.Spacing.md)
-                        .background(Theme.Colors.card)
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, Theme.Spacing.sm + 2)
+        .background(Theme.Colors.card)
         .overlay {
             RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                 .stroke(Theme.Colors.line.opacity(0.55), lineWidth: 0.8)
