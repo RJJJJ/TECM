@@ -1,24 +1,25 @@
 import SwiftUI
+import UIKit
 
 enum Theme {
     enum Colors {
-        static let backgroundTop = Color(hex: "#E6E6FA")
-        static let backgroundBottom = Color(hex: "#ECEEFB")
-        static let background = Color(hex: "#EFF1FC")
-        static let warmSurface = Color(hex: "#F8F8FF")
-        static let card = Color(hex: "#FFFFFF")
+        static let backgroundTop = Color(light: "#E6E6FA", dark: "#11131A")
+        static let backgroundBottom = Color(light: "#ECEEFB", dark: "#0D1017")
+        static let background = Color(uiColor: .systemBackground)
+        static let warmSurface = Color(uiColor: .secondarySystemBackground)
+        static let card = Color(uiColor: .secondarySystemBackground)
         static let primary = Color(hex: "#3047B8")
-        static let mistBlue = Color(hex: "#EEF2FF")
-        static let blueGray = Color(hex: "#606A82")
-        static let textPrimary = Color(hex: "#2A2F3A")
-        static let textSecondary = Color(hex: "#5D6475")
-        static let line = Color(hex: "#D9DEEA")
+        static let mistBlue = Color(light: "#EEF2FF", dark: "#1B2234")
+        static let blueGray = Color(light: "#606A82", dark: "#A3AEC7")
+        static let textPrimary = Color(uiColor: .label)
+        static let textSecondary = Color(uiColor: .secondaryLabel)
+        static let line = Color(uiColor: .separator)
         static let accent = Color(hex: "#7E22CE")
         static let brandOrange = Color(hex: "#F58220")
-        static let badgeLavender = Color(hex: "#F3E8FF")
+        static let badgeLavender = Color(light: "#F3E8FF", dark: "#2B1E3F")
         static let success = Color(hex: "#2E7D63")
         static let warning = Color(hex: "#A97934")
-        static let loading = Color(hex: "#94A3B8")
+        static let loading = Color(light: "#94A3B8", dark: "#64748B")
     }
 
     enum Spacing {
@@ -40,7 +41,7 @@ enum Theme {
     }
 
     enum Shadow {
-        static let subtle = Color.black.opacity(0.07)
+        static let subtle = Color.black.opacity(0.18)
     }
 
     enum Icon {
@@ -77,6 +78,12 @@ extension View {
 }
 
 extension Color {
+    init(light: String, dark: String) {
+        self.init(uiColor: UIColor { trait in
+            trait.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light)
+        })
+    }
+
     init(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         var int: UInt64 = 0
@@ -94,5 +101,26 @@ extension Color {
                   green: Double(g) / 255,
                   blue: Double(b) / 255,
                   opacity: Double(a) / 255)
+    }
+}
+
+private extension UIColor {
+    convenience init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+
+        switch hex.count {
+        case 3: (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default: (a, r, g, b) = (255, 0, 0, 0)
+        }
+
+        self.init(red: CGFloat(r) / 255,
+                  green: CGFloat(g) / 255,
+                  blue: CGFloat(b) / 255,
+                  alpha: CGFloat(a) / 255)
     }
 }

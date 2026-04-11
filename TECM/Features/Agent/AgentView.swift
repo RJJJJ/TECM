@@ -56,6 +56,8 @@ struct AgentView: View {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(Theme.Colors.blueGray)
                     TextField("搜尋關鍵字", text: $keyword)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .tint(Theme.Colors.primary)
                 }
                 .padding(Theme.Spacing.sm)
                 .background(Theme.Colors.card)
@@ -123,6 +125,8 @@ struct AgentView: View {
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textSecondary)
                     TextField("請輸入你的問題（敬請期待）", text: .constant(""))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .tint(Theme.Colors.primary)
                         .disabled(true)
                         .textFieldStyle(.roundedBorder)
                 }
