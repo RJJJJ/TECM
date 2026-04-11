@@ -49,7 +49,11 @@ struct BookingRecord: Identifiable {
     }
 
     var timeText: String {
-        bookingDate.formatted(date: .omitted, time: .shortened)
+        "\(bookingDate.formatted(date: .omitted, time: .shortened)) - \(bookingEndDate.formatted(date: .omitted, time: .shortened))"
+    }
+
+    private var bookingEndDate: Date {
+        bookingDate.addingTimeInterval(60 * 60)
     }
 }
 
@@ -152,7 +156,11 @@ struct ParentReservationSummaryItem: Identifiable {
     }
 
     var timeText: String {
-        reservationDate.formatted(date: .omitted, time: .shortened)
+        "\(reservationDate.formatted(date: .omitted, time: .shortened)) - \(reservationEndDate.formatted(date: .omitted, time: .shortened))"
+    }
+
+    private var reservationEndDate: Date {
+        reservationDate.addingTimeInterval(60 * 60)
     }
 }
 

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ParentReservationSummaryView: View {
     @State private var selectedFilter: ReservationSummaryFilter = .all
+    @State private var selectedReservation: ParentReservationSummaryItem?
     private let reservations = MockDataStore.parentReservationSummaries
 
     private var filteredReservations: [ParentReservationSummaryItem] {
@@ -33,6 +34,10 @@ struct ParentReservationSummaryView: View {
             }
         }
         .tecmDetailTabBar()
+        .sheet(item: $selectedReservation) { item in
+            ReservationDetailSheet(item: item)
+                .presentationDetents([.medium, .large])
+        }
     }
 
     private var filterChips: some View {
@@ -77,15 +82,20 @@ struct ParentReservationSummaryView: View {
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.blueGray)
 
-            HStack {
-                Spacer()
-                Text("查看詳情")
-                    .font(Theme.Typography.caption.weight(.semibold))
-                    .foregroundStyle(Theme.Colors.primary)
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.primary)
+            Button {
+                selectedReservation = item
+            } label: {
+                HStack {
+                    Spacer()
+                    Text("查看詳情")
+                        .font(Theme.Typography.caption.weight(.semibold))
+                        .foregroundStyle(Theme.Colors.primary)
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.primary)
+                }
             }
+            .buttonStyle(.plain)
         }
     }
 
@@ -99,6 +109,57 @@ struct ParentReservationSummaryView: View {
                 .foregroundStyle(Theme.Colors.textPrimary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct ReservationDetailSheet: View {
+    let item: ParentReservationSummaryItem
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                    PremiumSectionHeader(
+                        eyebrow: "Reservation Detail",
+                        title: "預約詳情",
+                        subtitle: "集中檢視本次預約的安排與備註資訊。"
+                    )
+
+                    ElevatedCard {
+                        detailRow(title: "家長 / 孩子", value: "\(item.parentName) ・ \(item.childName)")
+                        detailRow(title: "課程方向", value: item.courseDirection)
+                        detailRow(title: "狀態", value: item.status.rawValue)
+                        detailRow(title: "日期", value: item.dateText)
+                        detailRow(title: "時間", value: item.timeText)
+                        detailRow(title: "校區", value: item.campus)
+                        detailRow(title: "備註", value: item.note)
+                    }
+                }
+                .padding(.horizontal, Theme.Spacing.md)
+                .padding(.top, Theme.Spacing.sm)
+                .padding(.bottom, Theme.Spacing.xl)
+            }
+            .navigationTitle("預約詳情")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("關閉") { dismiss() }
+                        .foregroundStyle(Theme.Colors.primary)
+                }
+            }
+        }
+    }
+
+    private func detailRow(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+            Text(title)
+                .font(Theme.Typography.chip)
+                .foregroundStyle(Theme.Colors.blueGray)
+            Text(value)
+                .font(Theme.Typography.body)
+                .foregroundStyle(Theme.Colors.textPrimary)
+        }
     }
 }
 

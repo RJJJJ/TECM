@@ -31,7 +31,7 @@ struct AgentView: View {
     }
 
     var body: some View {
-        ScreenContainer(title: "TECM AGENT", usesScrollView: false) {
+        ScreenContainer(title: "TECM AGENT", usesScrollView: false, bottomSpacing: .rootTab) {
             ScrollViewReader { proxy in
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
