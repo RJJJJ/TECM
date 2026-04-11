@@ -38,7 +38,7 @@ struct AdminPreviewView: View {
     }
 
     var body: some View {
-        ScreenContainer(title: "管理預覽") {
+        ScreenContainer(title: "管理預覽", showBackButton: true) {
             if hasInternalAccess {
                 InternalDemoBadge()
 

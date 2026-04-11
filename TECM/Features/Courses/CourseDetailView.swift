@@ -4,7 +4,7 @@ struct CourseDetailView: View {
     let course: Course
 
     var body: some View {
-        ScreenContainer(title: "課程詳情") {
+        ScreenContainer(title: "課程詳情", showBackButton: true) {
             ElevatedCard {
                 Text(course.category)
                     .font(Theme.Typography.chip)

@@ -30,8 +30,7 @@ struct BookingView: View {
     @State private var childProfile = "6-8歲"
     @State private var campus = "澳門半島校區"
     @State private var preferredDate = Date.now.addingTimeInterval(86400 * 2)
-    @State private var selectedDayType = "平日"
-    @State private var selectedTimeSlot = "下午 14:00 - 17:00"
+    @State private var startHour = 14
     @State private var parentName = ""
     @State private var phone = ""
     @State private var note = ""
@@ -42,13 +41,8 @@ struct BookingView: View {
     private let courses = ["幼兒雙語啟蒙", "小學數理思維", "公開演說與表達", "學術閱讀工作坊"]
     private let profiles = ["3-5歲", "6-8歲", "9-12歲"]
     private let campuses = ["澳門半島校區", "氹仔校區", "路氹城校區"]
-    private let dayTypes = ["平日", "週末"]
-    private let weekdaySlots = ["上午 09:30 - 12:00", "下午 14:00 - 17:00", "晚上 18:30 - 20:00"]
-    private let weekendSlots = ["上午 10:00 - 12:30", "下午 14:30 - 17:30", "晚上 18:00 - 19:30"]
-
-    private var availableSlots: [String] {
-        selectedDayType == "平日" ? weekdaySlots : weekendSlots
-    }
+    private let startHourOptions = Array(6...21)
+    private let endHourOptions = Array(7...22)
 
     init(prefilledCourse: String? = nil) {
         _courseType = State(initialValue: prefilledCourse ?? "小學數理思維")
@@ -111,15 +105,10 @@ struct BookingView: View {
                 DatePicker("期望日期", selection: $preferredDate, displayedComponents: .date)
                     .font(Theme.Typography.body)
 
-                Text("到訪日類型")
+                Text("到訪時間")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .padding(.top, 4)
-                segmentedChips(options: dayTypes, selection: $selectedDayType)
-
-                Text("時間段選擇")
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .padding(.top, 4)
-                slotGrid
+                timeRangePicker
             }
         case .contact:
             ElevatedCard {
@@ -138,7 +127,7 @@ struct BookingView: View {
                     .font(Theme.Typography.cardTitle)
                 Text("\(courseType) ・ \(childProfile)")
                     .font(Theme.Typography.body)
-                Text("\(selectedDayType) ・ \(selectedTimeSlot)")
+                Text(selectedTimeSlot)
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Text("\(campus) ・ 期望日期：\(preferredDate.formatted(date: .abbreviated, time: .omitted))")
@@ -192,53 +181,55 @@ struct BookingView: View {
         }
     }
 
-    private func segmentedChips(options: [String], selection: Binding<String>) -> some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            ForEach(options, id: \.self) { option in
-                Button {
-                    selection.wrappedValue = option
-                    if !availableSlots.contains(selectedTimeSlot) {
-                        selectedTimeSlot = availableSlots.first ?? ""
-                    }
-                } label: {
-                    Text(option)
-                        .font(Theme.Typography.chip)
-                        .foregroundStyle(selection.wrappedValue == option ? .white : Theme.Colors.primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, Theme.Spacing.xs)
-                        .background(selection.wrappedValue == option ? Theme.Colors.primary : Theme.Colors.mistBlue.opacity(0.6))
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+    private var selectedTimeSlot: String {
+        "\(formattedHour(startHour)):00 - \(formattedHour(endHour)):00"
+    }
+
+    private var endHour: Int {
+        min(startHour + 1, 22)
+    }
+
+    private func formattedHour(_ hour: Int) -> String {
+        String(format: "%02d", hour)
+    }
+
+    private var timeRangePicker: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            HStack(spacing: Theme.Spacing.md) {
+                pickerColumn(title: "開始", value: $startHour, options: startHourOptions)
+                VStack {
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.blueGray)
                 }
-                .buttonStyle(PressableScaleStyle())
+                pickerColumn(title: "結束", value: .constant(endHour), options: endHourOptions, isInteractive: false)
             }
+            Text("已選擇 \(selectedTimeSlot)")
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.textSecondary)
         }
     }
 
-    private var slotGrid: some View {
-        VStack(spacing: Theme.Spacing.xs) {
-            ForEach(availableSlots, id: \.self) { slot in
-                Button {
-                    selectedTimeSlot = slot
-                } label: {
-                    HStack {
-                        Text(slot)
-                            .font(Theme.Typography.body)
-                            .foregroundStyle(Theme.Colors.textPrimary)
-                        Spacer()
-                        Image(systemName: selectedTimeSlot == slot ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(selectedTimeSlot == slot ? Theme.Colors.primary : Theme.Colors.line)
-                    }
-                    .padding(.horizontal, Theme.Spacing.sm)
-                    .padding(.vertical, Theme.Spacing.sm)
-                    .background(selectedTimeSlot == slot ? Theme.Colors.mistBlue.opacity(0.55) : Theme.Colors.card)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
-                            .stroke(selectedTimeSlot == slot ? Theme.Colors.primary : Theme.Colors.line.opacity(0.75), lineWidth: selectedTimeSlot == slot ? 1.2 : 0.8)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+    private func pickerColumn(title: String, value: Binding<Int>, options: [Int], isInteractive: Bool = true) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            Text(title)
+                .font(Theme.Typography.chip)
+                .foregroundStyle(Theme.Colors.blueGray)
+            Picker(title, selection: value) {
+                ForEach(options, id: \.self) { hour in
+                    Text("\(formattedHour(hour)):00").tag(hour)
                 }
-                .buttonStyle(PressableScaleStyle())
             }
+            .pickerStyle(.wheel)
+            .frame(maxWidth: .infinity)
+            .frame(height: 118)
+            .clipped()
+            .allowsHitTesting(isInteractive)
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                    .stroke(Theme.Colors.line.opacity(0.75), lineWidth: 0.8)
+            }
+            .background(Theme.Colors.card, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
         }
     }
 }
