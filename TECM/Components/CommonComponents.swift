@@ -375,21 +375,28 @@ struct QuickActionTile: View {
     let icon: String
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.sm) {
+        HStack(alignment: .center, spacing: Theme.Spacing.sm) {
             Image(systemName: icon)
                 .font(.system(size: Theme.Icon.md, weight: .semibold))
                 .foregroundStyle(Theme.Colors.primary)
-                .frame(width: 34, height: 34)
+                .frame(width: 36, height: 36)
                 .background(Theme.Colors.mistBlue.opacity(0.45), in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
-            VStack(alignment: .leading, spacing: 3) {
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text(subtitle)
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textSecondary)
+                    .lineLimit(2)
             }
+
             Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.Colors.blueGray)
         }
         .padding(Theme.Spacing.md)
         .background(Theme.Colors.card)

@@ -30,7 +30,9 @@ struct BookingView: View {
     @State private var childProfile = "6-8歲"
     @State private var campus = "澳門半島校區"
     @State private var preferredDate = Date.now.addingTimeInterval(86400 * 2)
-    @State private var startHour = 14
+    @State private var startSlot = 20
+    @State private var endSlot = 22
+    @State private var didCustomizeEndSlot = false
     @State private var parentName = ""
     @State private var phone = ""
     @State private var note = ""
@@ -41,15 +43,16 @@ struct BookingView: View {
     private let courses = ["幼兒雙語啟蒙", "小學數理思維", "公開演說與表達", "學術閱讀工作坊"]
     private let profiles = ["3-5歲", "6-8歲", "9-12歲"]
     private let campuses = ["澳門半島校區", "氹仔校區", "路氹城校區"]
-    private let startHourOptions = Array(6...21)
-    private let endHourOptions = Array(7...22)
+    private let timeSlots = Array(12...44) // 06:00 - 22:00 by half-hour
+    private let isSubPage: Bool
 
     init(prefilledCourse: String? = nil) {
         _courseType = State(initialValue: prefilledCourse ?? "小學數理思維")
+        isSubPage = prefilledCourse != nil
     }
 
     var body: some View {
-        ScreenContainer(title: "預約") {
+        ScreenContainer(title: "預約", showBackButton: isSubPage) {
             ConciergeStepHeader(currentStep: currentStep.rawValue + 1, totalSteps: Step.allCases.count, title: currentStep.title, subtitle: currentStep.subtitle)
 
             if submitted {
@@ -87,8 +90,20 @@ struct BookingView: View {
             .padding(.top, 8)
             .padding(.bottom, 12)
             .background(Theme.Colors.background.opacity(0.96))
+            .overlay(alignment: .top) {
+                Divider().overlay(Theme.Colors.line.opacity(0.45))
+            }
         }
+        .toolbar(isSubPage ? .hidden : .visible, for: .tabBar)
         .onAppear { simulateStepLoading() }
+        .onChange(of: startSlot) { newValue in
+            if endSlot <= newValue {
+                endSlot = min(newValue + 2, timeSlots.last ?? newValue)
+                didCustomizeEndSlot = false
+            } else if !didCustomizeEndSlot {
+                endSlot = min(newValue + 2, timeSlots.last ?? newValue)
+            }
+        }
     }
 
     @ViewBuilder
@@ -182,27 +197,19 @@ struct BookingView: View {
     }
 
     private var selectedTimeSlot: String {
-        "\(formattedHour(startHour)):00 - \(formattedHour(endHour)):00"
-    }
-
-    private var endHour: Int {
-        min(startHour + 1, 22)
-    }
-
-    private func formattedHour(_ hour: Int) -> String {
-        String(format: "%02d", hour)
+        "\(formattedSlot(startSlot)) - \(formattedSlot(endSlot))"
     }
 
     private var timeRangePicker: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             HStack(spacing: Theme.Spacing.md) {
-                pickerColumn(title: "開始", value: $startHour, options: startHourOptions)
+                pickerColumn(title: "開始", value: $startSlot, options: timeSlots)
                 VStack {
                     Image(systemName: "arrow.right")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.Colors.blueGray)
                 }
-                pickerColumn(title: "結束", value: .constant(endHour), options: endHourOptions, isInteractive: false)
+                pickerColumn(title: "結束", value: $endSlot, options: validEndSlots)
             }
             Text("已選擇 \(selectedTimeSlot)")
                 .font(Theme.Typography.caption)
@@ -210,27 +217,41 @@ struct BookingView: View {
         }
     }
 
-    private func pickerColumn(title: String, value: Binding<Int>, options: [Int], isInteractive: Bool = true) -> some View {
+    private var validEndSlots: [Int] {
+        timeSlots.filter { $0 >= startSlot }
+    }
+
+    private func pickerColumn(title: String, value: Binding<Int>, options: [Int]) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text(title)
                 .font(Theme.Typography.chip)
                 .foregroundStyle(Theme.Colors.blueGray)
             Picker(title, selection: value) {
-                ForEach(options, id: \.self) { hour in
-                    Text("\(formattedHour(hour)):00").tag(hour)
+                ForEach(options, id: \.self) { slot in
+                    Text(formattedSlot(slot)).tag(slot)
                 }
             }
             .pickerStyle(.wheel)
             .frame(maxWidth: .infinity)
-            .frame(height: 118)
+            .frame(height: 120)
             .clipped()
-            .allowsHitTesting(isInteractive)
             .overlay {
                 RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                     .stroke(Theme.Colors.line.opacity(0.75), lineWidth: 0.8)
             }
             .background(Theme.Colors.card, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+            .onChange(of: value.wrappedValue) { _ in
+                if title == "結束" {
+                    didCustomizeEndSlot = true
+                }
+            }
         }
+    }
+
+    private func formattedSlot(_ slot: Int) -> String {
+        let hour = slot / 2
+        let minute = slot % 2 == 0 ? "00" : "30"
+        return String(format: "%02d:%@", hour, minute)
     }
 }
 

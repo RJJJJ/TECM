@@ -82,6 +82,7 @@ struct AdminPreviewView: View {
             }
         }
         .animation(.easeInOut(duration: 0.24), value: toastMessage)
+        .toolbar(.hidden, for: .tabBar)
     }
 
     private func updateBooking(_ updated: BookingRecord) {

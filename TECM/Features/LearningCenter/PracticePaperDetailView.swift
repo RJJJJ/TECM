@@ -15,7 +15,7 @@ struct PracticePaperDetailView: View {
     private var isLastQuestion: Bool { currentIndex == paper.questions.count - 1 }
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
+        ScreenContainer(title: "試卷練習", showBackButton: true) {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 if isCompleted {
                     ResultSummaryView(
@@ -38,16 +38,11 @@ struct PracticePaperDetailView: View {
                     actionArea
                 }
             }
-            .padding(.horizontal, Theme.Spacing.md)
-            .padding(.top, Theme.Spacing.md)
-            .padding(.bottom, Theme.Spacing.xxl)
             .animation(.easeInOut(duration: 0.2), value: currentIndex)
             .animation(.easeInOut(duration: 0.2), value: isSubmitted)
             .animation(.easeInOut(duration: 0.2), value: isCompleted)
         }
-        .background(Theme.Colors.background.ignoresSafeArea())
-        .navigationTitle("試卷練習")
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
     }
 
     private var questionCard: some View {

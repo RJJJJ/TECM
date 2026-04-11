@@ -46,6 +46,8 @@ struct RootTabView: View {
             .tag(4)
         }
         .tint(Theme.Colors.primary)
+        .toolbarBackground(Theme.Colors.card, for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
         .animation(.easeInOut(duration: 0.2), value: selectedTab)
     }
 }
