@@ -548,7 +548,7 @@ struct CourseCard: View {
 
 struct FAQRow: View {
     let item: FAQItem
-    @Binding var expandedID: UUID?
+    @Binding var expandedID: String?
 
     private var isExpanded: Bool {
         expandedID == item.id

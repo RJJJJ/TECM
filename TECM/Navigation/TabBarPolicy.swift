@@ -2,7 +2,7 @@ import SwiftUI
 
 enum TabBarPolicy {
     /// Tab bar should only stay visible on the 5 top-level entry screens.
-    static func isRootScreen(_ isDetail: Bool) -> ToolbarVisibility {
+    static func isRootScreen(_ isDetail: Bool) -> Visibility {
         isDetail ? .hidden : .visible
     }
 }
