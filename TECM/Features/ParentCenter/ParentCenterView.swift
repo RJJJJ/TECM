@@ -1,45 +1,47 @@
 import SwiftUI
 
 struct ParentCenterView: View {
+    @State private var showSupportSuccess = false
+
     var body: some View {
         ScreenContainer(title: "家長中心") {
+            PremiumSectionHeader(eyebrow: "Personal Service Space", title: "你的專屬服務區", subtitle: "聚焦預約與顧問支援，不呈現後台式資訊噪音")
+
             ElevatedCard {
                 Text("歡迎回來，陳太")
                     .font(Theme.Typography.cardTitle)
                 Text("孩子：昊昊（6-8歲） ・ 會員編號 P-1024")
-                    .font(Theme.Typography.body)
+                    .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textSecondary)
-            }
-
-            HStack(spacing: Theme.Spacing.md) {
-                ParentDashboardTile(title: "近期預約", value: "2 筆", note: "1 筆待確認")
-                ParentDashboardTile(title: "本月課程", value: "4 堂", note: "下次課程：4/13")
-            }
-
-            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                SectionHeader(title: "最近動態", subtitle: "預約、通知與課程摘要")
-                ForEach(MockDataStore.notifications) { notification in
-                    QuietCard {
-                        Text(notification.title)
-                            .font(.system(size: 16, weight: .semibold, design: .rounded))
-                        Text(notification.detail)
-                            .font(Theme.Typography.caption)
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                        Text(notification.time)
-                            .font(Theme.Typography.caption)
-                            .foregroundStyle(Theme.Colors.blueGray)
-                    }
-                }
+                Divider()
+                Text("近期服務摘要")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.blueGray)
+                Text("目前有 2 筆預約紀錄，其中 1 筆待顧問確認。")
+                    .font(Theme.Typography.body)
             }
 
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                SectionHeader(title: "服務入口", subtitle: nil)
-                NavigationLink(destination: LearningCenterView()) {
-                    QuickActionTile(title: "學習中心", subtitle: "查看延伸學習資源", icon: "sparkles")
+                PremiumSectionHeader(title: "服務入口", subtitle: "僅保留與前期預約決策相關模組")
+                NavigationLink(destination: BookingView()) {
+                    QuickActionTile(title: "預約摘要", subtitle: "查看目前提交與待安排的體驗需求", icon: "calendar")
                 }
                 .buttonStyle(PressableScaleStyle())
 
-                SecondaryButton(title: "聯絡中心") { }
+                NavigationLink(destination: AgentView()) {
+                    QuickActionTile(title: "顧問常見問題", subtitle: "先由 TECM AGENT 協助，再接人工顧問", icon: "person.text.rectangle")
+                }
+                .buttonStyle(PressableScaleStyle())
+            }
+
+            if showSupportSuccess {
+                SuccessStateView(title: "已收到你的支援需求", message: "服務團隊將在工作時段內與你聯絡。")
+            }
+
+            SecondaryCTAButton(title: "聯絡中心") {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showSupportSuccess = true
+                }
             }
         }
     }
