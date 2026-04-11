@@ -94,7 +94,7 @@ struct BookingView: View {
                     }
                 }
 
-                PrimaryCTAButton(title: submitted ? "已提交" : primaryTitle) {
+                PrimaryCTAButton(title: submitted ? "再次預約" : primaryTitle) {
                     handlePrimaryAction()
                 }
             }
@@ -183,7 +183,11 @@ struct BookingView: View {
     }
 
     private func handlePrimaryAction() {
-        guard !submitted else { return }
+        if submitted {
+            restartBookingFlow()
+            return
+        }
+
         if currentStep == .contact && (parentName.isEmpty || phone.isEmpty) { return }
 
         if currentStep == .confirm {
@@ -193,6 +197,21 @@ struct BookingView: View {
         }
     }
 
+
+    private func restartBookingFlow() {
+        withAnimation(.easeInOut(duration: 0.28)) {
+            submitted = false
+            currentStep = .service
+            parentName = ""
+            phone = ""
+            note = ""
+            didCustomizeEndSlot = false
+            startSlot = BookingPolicy.defaultStartSlot
+            endSlot = BookingPolicy.defaultEndSlot
+            preferredDate = Calendar.current.startOfDay(for: Date.now.addingTimeInterval(86400 * 2))
+        }
+        simulateStepLoading()
+    }
     private func moveStep(_ delta: Int) {
         let next = max(0, min(Step.allCases.count - 1, currentStep.rawValue + delta))
         currentStep = Step(rawValue: next) ?? .service

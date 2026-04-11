@@ -20,6 +20,7 @@ struct HomeView: View {
             BrandHeroSection(
                 title: "TECM 澳門編程教育中心",
                 subtitle: "聚焦 Python、Scratch、C++ 的系統化學習路線，結合顧問評估與課堂規劃，讓家長清楚看見孩子的下一步。",
+                logoURL: URL(string: "https://tecmacau.com/logo.png"),
                 primaryTitle: "預約評估",
                 secondaryTitle: "課程總覽",
                 primaryAction: { tabRouter.select(.booking) },

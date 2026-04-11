@@ -118,27 +118,31 @@ struct AgentView: View {
                         .textFieldStyle(.roundedBorder)
                 }
             }
-        }
-        .onAppear {
-            selectedQuestionId = mappedFAQ.first?.id
-        }
-        .onChange(of: selectedTopic) { _ in
-            selectedQuestionId = mappedFAQ.first?.id
-            pendingScrollTargetId = mappedFAQ.first?.id
-        }
-        .onChange(of: keyword) { _ in
-            if let selectedQuestionId,
-               mappedFAQ.contains(where: { $0.id == selectedQuestionId }) {
-                return
+            .onAppear {
+                selectedQuestionId = mappedFAQ.first?.id
+                pendingScrollTargetId = mappedFAQ.first?.id
             }
-            self.selectedQuestionId = mappedFAQ.first?.id
-        }
-        .onChange(of: pendingScrollTargetId) { targetId in
-            guard let targetId else { return }
-            withAnimation(.easeInOut(duration: 0.25)) {
-                proxy.scrollTo(targetId, anchor: .top)
+            .onChange(of: selectedTopic) { _ in
+                selectedQuestionId = mappedFAQ.first?.id
+                pendingScrollTargetId = mappedFAQ.first?.id
             }
-            pendingScrollTargetId = nil
+            .onChange(of: keyword) { _ in
+                if let selectedQuestionId,
+                   mappedFAQ.contains(where: { $0.id == selectedQuestionId }) {
+                    return
+                }
+                self.selectedQuestionId = mappedFAQ.first?.id
+                pendingScrollTargetId = mappedFAQ.first?.id
+            }
+            .onChange(of: pendingScrollTargetId) { targetId in
+                guard let targetId else { return }
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        proxy.scrollTo(targetId, anchor: .top)
+                    }
+                    pendingScrollTargetId = nil
+                }
+            }
         }
     }
 }
