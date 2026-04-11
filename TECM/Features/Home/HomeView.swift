@@ -10,20 +10,18 @@ struct HomeView: View {
     }
 
     private let proofItems: [(String, String)] = [
-        ("AI 即時判題", "課堂示範中提供即時回饋，協助家長理解孩子思路。"),
-        ("顧問式課程規劃", "由入門到進階建立階段目標，而非一次性單堂體驗。"),
-        ("評估式體驗", "先確認起點與學習節奏，再安排合適課程路線。")
+        ("Python / Scratch / C++ 系統課程", "對應不同年齡與起點，從基礎理解到考級與比賽應用。"),
+        ("考級與比賽導向支援", "課程與練習設計可銜接公開評核與賽事準備，重視實作與表達。"),
+        ("顧問式入學評估流程", "先評估程度與學習節奏，再安排最合適的課程與體驗時段。")
     ]
-
-    private let growthPath = ["啟蒙探索", "邏輯建立", "進階實作", "競賽與專題"]
 
     var body: some View {
         ScreenContainer {
             BrandHeroSection(
-                title: "為孩子安排一條可持續成長的學習路徑",
-                subtitle: "TECM 以顧問式方式串連評估、課程與體驗安排，讓家長在第一步就感到安心。",
-                primaryTitle: "預約評估",
-                secondaryTitle: "查看課程路線",
+                title: "TECM 澳門編程教育中心",
+                subtitle: "聚焦 Python、Scratch、C++ 的系統化學習路線，結合評估、課堂與考前練習，讓家長清楚看見孩子的下一步。",
+                primaryTitle: "預約體驗",
+                secondaryTitle: "瀏覽課程",
                 primaryAction: { goBooking = true },
                 secondaryAction: { goCourses = true }
             )
@@ -58,8 +56,8 @@ struct HomeView: View {
             proofSection
                 .premiumEntrance(delay: 0.06)
 
-            growthPathSection
-                .premiumEntrance(delay: 0.1)
+            practiceEntrySection
+                .premiumEntrance(delay: 0.09)
 
             curatedShortcutSection
                 .premiumEntrance(delay: 0.12)
@@ -106,36 +104,20 @@ struct HomeView: View {
 
     private var proofSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            PremiumSectionHeader(eyebrow: "Why TECM", title: "品牌證據", subtitle: "以方法論與服務流程建立信任")
+            PremiumSectionHeader(eyebrow: "Why TECM", title: "品牌證據", subtitle: "公開課程重點與服務流程，讓家長可判斷、可比較")
             ForEach(proofItems, id: \.0) { item in
                 ProofCard(title: item.0, detail: item.1)
             }
         }
     }
 
-    private var growthPathSection: some View {
+    private var practiceEntrySection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            PremiumSectionHeader(eyebrow: "Learning Path", title: "課程成長路徑", subtitle: "從探索到專題，逐步建立能力")
-            ForEach(Array(growthPath.enumerated()), id: \.offset) { index, step in
-                HStack(spacing: Theme.Spacing.sm) {
-                    Text("0\(index + 1)")
-                        .font(Theme.Typography.chip)
-                        .foregroundStyle(Theme.Colors.blueGray)
-                        .frame(width: 28)
-                    Text(step)
-                        .font(Theme.Typography.body)
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                    Spacer()
-                }
-                .padding(.vertical, 6)
-                if index < growthPath.count - 1 {
-                    Divider().overlay(Theme.Colors.line.opacity(0.5))
-                }
+            PremiumSectionHeader(eyebrow: "Learning Tools", title: "考前練習入口", subtitle: "用短題練習快速檢查觀念，維持考前節奏")
+            NavigationLink(destination: LearningCenterView()) {
+                QuickActionTile(title: "進入考前練習中心", subtitle: "先選科目，再選等級與試卷開始練習", icon: "checklist")
             }
-            .padding(.horizontal, Theme.Spacing.md)
-            .padding(.vertical, Theme.Spacing.xs)
-            .background(Theme.Colors.warmSurface)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+            .buttonStyle(PressableScaleStyle())
         }
     }
 

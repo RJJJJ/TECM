@@ -118,10 +118,10 @@ private struct AdminBookingCard: View {
 
             Divider().overlay(Theme.Colors.line.opacity(0.45))
 
-            Label("\(booking.dateText) \(booking.timeText)", systemImage: "calendar")
+            Label("日期：\(booking.dateText)", systemImage: "calendar")
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textSecondary)
-            Label(booking.teacherName, systemImage: "person.text.rectangle")
+            Label("時段：\(booking.timeText)", systemImage: "clock")
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textSecondary)
             Label(booking.campus, systemImage: "mappin.and.ellipse")

@@ -20,7 +20,6 @@ struct BookingRecord: Identifiable {
     var childAgeGroup: String
     var courseName: String
     var campus: String
-    var teacherName: String
     var bookingDate: Date
     var note: String
     var status: BookingStatus
@@ -31,7 +30,6 @@ struct BookingRecord: Identifiable {
          childAgeGroup: String,
          courseName: String,
          campus: String,
-         teacherName: String,
          bookingDate: Date,
          note: String,
          status: BookingStatus) {
@@ -41,7 +39,6 @@ struct BookingRecord: Identifiable {
         self.childAgeGroup = childAgeGroup
         self.courseName = courseName
         self.campus = campus
-        self.teacherName = teacherName
         self.bookingDate = bookingDate
         self.note = note
         self.status = status
