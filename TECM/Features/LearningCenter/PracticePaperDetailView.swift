@@ -42,7 +42,7 @@ struct PracticePaperDetailView: View {
             .animation(.easeInOut(duration: 0.2), value: isSubmitted)
             .animation(.easeInOut(duration: 0.2), value: isCompleted)
         }
-        .toolbar(.hidden, for: .tabBar)
+        .tecmDetailTabBar()
     }
 
     private var questionCard: some View {

@@ -15,6 +15,7 @@ struct SectionHeader: View {
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
         }
+        .padding(.bottom, Theme.Spacing.sectionLead)
     }
 }
 

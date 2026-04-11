@@ -28,6 +28,7 @@ struct PremiumSectionHeader: View {
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
         }
+        .padding(.bottom, Theme.Spacing.sectionLead)
     }
 }
 

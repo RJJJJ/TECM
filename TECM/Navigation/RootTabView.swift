@@ -1,53 +1,63 @@
 import SwiftUI
 
 struct RootTabView: View {
-    @State private var selectedTab = 0
+    @StateObject private var router = TabRouter()
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            NavigationStack {
+        TabView(selection: tabSelection) {
+            NavigationStack(path: $router.homePath) {
                 HomeView()
             }
             .tabItem {
-                Label("首頁", systemImage: "house.fill")
+                Label(AppTab.home.title, systemImage: AppTab.home.icon)
             }
-            .tag(0)
+            .tag(AppTab.home)
 
-            NavigationStack {
+            NavigationStack(path: $router.coursesPath) {
                 CoursesView()
             }
             .tabItem {
-                Label("課程", systemImage: "book.closed.fill")
+                Label(AppTab.courses.title, systemImage: AppTab.courses.icon)
             }
-            .tag(1)
+            .tag(AppTab.courses)
 
-            NavigationStack {
+            NavigationStack(path: $router.bookingPath) {
                 BookingView()
             }
             .tabItem {
-                Label("預約", systemImage: "calendar.badge.plus")
+                Label(AppTab.booking.title, systemImage: AppTab.booking.icon)
             }
-            .tag(2)
+            .tag(AppTab.booking)
 
-            NavigationStack {
+            NavigationStack(path: $router.agentPath) {
                 AgentView()
             }
             .tabItem {
-                Label("TECM AGENT", systemImage: "bubble.left.and.bubble.right.fill")
+                Label(AppTab.agent.title, systemImage: AppTab.agent.icon)
             }
-            .tag(3)
+            .tag(AppTab.agent)
 
-            NavigationStack {
+            NavigationStack(path: $router.parentCenterPath) {
                 ParentCenterView()
             }
             .tabItem {
-                Label("家長中心", systemImage: "person.crop.circle.fill")
+                Label(AppTab.parentCenter.title, systemImage: AppTab.parentCenter.icon)
             }
-            .tag(4)
+            .tag(AppTab.parentCenter)
         }
+        .environmentObject(router)
         .tint(Theme.Colors.primary)
         .toolbarBackground(Theme.Colors.card, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
-        .animation(.easeInOut(duration: 0.2), value: selectedTab)
+        .animation(.easeInOut(duration: 0.2), value: router.selectedTab)
+    }
+
+    private var tabSelection: Binding<AppTab> {
+        Binding(
+            get: { router.selectedTab },
+            set: { tappedTab in
+                router.select(tappedTab)
+            }
+        )
     }
 }

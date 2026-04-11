@@ -88,7 +88,7 @@ struct ParentNotification: Identifiable {
 }
 
 struct FAQItem: Identifiable {
-    let id = UUID()
+    let id: String
     let topic: String
     let question: String
     let answer: String

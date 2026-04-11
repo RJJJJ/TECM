@@ -2,8 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     @State private var revealInternalAccess = false
-    @State private var goBooking = false
-    @State private var goCourses = false
+    @EnvironmentObject private var tabRouter: TabRouter
 
     private var featuredNews: [NewsItem] {
         Array(MockDataStore.news.prefix(3))
@@ -22,8 +21,8 @@ struct HomeView: View {
                 subtitle: "聚焦 Python、Scratch、C++ 的系統化學習路線，結合顧問評估與課堂規劃，讓家長清楚看見孩子的下一步。",
                 primaryTitle: "預約評估",
                 secondaryTitle: "課程總覽",
-                primaryAction: { goBooking = true },
-                secondaryAction: { goCourses = true }
+                primaryAction: { tabRouter.select(.booking) },
+                secondaryAction: { tabRouter.select(.courses) }
             )
             .onLongPressGesture(minimumDuration: 1.2) {
                 withAnimation(.easeInOut(duration: 0.24)) { revealInternalAccess.toggle() }
@@ -43,12 +42,6 @@ struct HomeView: View {
                 }
             }
             .premiumEntrance()
-            .background {
-                Group {
-                    NavigationLink("", destination: BookingView(), isActive: $goBooking).hidden()
-                    NavigationLink("", destination: CoursesView(), isActive: $goCourses).hidden()
-                }
-            }
 
             curatedUpdatesSection
                 .premiumEntrance(delay: 0.03)
@@ -111,12 +104,16 @@ struct HomeView: View {
     private var curatedShortcutSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             PremiumSectionHeader(eyebrow: "Quick Access", title: "精選入口", subtitle: "保留必要入口，不讓首頁變成功能牆")
-            NavigationLink(destination: CoursesView()) {
+            Button {
+                tabRouter.select(.courses)
+            } label: {
                 QuickActionTile(title: "課程總覽", subtitle: "查看完整課程策展與建議起點", icon: "book.closed")
             }
             .buttonStyle(PressableScaleStyle())
 
-            NavigationLink(destination: BookingView()) {
+            Button {
+                tabRouter.select(.booking)
+            } label: {
                 QuickActionTile(title: "預約體驗", subtitle: "以 3-4 步驟完成顧問式預約", icon: "calendar.badge.plus")
             }
             .buttonStyle(PressableScaleStyle())
@@ -126,7 +123,9 @@ struct HomeView: View {
             }
             .buttonStyle(PressableScaleStyle())
 
-            NavigationLink(destination: AgentView()) {
+            Button {
+                tabRouter.select(.agent)
+            } label: {
                 QuickActionTile(title: "常見問題", subtitle: "透過 TECM AGENT 先了解常見決策問題", icon: "bubble.left.and.text.bubble.right")
             }
             .buttonStyle(PressableScaleStyle())
@@ -136,4 +135,5 @@ struct HomeView: View {
 
 #Preview {
     NavigationStack { HomeView() }
+        .environmentObject(TabRouter())
 }

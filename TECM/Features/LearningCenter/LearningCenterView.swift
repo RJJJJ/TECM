@@ -43,7 +43,7 @@ struct LearningCenterView: View {
                 }
             }
         }
-        .toolbar(.hidden, for: .tabBar)
+        .tecmDetailTabBar()
     }
 
     private func flowRow(index: Int, text: String) -> some View {
@@ -75,7 +75,7 @@ struct PracticeSubjectSelectionView: View {
                 .buttonStyle(PressableScaleStyle())
             }
         }
-        .toolbar(.hidden, for: .tabBar)
+        .tecmDetailTabBar()
     }
 }
 
@@ -110,7 +110,7 @@ struct PracticeLevelSelectionView: View {
                 .buttonStyle(PressableScaleStyle())
             }
         }
-        .toolbar(.hidden, for: .tabBar)
+        .tecmDetailTabBar()
     }
 }
 
@@ -142,6 +142,6 @@ struct PracticePaperSelectionView: View {
                 }
             }
         }
-        .toolbar(.hidden, for: .tabBar)
+        .tecmDetailTabBar()
     }
 }

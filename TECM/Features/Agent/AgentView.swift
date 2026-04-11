@@ -3,19 +3,27 @@ import SwiftUI
 struct AgentView: View {
     @State private var selectedTopic = "全部"
     @State private var keyword = ""
-    @State private var selectedQuestion: FAQItem?
+    @State private var selectedQuestionId: String?
 
     private var topics: [String] {
-        ["全部", "幾歲適合開始學？", "零基礎怎樣選課？", "如何預約體驗？", "課程路徑如何安排？"]
+        ["全部"] + Array(Set(MockDataStore.faq.map(\.topic))).sorted()
     }
 
     private var mappedFAQ: [FAQItem] {
-        let source = MockDataStore.faq
-        return source.filter { item in
-            let topicMatch = selectedTopic == "全部" || item.question.contains(selectedTopic.replacingOccurrences(of: "？", with: ""))
+        MockDataStore.faq.filter { item in
+            let topicMatch = selectedTopic == "全部" || item.topic == selectedTopic
             let keywordMatch = keyword.isEmpty || item.question.localizedCaseInsensitiveContains(keyword) || item.answer.localizedCaseInsensitiveContains(keyword)
             return topicMatch && keywordMatch
         }
+    }
+
+    private var selectedQuestion: FAQItem? {
+        let scoped = mappedFAQ
+        if let selectedQuestionId,
+           let matched = scoped.first(where: { $0.id == selectedQuestionId }) {
+            return matched
+        }
+        return scoped.first
     }
 
     var body: some View {
@@ -50,14 +58,39 @@ struct AgentView: View {
                     .stroke(Theme.Colors.line.opacity(0.55), lineWidth: 0.8)
             }
 
-            if mappedFAQ.isEmpty {
-                EmptyStateView(title: "目前沒有對應內容", message: "請改用其他關鍵字，或直接透過預約流程留下需求。")
+            if let selectedQuestion {
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    Text("常見問題")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.blueGray)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: Theme.Spacing.xs) {
+                            ForEach(mappedFAQ) { item in
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.2)) { selectedQuestionId = item.id }
+                                } label: {
+                                    FAQChip(title: item.question, selected: selectedQuestionId == item.id || (selectedQuestionId == nil && item.id == selectedQuestion.id))
+                                }
+                                .buttonStyle(PressableScaleStyle())
+                            }
+                        }
+                    }
+                    AdvisorAnswerCard(question: selectedQuestion.question, answer: selectedQuestion.answer)
+                }
             } else {
-                ForEach(mappedFAQ) { item in
+                EmptyStateView(title: "目前沒有符合的 FAQ", message: "請調整關鍵字，或改選其他主題。")
+            }
+
+            if !mappedFAQ.isEmpty {
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    Text("全部可用回答")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.blueGray)
+                    ForEach(mappedFAQ) { item in
                     Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { selectedQuestion = item }
+                        withAnimation(.easeInOut(duration: 0.2)) { selectedQuestionId = item.id }
                     } label: {
-                        AdvisorAnswerCard(question: item.question, answer: selectedQuestion?.id == item.id ? item.answer : "點擊展開顧問建議")
+                        AdvisorAnswerCard(question: item.question, answer: selectedQuestionId == item.id ? item.answer : "點擊查看此題的顧問建議")
                     }
                     .buttonStyle(PressableScaleStyle())
                 }
@@ -73,6 +106,21 @@ struct AgentView: View {
                     .disabled(true)
                     .textFieldStyle(.roundedBorder)
             }
+        }
+        .onAppear {
+            if selectedQuestionId == nil {
+                selectedQuestionId = MockDataStore.faq.first?.id
+            }
+        }
+        .onChange(of: selectedTopic) { _ in
+            selectedQuestionId = mappedFAQ.first?.id
+        }
+        .onChange(of: keyword) { _ in
+            if let selectedQuestionId,
+               mappedFAQ.contains(where: { $0.id == selectedQuestionId }) {
+                return
+            }
+            self.selectedQuestionId = mappedFAQ.first?.id
         }
     }
 }

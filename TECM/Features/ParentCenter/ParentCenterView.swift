@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ParentCenterView: View {
     @State private var showSupportSuccess = false
+    @EnvironmentObject private var tabRouter: TabRouter
 
     var body: some View {
         ScreenContainer(title: "家長中心") {
@@ -23,12 +24,16 @@ struct ParentCenterView: View {
 
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 PremiumSectionHeader(title: "服務入口", subtitle: "僅保留與前期預約決策相關模組")
-                NavigationLink(destination: BookingView()) {
+                Button {
+                    tabRouter.select(.booking)
+                } label: {
                     QuickActionTile(title: "預約摘要", subtitle: "查看目前提交與待安排的體驗需求", icon: "calendar")
                 }
                 .buttonStyle(PressableScaleStyle())
 
-                NavigationLink(destination: AgentView()) {
+                Button {
+                    tabRouter.select(.agent)
+                } label: {
                     QuickActionTile(title: "顧問常見問題", subtitle: "先由 TECM AGENT 協助，再接人工顧問", icon: "person.text.rectangle")
                 }
                 .buttonStyle(PressableScaleStyle())
@@ -49,4 +54,5 @@ struct ParentCenterView: View {
 
 #Preview {
     NavigationStack { ParentCenterView() }
+        .environmentObject(TabRouter())
 }
