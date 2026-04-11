@@ -87,12 +87,13 @@ struct AgentView: View {
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.blueGray)
                     ForEach(mappedFAQ) { item in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { selectedQuestionId = item.id }
-                    } label: {
-                        AdvisorAnswerCard(question: item.question, answer: selectedQuestionId == item.id ? item.answer : "點擊查看此題的顧問建議")
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { selectedQuestionId = item.id }
+                        } label: {
+                            AdvisorAnswerCard(question: item.question, answer: selectedQuestionId == item.id ? item.answer : "點擊查看此題的顧問建議")
+                        }
+                        .buttonStyle(PressableScaleStyle())
                     }
-                    .buttonStyle(PressableScaleStyle())
                 }
             }
 
