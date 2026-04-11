@@ -29,9 +29,9 @@ struct BookingView: View {
     @State private var courseType: String
     @State private var childProfile = "6-8歲"
     @State private var campus = "澳門半島校區"
-    @State private var preferredDate = Date.now.addingTimeInterval(86400 * 2)
-    @State private var startSlot = 20
-    @State private var endSlot = 22
+    @State private var preferredDate = Calendar.current.startOfDay(for: Date.now.addingTimeInterval(86400 * 2))
+    @State private var startSlot = BookingPolicy.defaultStartSlot
+    @State private var endSlot = BookingPolicy.defaultEndSlot
     @State private var didCustomizeEndSlot = false
     @State private var parentName = ""
     @State private var phone = ""
@@ -40,10 +40,22 @@ struct BookingView: View {
     @State private var isLoadingStep = true
     @State private var submitted = false
 
+    private enum BookingPolicy {
+        static let openingSlot = 20   // 10:00
+        static let closingSlot = 40   // 20:00
+        static let defaultStartSlot = 22 // 11:00
+        static let defaultDurationSlots = 2 // 60 mins
+        static let maxDurationSlots = 4 // 120 mins
+        static let minimumDurationSlots = 1 // 30 mins
+
+        static var defaultEndSlot: Int { defaultStartSlot + defaultDurationSlots }
+        static var latestStartSlot: Int { closingSlot - minimumDurationSlots }
+    }
+
     private let courses = ["幼兒雙語啟蒙", "小學數理思維", "公開演說與表達", "學術閱讀工作坊"]
     private let profiles = ["3-5歲", "6-8歲", "9-12歲"]
     private let campuses = ["澳門半島校區", "氹仔校區", "路氹城校區"]
-    private let timeSlots = Array(12...44) // 06:00 - 22:00 by half-hour
+    private var timeSlots: [Int] { Array(BookingPolicy.openingSlot...BookingPolicy.latestStartSlot) }
     private let isSubPage: Bool
 
     init(prefilledCourse: String? = nil) {
@@ -94,15 +106,23 @@ struct BookingView: View {
                 Divider().overlay(Theme.Colors.line.opacity(0.45))
             }
         }
-        .toolbar(isSubPage ? .hidden : .visible, for: .tabBar)
-        .onAppear { simulateStepLoading() }
+        .toolbar(TabBarPolicy.isRootScreen(isSubPage), for: .tabBar)
+        .onAppear {
+            simulateStepLoading()
+            preferredDate = Calendar.current.startOfDay(for: preferredDate)
+        }
         .onChange(of: startSlot) { newValue in
-            if endSlot <= newValue {
-                endSlot = min(newValue + 2, timeSlots.last ?? newValue)
-                didCustomizeEndSlot = false
-            } else if !didCustomizeEndSlot {
-                endSlot = min(newValue + 2, timeSlots.last ?? newValue)
+            guard timeSlots.contains(newValue) else {
+                startSlot = BookingPolicy.defaultStartSlot
+                return
             }
+            if !isEndSlotValidForCurrentRules(endSlot) || !didCustomizeEndSlot {
+                endSlot = recommendedEndSlot(for: newValue)
+                didCustomizeEndSlot = false
+            }
+        }
+        .onChange(of: preferredDate) { newDate in
+            preferredDate = Calendar.current.startOfDay(for: newDate)
         }
     }
 
@@ -124,6 +144,9 @@ struct BookingView: View {
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .padding(.top, 4)
                 timeRangePicker
+                Text("固定營業時段：\(formattedSlot(BookingPolicy.openingSlot)) - \(formattedSlot(BookingPolicy.closingSlot))，單次最長可預約 2 小時。")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textSecondary)
             }
         case .contact:
             ElevatedCard {
@@ -218,7 +241,10 @@ struct BookingView: View {
     }
 
     private var validEndSlots: [Int] {
-        timeSlots.filter { $0 >= startSlot }
+        let minimumEnd = startSlot + BookingPolicy.minimumDurationSlots
+        let maximumEnd = min(startSlot + BookingPolicy.maxDurationSlots, BookingPolicy.closingSlot)
+        guard minimumEnd <= maximumEnd else { return [minimumEnd] }
+        return Array(minimumEnd...maximumEnd)
     }
 
     private func pickerColumn(title: String, value: Binding<Int>, options: [Int]) -> some View {
@@ -252,6 +278,14 @@ struct BookingView: View {
         let hour = slot / 2
         let minute = slot % 2 == 0 ? "00" : "30"
         return String(format: "%02d:%@", hour, minute)
+    }
+
+    private func recommendedEndSlot(for start: Int) -> Int {
+        min(start + BookingPolicy.defaultDurationSlots, BookingPolicy.closingSlot)
+    }
+
+    private func isEndSlotValidForCurrentRules(_ slot: Int) -> Bool {
+        slot > startSlot && validEndSlots.contains(slot) && slot <= BookingPolicy.closingSlot
     }
 }
 

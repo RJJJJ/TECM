@@ -29,6 +29,7 @@ enum Theme {
         static let lg: CGFloat = 24
         static let xl: CGFloat = 32
         static let xxl: CGFloat = 40
+        static let sectionLead: CGFloat = 14
     }
 
     enum Radius {

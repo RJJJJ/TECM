@@ -37,10 +37,12 @@ enum MockDataStore {
     ]
 
     static let faq: [FAQItem] = [
-        .init(topic: "預約", question: "如何預約試堂？", answer: "前往「預約」頁面選擇課程與時段後提交，顧問會於 24 小時內確認。", popular: true),
-        .init(topic: "收費", question: "試堂需要收費嗎？", answer: "部分課程提供體驗名額，實際收費會在預約確認時清楚說明。", popular: true),
-        .init(topic: "選課", question: "如何判斷孩子適合哪一類課程？", answer: "您可先瀏覽課程頁摘要，或透過 TECM AGENT 查看常見建議後再與顧問確認。", popular: false),
-        .init(topic: "家長支援", question: "可以查看孩子近期學習建議嗎？", answer: "可以，家長中心會提供近期課程摘要與延伸學習入口。", popular: false)
+        .init(id: "age", topic: "選課策略", question: "幾歲開始學比較合適？", answer: "一般可從 5-6 歲開始接觸結構化程式思維；若孩子專注力與語言理解較成熟，4 歲後也可先用 Scratch 互動課程暖身。正式安排前，我們會先做 15-20 分鐘程度評估，再決定起點。", popular: true),
+        .init(id: "beginner", topic: "選課策略", question: "零基礎應該怎樣選課？", answer: "零基礎建議先看年齡與學習節奏：低年齡先以 Scratch 建立邏輯與流程感，高年齡可直接進入 Python 入門。重點不是「學最快」，而是先讓孩子穩定完成任務、建立信心。", popular: true),
+        .init(id: "languages", topic: "課程內容", question: "Python / Scratch / C++ 有什麼分別？", answer: "Scratch 側重視覺化邏輯與互動創作，適合建立入門概念；Python 語法清楚、應用廣，適合作為主力學習語言；C++ 結構更嚴謹，常用於進階演算法與競賽訓練。可依目標分階段銜接。", popular: true),
+        .init(id: "booking", topic: "預約流程", question: "如何預約體驗？", answer: "到「預約」頁選擇課程方向、校區與時段後提交即可。系統會先保留你填寫的時段偏好，顧問會在營業時段內與你確認，並提供首次體驗建議。", popular: true),
+        .init(id: "assessment", topic: "預約流程", question: "是否會先評估再安排課程？", answer: "會。TECM 會先做基礎程度與學習習慣評估，再安排合適班型與進度。這樣能避免孩子進度過快或過慢，家長也能清楚理解每階段目標。", popular: true),
+        .init(id: "progression", topic: "課程內容", question: "課程如何銜接進階學習？", answer: "每個階段都有明確的能力指標：先建立語法與邏輯，再進到專題實作與解題策略。當孩子達到當前階段目標後，顧問會提供下一階課程與練習建議，保持連續成長。", popular: false)
     ]
 
     static let learningResources: [LearningResource] = [

@@ -60,7 +60,7 @@ struct CourseDetailView: View {
 
             footerCTA
         }
-        .toolbar(.hidden, for: .tabBar)
+        .tecmDetailTabBar()
     }
 
     private var heroSection: some View {
