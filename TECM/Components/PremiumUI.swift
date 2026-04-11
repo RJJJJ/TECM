@@ -66,32 +66,12 @@ struct BrandHeroSection: View {
                 .tracking(0.7)
                 .foregroundStyle(Theme.Colors.brandOrange)
 
-            HStack(alignment: .center, spacing: Theme.Spacing.sm) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
                 if let logoURL {
-                    AsyncImage(url: logoURL) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFit()
-                                .padding(6)
-                        default:
-                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                                .fill(Theme.Colors.mistBlue.opacity(0.7))
-                                .overlay {
-                                    Image(systemName: "building.2")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(Theme.Colors.blueGray)
-                                }
+                    BrandLogoView(logoURL: logoURL)
+                        .alignmentGuide(.firstTextBaseline) { dimensions in
+                            dimensions[VerticalAlignment.center]
                         }
-                    }
-                    .frame(width: 36, height: 36)
-                    .background(Theme.Colors.warmSurface, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                            .stroke(Theme.Colors.line.opacity(0.7), lineWidth: 0.8)
-                    }
                 }
 
                 Text(title)
@@ -123,6 +103,41 @@ struct BrandHeroSection: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous))
         .subtleCardShadow()
+    }
+}
+
+private struct BrandLogoView: View {
+    let logoURL: URL
+    private let logoSize: CGFloat = 48
+    private let logoPadding: CGFloat = 7
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                .fill(Theme.Colors.warmSurface)
+
+            AsyncImage(url: logoURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .padding(logoPadding)
+                default:
+                    Image(systemName: "building.2")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.blueGray)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Theme.Colors.mistBlue.opacity(0.7))
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+        }
+        .frame(width: logoSize, height: logoSize)
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                .stroke(Theme.Colors.line.opacity(0.7), lineWidth: 0.8)
+        }
     }
 }
 
@@ -326,14 +341,26 @@ struct FAQChip: View {
 struct AdvisorAnswerCard: View {
     let question: String
     let answer: String
+    let isExpanded: Bool
 
     var body: some View {
         ElevatedCard {
-            Text(question)
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
-            Text(answer)
-                .font(Theme.Typography.body)
-                .foregroundStyle(Theme.Colors.textSecondary)
+            HStack(spacing: Theme.Spacing.sm) {
+                Text(question)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Spacer()
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.blueGray)
+            }
+
+            if isExpanded {
+                Text(answer)
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
     }
 }
