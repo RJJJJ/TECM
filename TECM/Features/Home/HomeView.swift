@@ -18,14 +18,14 @@ struct HomeView: View {
     var body: some View {
         ScreenContainer {
             BrandHeroSection(
-                title: "TECM 澳門編程教育中心",
-                subtitle: "聚焦 Python、Scratch、C++ 的系統化學習路線，結合顧問評估與課堂規劃，讓家長清楚看見孩子的下一步。",
-                logoURL: URL(string: "https://tecmacau.com/favicon.png?v=2"),
-                primaryTitle: "預約評估",
-                secondaryTitle: "課程總覽",
-                primaryAction: { tabRouter.select(.booking) },
-                secondaryAction: { tabRouter.select(.courses) }
-            )
+                            title: "TECM 澳門編程教育中心",
+                            subtitle: "聚焦 Python、Scratch、C++ 的系統化學習路線，結合顧問評估與課堂規劃，讓家長清楚看見孩子的下一步。",
+                            primaryTitle: "預約評估",
+                            secondaryTitle: "課程總覽",
+                            logoURL: URL(string: "https://tecmacau.com/favicon.png?v=2"),
+                            primaryAction: { tabRouter.select(.booking) },
+                            secondaryAction: { tabRouter.select(.courses) }
+                        )
             .onLongPressGesture(minimumDuration: 1.2) {
                 withAnimation(.easeInOut(duration: 0.24)) { revealInternalAccess.toggle() }
             }
