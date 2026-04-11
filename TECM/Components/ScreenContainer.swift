@@ -1,9 +1,27 @@
 import SwiftUI
 
+enum ScreenContainerBottomSpacing {
+    case standard
+    case rootTab
+    case none
+
+    var paddingValue: CGFloat {
+        switch self {
+        case .standard:
+            return Theme.Spacing.xxl
+        case .rootTab:
+            return Theme.Spacing.md
+        case .none:
+            return 0
+        }
+    }
+}
+
 struct ScreenContainer<Content: View>: View {
     let title: String?
     let showBackButton: Bool
     let usesScrollView: Bool
+    let bottomSpacing: ScreenContainerBottomSpacing
     let content: Content
     @Environment(\.dismiss) private var dismiss
 
@@ -11,11 +29,13 @@ struct ScreenContainer<Content: View>: View {
         title: String? = nil,
         showBackButton: Bool = false,
         usesScrollView: Bool = true,
+        bottomSpacing: ScreenContainerBottomSpacing = .standard,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.showBackButton = showBackButton
         self.usesScrollView = usesScrollView
+        self.bottomSpacing = bottomSpacing
         self.content = content()
     }
 
@@ -49,7 +69,7 @@ struct ScreenContainer<Content: View>: View {
         }
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.top, Theme.Spacing.sm)
-        .padding(.bottom, Theme.Spacing.xxl)
+        .padding(.bottom, bottomSpacing.paddingValue)
     }
 
     @ViewBuilder
