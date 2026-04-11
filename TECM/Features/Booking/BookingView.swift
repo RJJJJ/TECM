@@ -40,6 +40,13 @@ struct BookingView: View {
     @State private var isLoadingStep = true
     @State private var submitted = false
     @State private var isShowingSummary = false
+    @FocusState private var focusedField: BookingField?
+
+    private enum BookingField: Hashable {
+        case parentName
+        case phone
+        case note
+    }
 
     private enum BookingPolicy {
         static let openingSlot = 20
@@ -67,6 +74,7 @@ struct BookingView: View {
     var body: some View {
         ScreenContainer(title: "預約", showBackButton: isSubPage) {
             ConciergeStepHeader(currentStep: currentStep.rawValue + 1, totalSteps: Step.allCases.count, title: currentStep.title, subtitle: currentStep.subtitle)
+                .padding(.bottom, 2)
 
             if submitted {
                 SuccessStateView(
@@ -93,11 +101,16 @@ struct BookingView: View {
                     SecondaryCTAButton(title: "上一步") {
                         moveStep(-1)
                     }
+                    .frame(minHeight: 46)
                 }
 
-                PrimaryCTAButton(title: submitted ? "再次預約" : primaryTitle) {
+                PrimaryCTAButton(
+                    title: submitted ? "再次預約" : primaryTitle,
+                    isDisabled: isPrimaryActionDisabled
+                ) {
                     handlePrimaryAction()
                 }
+                .frame(minHeight: 46)
             }
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.top, 8)
@@ -108,6 +121,14 @@ struct BookingView: View {
             }
         }
         .toolbar(TabBarPolicy.isRootScreen(isSubPage), for: .tabBar)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完成") {
+                    focusedField = nil
+                }
+            }
+        }
         .onAppear {
             simulateStepLoading()
             preferredDate = Calendar.current.startOfDay(for: preferredDate)
@@ -137,6 +158,9 @@ struct BookingView: View {
                 note: note,
                 onConfirm: submitBooking
             )
+        }
+        .onTapGesture {
+            focusedField = nil
         }
     }
 
@@ -168,16 +192,24 @@ struct BookingView: View {
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .tint(Theme.Colors.primary)
                     .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: .parentName)
+                    .submitLabel(.next)
+                    .onSubmit {
+                        focusedField = .phone
+                    }
                 TextField("聯絡電話", text: $phone)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .tint(Theme.Colors.primary)
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.phonePad)
+                    .focused($focusedField, equals: .phone)
                 TextField("備註（選填）", text: $note, axis: .vertical)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .tint(Theme.Colors.primary)
                     .lineLimit(2...4)
                     .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: .note)
+                    .submitLabel(.done)
             }
         case .confirm:
             ElevatedCard {
@@ -210,13 +242,17 @@ struct BookingView: View {
         currentStep == .confirm ? "查看摘要" : "下一步"
     }
 
+    private var isPrimaryActionDisabled: Bool {
+        !submitted && currentStep == .contact && (parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || phone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
     private func handlePrimaryAction() {
         if submitted {
             restartBookingFlow()
             return
         }
 
-        if currentStep == .contact && (parentName.isEmpty || phone.isEmpty) { return }
+        if isPrimaryActionDisabled { return }
 
         if currentStep == .confirm {
             isShowingSummary = true

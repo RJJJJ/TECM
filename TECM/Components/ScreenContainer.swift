@@ -23,8 +23,6 @@ struct ScreenContainer<Content: View>: View {
     let usesScrollView: Bool
     let bottomSpacing: ScreenContainerBottomSpacing
     let content: Content
-    @Environment(\.dismiss) private var dismiss
-
     init(
         title: String? = nil,
         showBackButton: Bool = false,
@@ -45,6 +43,7 @@ struct ScreenContainer<Content: View>: View {
                 ScrollView(showsIndicators: false) {
                     containerContent
                 }
+                .scrollDismissesKeyboard(.interactively)
             } else {
                 containerContent
             }
@@ -57,12 +56,14 @@ struct ScreenContainer<Content: View>: View {
             )
             .ignoresSafeArea()
         )
-        .toolbar(.hidden, for: .navigationBar)
+        .navigationTitle(navigationTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(systemNavigationVisibility, for: .navigationBar)
     }
 
     private var containerContent: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-            if let title {
+            if shouldUseCustomHeader, let title {
                 header(title: title)
             }
             content
@@ -75,24 +76,22 @@ struct ScreenContainer<Content: View>: View {
     @ViewBuilder
     private func header(title: String) -> some View {
         HStack(spacing: Theme.Spacing.sm) {
-            if showBackButton {
-                Button(action: { dismiss() }) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                        .frame(width: 34, height: 34)
-                        .background(Theme.Colors.card, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                                .stroke(Theme.Colors.line.opacity(0.8), lineWidth: 0.8)
-                        }
-                }
-                .buttonStyle(PressableScaleStyle())
-            }
             Text(title)
                 .font(Theme.Typography.pageTitle)
                 .foregroundStyle(Theme.Colors.textPrimary)
             Spacer()
         }
+    }
+
+    private var shouldUseCustomHeader: Bool {
+        title != nil && !showBackButton
+    }
+
+    private var navigationTitle: String {
+        showBackButton ? (title ?? "") : ""
+    }
+
+    private var systemNavigationVisibility: Visibility {
+        showBackButton ? .visible : .hidden
     }
 }

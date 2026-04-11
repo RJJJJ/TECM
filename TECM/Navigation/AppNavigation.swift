@@ -39,8 +39,11 @@ final class TabRouter: ObservableObject {
     @Published var parentCenterPath = NavigationPath()
 
     func select(_ tab: AppTab) {
-        selectedTab = tab
-        resetPath(for: tab)
+        if selectedTab == tab {
+            resetPath(for: tab)
+        } else {
+            selectedTab = tab
+        }
     }
 
     func resetCurrentTabToRoot() {
