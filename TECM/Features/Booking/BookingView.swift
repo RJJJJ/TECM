@@ -165,11 +165,17 @@ struct BookingView: View {
         case .contact:
             ElevatedCard {
                 TextField("家長姓名", text: $parentName)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .tint(Theme.Colors.primary)
                     .textFieldStyle(.roundedBorder)
                 TextField("聯絡電話", text: $phone)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .tint(Theme.Colors.primary)
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.phonePad)
                 TextField("備註（選填）", text: $note, axis: .vertical)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .tint(Theme.Colors.primary)
                     .lineLimit(2...4)
                     .textFieldStyle(.roundedBorder)
             }

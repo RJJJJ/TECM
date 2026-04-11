@@ -161,12 +161,18 @@ private struct BookingEditSheet: View {
 
                     ElevatedCard {
                         TextField("學生名稱", text: $editing.childName)
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                            .tint(Theme.Colors.primary)
                             .textFieldStyle(.roundedBorder)
 
                         TextField("課程名稱", text: $editing.courseName)
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                            .tint(Theme.Colors.primary)
                             .textFieldStyle(.roundedBorder)
 
                         TextField("備註", text: $editing.note, axis: .vertical)
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                            .tint(Theme.Colors.primary)
                             .lineLimit(2...4)
                             .textFieldStyle(.roundedBorder)
                     }
