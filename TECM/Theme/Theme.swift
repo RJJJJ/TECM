@@ -2,18 +2,18 @@ import SwiftUI
 
 enum Theme {
     enum Colors {
-        static let background = Color(hex: "#F6F7F9")
-        static let warmSurface = Color(hex: "#FAF8F4")
+        static let background = Color(hex: "#F3F6FB")
+        static let warmSurface = Color(hex: "#F7FAFF")
         static let card = Color(hex: "#FFFFFF")
-        static let primary = Color(hex: "#2D3F54")
-        static let mistBlue = Color(hex: "#E8EEF4")
-        static let blueGray = Color(hex: "#6C7C8E")
-        static let textPrimary = Color(hex: "#1C2733")
-        static let textSecondary = Color(hex: "#657382")
-        static let line = Color(hex: "#D7DEE6")
-        static let accent = Color(hex: "#B9AA8B")
-        static let success = Color(hex: "#557566")
-        static let warning = Color(hex: "#9A8567")
+        static let primary = Color(hex: "#1F4B7A")
+        static let mistBlue = Color(hex: "#E7F0FA")
+        static let blueGray = Color(hex: "#5F7691")
+        static let textPrimary = Color(hex: "#18293D")
+        static let textSecondary = Color(hex: "#556B83")
+        static let line = Color(hex: "#CFDAE8")
+        static let accent = Color(hex: "#2F6FAE")
+        static let success = Color(hex: "#2E7D63")
+        static let warning = Color(hex: "#A97934")
     }
 
     enum Spacing {

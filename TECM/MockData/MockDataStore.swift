@@ -17,10 +17,10 @@ enum MockDataStore {
     }
 
     static let bookings: [BookingRecord] = [
-        .init(parentName: "陳太", childName: "昊昊", childAgeGroup: "6-8歲", courseName: "小學數理思維", campus: "澳門半島校區", teacherName: "林老師", bookingDate: makeDate("2026/04/18", "16:00"), note: "孩子對數學文字題較焦慮，請先安排基礎評估。", status: .pending),
-        .init(parentName: "李先生", childName: "芊芊", childAgeGroup: "3-5歲", courseName: "幼兒雙語啟蒙", campus: "氹仔校區", teacherName: "何老師", bookingDate: makeDate("2026/04/13", "10:00"), note: "第一次試堂，希望先觀察專注度。", status: .confirmed),
-        .init(parentName: "黃太", childName: "子言", childAgeGroup: "9-12歲", courseName: "公開演說與表達", campus: "路氹城校區", teacherName: "陳老師", bookingDate: makeDate("2026/04/05", "17:00"), note: "希望強化上台語速與結構表達。", status: .completed),
-        .init(parentName: "周先生", childName: "凱晴", childAgeGroup: "6-8歲", courseName: "小學數理思維", campus: "路氹城校區", teacherName: "張老師", bookingDate: makeDate("2026/04/20", "14:00"), note: "臨時外遊，需改期。", status: .cancelled)
+        .init(parentName: "陳太", childName: "昊昊", childAgeGroup: "6-8歲", courseName: "小學數理思維", campus: "澳門半島校區", bookingDate: makeDate("2026/04/18", "16:00"), note: "孩子對數學文字題較焦慮，請先安排基礎評估。", status: .pending),
+        .init(parentName: "李先生", childName: "芊芊", childAgeGroup: "3-5歲", courseName: "幼兒雙語啟蒙", campus: "氹仔校區", bookingDate: makeDate("2026/04/13", "10:00"), note: "第一次試堂，希望先觀察專注度。", status: .confirmed),
+        .init(parentName: "黃太", childName: "子言", childAgeGroup: "9-12歲", courseName: "公開演說與表達", campus: "路氹城校區", bookingDate: makeDate("2026/04/05", "17:00"), note: "希望強化上台語速與結構表達。", status: .completed),
+        .init(parentName: "周先生", childName: "凱晴", childAgeGroup: "6-8歲", courseName: "小學數理思維", campus: "路氹城校區", bookingDate: makeDate("2026/04/20", "14:00"), note: "臨時外遊，需改期。", status: .cancelled)
     ]
 
     static let notifications: [ParentNotification] = [
