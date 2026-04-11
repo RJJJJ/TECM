@@ -27,7 +27,7 @@ struct AgentView: View {
            mappedFAQ.contains(where: { $0.id == selectedQuestionId }) {
             return selectedQuestionId
         }
-        return mappedFAQ.first?.id
+        return nil
     }
 
     var body: some View {
@@ -95,11 +95,15 @@ struct AgentView: View {
                                     let isSelected = effectiveSelectedQuestionId == item.id
                                     Button {
                                         withAnimation(.easeInOut(duration: 0.2)) {
-                                            selectedQuestionId = item.id
-                                            scrollTargetId = item.id
+                                            if isSelected {
+                                                selectedQuestionId = nil
+                                            } else {
+                                                selectedQuestionId = item.id
+                                                scrollTargetId = item.id
+                                            }
                                         }
                                     } label: {
-                                        AdvisorAnswerCard(question: item.question, answer: item.answer)
+                                        AdvisorAnswerCard(question: item.question, answer: item.answer, isExpanded: isSelected)
                                             .overlay {
                                                 RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                                                     .stroke(isSelected ? Theme.Colors.accent.opacity(0.8) : Theme.Colors.line.opacity(0.5), lineWidth: isSelected ? 1.6 : 0.8)
@@ -127,12 +131,11 @@ struct AgentView: View {
                     }
                 }
                 .onAppear {
-                    let firstId = mappedFAQ.first?.id
-                    selectedQuestionId = firstId
-                    scrollTargetId = firstId
+                    selectedQuestionId = nil
+                    scrollTargetId = nil
                 }
                 .onChange(of: mappedFAQIDs) { ids in
-                    guard let firstId = ids.first else {
+                    guard !ids.isEmpty else {
                         selectedQuestionId = nil
                         scrollTargetId = nil
                         return
@@ -140,12 +143,11 @@ struct AgentView: View {
 
                     if let selectedQuestionId,
                        ids.contains(selectedQuestionId) {
-                        scrollTargetId = selectedQuestionId
                         return
                     }
 
-                    selectedQuestionId = firstId
-                    scrollTargetId = firstId
+                    selectedQuestionId = nil
+                    scrollTargetId = nil
                 }
                 .onChange(of: scrollTargetId) { targetId in
                     guard let targetId,

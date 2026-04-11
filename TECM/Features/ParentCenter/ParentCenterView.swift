@@ -25,9 +25,7 @@ struct ParentCenterView: View {
 
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 PremiumSectionHeader(title: "服務入口", subtitle: "僅保留與前期預約決策相關模組")
-                Button {
-                    tabRouter.select(.booking)
-                } label: {
+                NavigationLink(destination: ParentReservationSummaryView()) {
                     QuickActionTile(title: "預約摘要", subtitle: "查看目前提交與待安排的體驗需求", icon: "calendar")
                 }
                 .buttonStyle(PressableScaleStyle())

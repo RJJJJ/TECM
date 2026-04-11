@@ -95,6 +95,67 @@ struct FAQItem: Identifiable {
     let popular: Bool
 }
 
+enum ReservationSummaryFilter: String, CaseIterable, Identifiable {
+    case all = "全部"
+    case pending = "待確認"
+    case confirmed = "已確認"
+    case completed = "已完成"
+    case cancelled = "已取消"
+
+    var id: String { rawValue }
+
+    var title: String { rawValue }
+
+    var status: BookingStatus? {
+        switch self {
+        case .all: return nil
+        case .pending: return .pending
+        case .confirmed: return .confirmed
+        case .completed: return .completed
+        case .cancelled: return .cancelled
+        }
+    }
+}
+
+struct ParentReservationSummaryItem: Identifiable {
+    let id: UUID
+    let parentName: String
+    let childName: String
+    let courseDirection: String
+    let campus: String
+    let reservationDate: Date
+    let status: BookingStatus
+    let note: String
+
+    init(
+        id: UUID = UUID(),
+        parentName: String,
+        childName: String,
+        courseDirection: String,
+        campus: String,
+        reservationDate: Date,
+        status: BookingStatus,
+        note: String
+    ) {
+        self.id = id
+        self.parentName = parentName
+        self.childName = childName
+        self.courseDirection = courseDirection
+        self.campus = campus
+        self.reservationDate = reservationDate
+        self.status = status
+        self.note = note
+    }
+
+    var dateText: String {
+        reservationDate.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    var timeText: String {
+        reservationDate.formatted(date: .omitted, time: .shortened)
+    }
+}
+
 struct LearningResource: Identifiable {
     let id = UUID()
     let title: String

@@ -23,6 +23,13 @@ enum MockDataStore {
         .init(parentName: "周先生", childName: "凱晴", childAgeGroup: "6-8歲", courseName: "小學數理思維", campus: "路氹城校區", bookingDate: makeDate("2026/04/20", "14:00"), note: "臨時外遊，需改期。", status: .cancelled)
     ]
 
+    static let parentReservationSummaries: [ParentReservationSummaryItem] = [
+        .init(parentName: "陳太", childName: "昊昊", courseDirection: "Python / Scratch 起步評估", campus: "澳門半島校區", reservationDate: makeDate("2026/04/18", "16:00"), status: .pending, note: "已提交，等待顧問確認最終時段。"),
+        .init(parentName: "陳太", childName: "昊昊", courseDirection: "小學數理思維 體驗課", campus: "氹仔校區", reservationDate: makeDate("2026/04/13", "10:00"), status: .confirmed, note: "已安排導師與教室，請提前 10 分鐘到達。"),
+        .init(parentName: "陳太", childName: "昊昊", courseDirection: "Scratch 互動創作體驗", campus: "路氹城校區", reservationDate: makeDate("2026/04/05", "11:30"), status: .completed, note: "體驗已完成，顧問將提供後續學習建議。"),
+        .init(parentName: "陳太", childName: "昊昊", courseDirection: "C++ 進階探索諮詢", campus: "澳門半島校區", reservationDate: makeDate("2026/03/30", "14:30"), status: .cancelled, note: "家長臨時更改行程，本次預約已取消。")
+    ]
+
     static let notifications: [ParentNotification] = [
         .init(title: "預約已提交", detail: "您的試堂申請已進入人工確認流程。", time: "2小時前"),
         .init(title: "課前提醒", detail: "下週課程需攜帶閱讀教材，詳見課程通知。", time: "昨天")
