@@ -1,14 +1,17 @@
 import SwiftUI
 
 struct RootTabView: View {
+    @State private var selectedTab = 0
+
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             NavigationStack {
                 HomeView()
             }
             .tabItem {
                 Label("首頁", systemImage: "house.fill")
             }
+            .tag(0)
 
             NavigationStack {
                 CoursesView()
@@ -16,6 +19,7 @@ struct RootTabView: View {
             .tabItem {
                 Label("課程", systemImage: "book.closed.fill")
             }
+            .tag(1)
 
             NavigationStack {
                 BookingView()
@@ -23,6 +27,7 @@ struct RootTabView: View {
             .tabItem {
                 Label("預約", systemImage: "calendar.badge.plus")
             }
+            .tag(2)
 
             NavigationStack {
                 AgentView()
@@ -30,6 +35,7 @@ struct RootTabView: View {
             .tabItem {
                 Label("TECM AGENT", systemImage: "bubble.left.and.bubble.right.fill")
             }
+            .tag(3)
 
             NavigationStack {
                 ParentCenterView()
@@ -37,7 +43,9 @@ struct RootTabView: View {
             .tabItem {
                 Label("家長中心", systemImage: "person.crop.circle.fill")
             }
+            .tag(4)
         }
         .tint(Theme.Colors.primary)
+        .animation(.easeInOut(duration: 0.2), value: selectedTab)
     }
 }
