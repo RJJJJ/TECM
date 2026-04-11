@@ -73,7 +73,8 @@ struct BrandHeroSection: View {
                         case .success(let image):
                             image
                                 .resizable()
-                                .scaledToFill()
+                                .scaledToFit()
+                                .padding(6)
                         default:
                             RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
                                 .fill(Theme.Colors.mistBlue.opacity(0.7))
@@ -84,7 +85,8 @@ struct BrandHeroSection: View {
                                 }
                         }
                     }
-                    .frame(width: 34, height: 34)
+                    .frame(width: 36, height: 36)
+                    .background(Theme.Colors.warmSurface, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
                     .overlay {
                         RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)

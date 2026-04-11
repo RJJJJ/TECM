@@ -21,7 +21,7 @@ struct BookingView: View {
             case .service: return "先確認本次要安排的核心服務。"
             case .schedule: return "每次只決定一件事，顧問可更快為你安排。"
             case .contact: return "僅保留必要資料，避免表單負擔。"
-            case .confirm: return "核對資訊後送出預約申請。"
+            case .confirm: return "先檢視摘要頁，再完成預約送出。"
             }
         }
     }
@@ -39,14 +39,15 @@ struct BookingView: View {
     @State private var currentStep: Step = .service
     @State private var isLoadingStep = true
     @State private var submitted = false
+    @State private var isShowingSummary = false
 
     private enum BookingPolicy {
-        static let openingSlot = 20   // 10:00
-        static let closingSlot = 40   // 20:00
-        static let defaultStartSlot = 22 // 11:00
-        static let defaultDurationSlots = 2 // 60 mins
-        static let maxDurationSlots = 4 // 120 mins
-        static let minimumDurationSlots = 1 // 30 mins
+        static let openingSlot = 20
+        static let closingSlot = 40
+        static let defaultStartSlot = 22
+        static let defaultDurationSlots = 2
+        static let maxDurationSlots = 4
+        static let minimumDurationSlots = 1
 
         static var defaultEndSlot: Int { defaultStartSlot + defaultDurationSlots }
         static var latestStartSlot: Int { closingSlot - minimumDurationSlots }
@@ -124,6 +125,19 @@ struct BookingView: View {
         .onChange(of: preferredDate) { newDate in
             preferredDate = Calendar.current.startOfDay(for: newDate)
         }
+        .navigationDestination(isPresented: $isShowingSummary) {
+            BookingSummaryView(
+                courseType: courseType,
+                childProfile: childProfile,
+                campus: campus,
+                preferredDate: preferredDate,
+                selectedTimeSlot: selectedTimeSlot,
+                parentName: parentName,
+                phone: phone,
+                note: note,
+                onConfirm: submitBooking
+            )
+        }
     }
 
     @ViewBuilder
@@ -174,12 +188,20 @@ struct BookingView: View {
                 Text("聯絡人：\(parentName)")
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textSecondary)
+                OutlineCard {
+                    Text("下一步")
+                        .font(Theme.Typography.chip)
+                        .foregroundStyle(Theme.Colors.blueGray)
+                    Text("進入預約摘要頁，確認狀態與完整聯絡資料後再提交。")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
             }
         }
     }
 
     private var primaryTitle: String {
-        currentStep == .confirm ? "確認提交" : "下一步"
+        currentStep == .confirm ? "查看摘要" : "下一步"
     }
 
     private func handlePrimaryAction() {
@@ -191,12 +213,18 @@ struct BookingView: View {
         if currentStep == .contact && (parentName.isEmpty || phone.isEmpty) { return }
 
         if currentStep == .confirm {
-            withAnimation(.easeInOut(duration: 0.28)) { submitted = true }
+            isShowingSummary = true
         } else {
             moveStep(1)
         }
     }
 
+    private func submitBooking() {
+        isShowingSummary = false
+        withAnimation(.easeInOut(duration: 0.28)) {
+            submitted = true
+        }
+    }
 
     private func restartBookingFlow() {
         withAnimation(.easeInOut(duration: 0.28)) {
@@ -212,6 +240,7 @@ struct BookingView: View {
         }
         simulateStepLoading()
     }
+
     private func moveStep(_ delta: Int) {
         let next = max(0, min(Step.allCases.count - 1, currentStep.rawValue + delta))
         currentStep = Step(rawValue: next) ?? .service
