@@ -9,8 +9,8 @@ struct BookingView: View {
 
         var title: String {
             switch self {
-            case .service: return "選擇課程或服務類型"
-            case .schedule: return "選擇時段與到訪安排"
+            case .service: return "選擇課程與孩子階段"
+            case .schedule: return "選擇日期與可預約時段"
             case .contact: return "填寫聯絡資訊"
             case .confirm: return "確認並提交"
             }
@@ -18,10 +18,10 @@ struct BookingView: View {
 
         var subtitle: String {
             switch self {
-            case .service: return "先確認本次要安排的核心服務。"
-            case .schedule: return "每次只決定一件事，顧問可更快為你安排。"
-            case .contact: return "僅保留必要資料，避免表單負擔。"
-            case .confirm: return "先檢視摘要頁，再完成預約送出。"
+            case .service: return "先確認本次要安排的課程與學習階段。"
+            case .schedule: return "結束時間將由系統自動推算，減少重複選擇。"
+            case .contact: return "僅需填寫必要資料，方便顧問與你聯繫。"
+            case .confirm: return "核對重點資訊後，再進入最終摘要提交。"
             }
         }
     }
@@ -31,8 +31,6 @@ struct BookingView: View {
     @State private var campus = "澳門半島校區"
     @State private var preferredDate = Calendar.current.startOfDay(for: Date.now.addingTimeInterval(86400 * 2))
     @State private var startSlot = BookingPolicy.defaultStartSlot
-    @State private var endSlot = BookingPolicy.defaultEndSlot
-    @State private var didCustomizeEndSlot = false
     @State private var parentName = ""
     @State private var phone = ""
     @State private var note = ""
@@ -53,10 +51,8 @@ struct BookingView: View {
         static let closingSlot = 40
         static let defaultStartSlot = 22
         static let defaultDurationSlots = 2
-        static let maxDurationSlots = 4
         static let minimumDurationSlots = 1
 
-        static var defaultEndSlot: Int { defaultStartSlot + defaultDurationSlots }
         static var latestStartSlot: Int { closingSlot - minimumDurationSlots }
     }
 
@@ -77,11 +73,8 @@ struct BookingView: View {
                 .padding(.bottom, 2)
 
             if submitted {
-                SuccessStateView(
-                    title: "我們已收到你的預約申請",
-                    message: "顧問將按你選擇的時段與校區回覆確認，感謝你選擇 TECM。"
-                )
-                .transition(.move(edge: .trailing).combined(with: .opacity))
+                bookingSuccessCard
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             } else if isLoadingStep {
                 VStack(spacing: Theme.Spacing.md) {
                     SkeletonCard()
@@ -134,13 +127,8 @@ struct BookingView: View {
             preferredDate = Calendar.current.startOfDay(for: preferredDate)
         }
         .onChange(of: startSlot) { newValue in
-            guard timeSlots.contains(newValue) else {
+            if !timeSlots.contains(newValue) {
                 startSlot = BookingPolicy.defaultStartSlot
-                return
-            }
-            if !isEndSlotValidForCurrentRules(endSlot) || !didCustomizeEndSlot {
-                endSlot = recommendedEndSlot(for: newValue)
-                didCustomizeEndSlot = false
             }
         }
         .onChange(of: preferredDate) { newDate in
@@ -152,7 +140,8 @@ struct BookingView: View {
                 childProfile: childProfile,
                 campus: campus,
                 preferredDate: preferredDate,
-                selectedTimeSlot: selectedTimeSlot,
+                startTimeSlot: formattedSlot(startSlot),
+                estimatedEndTimeSlot: formattedSlot(recommendedEndSlot(for: startSlot)),
                 parentName: parentName,
                 phone: phone,
                 note: note,
@@ -178,11 +167,11 @@ struct BookingView: View {
                 DatePicker("期望日期", selection: $preferredDate, displayedComponents: .date)
                     .font(Theme.Typography.body)
 
-                Text("到訪時間")
+                Text("可預約開始時間")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .padding(.top, 4)
-                timeRangePicker
-                Text("固定營業時段：\(formattedSlot(BookingPolicy.openingSlot)) - \(formattedSlot(BookingPolicy.closingSlot))，單次最長可預約 2 小時。")
+                startTimePicker
+                Text("固定營業時段：\(formattedSlot(BookingPolicy.openingSlot)) - \(formattedSlot(BookingPolicy.closingSlot))。預估結束時間會依課程時長自動計算。")
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
@@ -197,16 +186,24 @@ struct BookingView: View {
                     .onSubmit {
                         focusedField = .phone
                     }
+                if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    inlineValidationMessage("請填寫家長姓名。")
+                }
+
                 TextField("聯絡電話", text: $phone)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .tint(Theme.Colors.primary)
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.phonePad)
                     .focused($focusedField, equals: .phone)
+                if !phoneValidationMessage.isEmpty {
+                    inlineValidationMessage(phoneValidationMessage)
+                }
+
                 TextField("備註（選填）", text: $note, axis: .vertical)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .tint(Theme.Colors.primary)
-                    .lineLimit(2...4)
+                    .lineLimit(2 ... 4)
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedField, equals: .note)
                     .submitLabel(.done)
@@ -217,23 +214,75 @@ struct BookingView: View {
                     .font(Theme.Typography.cardTitle)
                 Text("\(courseType) ・ \(childProfile)")
                     .font(Theme.Typography.body)
-                Text(selectedTimeSlot)
+                Text("\(campus) ・ 期望日期：\(preferredDate.formatted(date: .abbreviated, time: .omitted))")
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textSecondary)
-                Text("\(campus) ・ 期望日期：\(preferredDate.formatted(date: .abbreviated, time: .omitted))")
+                Text("開始時間：\(formattedSlot(startSlot))")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                Text("預估結束：\(formattedSlot(recommendedEndSlot(for: startSlot)))")
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Text("聯絡人：\(parentName)")
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textSecondary)
+
+                if !contactValidationMessage.isEmpty {
+                    inlineValidationMessage(contactValidationMessage)
+                }
+
                 OutlineCard {
-                    Text("下一步")
+                    Text("提交前提醒")
                         .font(Theme.Typography.chip)
                         .foregroundStyle(Theme.Colors.blueGray)
-                    Text("進入預約摘要頁，確認狀態與完整聯絡資料後再提交。")
+                    Text("我們將依你提交的資料安排預約，成功提交後會顯示確認結果。")
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
+            }
+        }
+    }
+
+    private var bookingSuccessCard: some View {
+        ElevatedCard {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 30))
+                .foregroundStyle(Theme.Colors.success)
+            Text("預約已成功提交")
+                .font(Theme.Typography.cardTitle)
+            Text("我們已收到你的申請，顧問將於營業時段聯絡確認。")
+                .font(Theme.Typography.body)
+                .foregroundStyle(Theme.Colors.textSecondary)
+
+            Divider()
+
+            summaryCompactRow(title: "課程 / 服務", value: "\(courseType)（\(childProfile)）")
+            summaryCompactRow(title: "校區與日期", value: "\(campus) ・ \(preferredDate.formatted(date: .abbreviated, time: .omitted))")
+            summaryCompactRow(title: "時段", value: "\(formattedSlot(startSlot)) - \(formattedSlot(recommendedEndSlot(for: startSlot)))")
+
+            HStack(spacing: Theme.Spacing.sm) {
+                NavigationLink {
+                    ParentCenterView()
+                } label: {
+                    Text("查看家長中心")
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(Theme.Colors.primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Theme.Spacing.xs)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                                .stroke(Theme.Colors.primary.opacity(0.45), lineWidth: 0.8)
+                        }
+                }
+
+                Button("返回首頁") {
+                    currentStep = .service
+                }
+                .font(Theme.Typography.body)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Theme.Spacing.xs)
+                .background(Theme.Colors.mistBlue.opacity(0.4), in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+                .foregroundStyle(Theme.Colors.primary)
             }
         }
     }
@@ -243,7 +292,17 @@ struct BookingView: View {
     }
 
     private var isPrimaryActionDisabled: Bool {
-        !submitted && currentStep == .contact && (parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || phone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        !submitted && !validationIssues(for: currentStep).isEmpty
+    }
+
+    private var contactValidationMessage: String {
+        validationIssues(for: .contact).first ?? ""
+    }
+
+    private var phoneValidationMessage: String {
+        let cleanedPhone = phone.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedPhone.isEmpty else { return "" }
+        return isPhoneNumberValid(cleanedPhone) ? "" : "電話格式請輸入至少 8 碼數字。"
     }
 
     private func handlePrimaryAction() {
@@ -275,9 +334,7 @@ struct BookingView: View {
             parentName = ""
             phone = ""
             note = ""
-            didCustomizeEndSlot = false
             startSlot = BookingPolicy.defaultStartSlot
-            endSlot = BookingPolicy.defaultEndSlot
             preferredDate = Calendar.current.startOfDay(for: Date.now.addingTimeInterval(86400 * 2))
         }
         simulateStepLoading()
@@ -309,32 +366,13 @@ struct BookingView: View {
         }
     }
 
-    private var selectedTimeSlot: String {
-        "\(formattedSlot(startSlot)) - \(formattedSlot(endSlot))"
-    }
-
-    private var timeRangePicker: some View {
+    private var startTimePicker: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            HStack(spacing: Theme.Spacing.md) {
-                pickerColumn(title: "開始", value: $startSlot, options: timeSlots)
-                VStack {
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.blueGray)
-                }
-                pickerColumn(title: "結束", value: $endSlot, options: validEndSlots)
-            }
-            Text("已選擇 \(selectedTimeSlot)")
+            pickerColumn(title: "可預約時段", value: $startSlot, options: timeSlots)
+            Text("已選擇 \(formattedSlot(startSlot))，預估至 \(formattedSlot(recommendedEndSlot(for: startSlot)))")
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
-    }
-
-    private var validEndSlots: [Int] {
-        let minimumEnd = startSlot + BookingPolicy.minimumDurationSlots
-        let maximumEnd = min(startSlot + BookingPolicy.maxDurationSlots, BookingPolicy.closingSlot)
-        guard minimumEnd <= maximumEnd else { return [minimumEnd] }
-        return Array(minimumEnd...maximumEnd)
     }
 
     private func pickerColumn(title: String, value: Binding<Int>, options: [Int]) -> some View {
@@ -356,11 +394,6 @@ struct BookingView: View {
                     .stroke(Theme.Colors.line.opacity(0.75), lineWidth: 0.8)
             }
             .background(Theme.Colors.card, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
-            .onChange(of: value.wrappedValue) { _ in
-                if title == "結束" {
-                    didCustomizeEndSlot = true
-                }
-            }
         }
     }
 
@@ -374,8 +407,47 @@ struct BookingView: View {
         min(start + BookingPolicy.defaultDurationSlots, BookingPolicy.closingSlot)
     }
 
-    private func isEndSlotValidForCurrentRules(_ slot: Int) -> Bool {
-        slot > startSlot && validEndSlots.contains(slot) && slot <= BookingPolicy.closingSlot
+    private func validationIssues(for step: Step) -> [String] {
+        switch step {
+        case .contact, .confirm:
+            var issues: [String] = []
+            if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                issues.append("請填寫家長姓名。")
+            }
+            let cleanedPhone = phone.trimmingCharacters(in: .whitespacesAndNewlines)
+            if cleanedPhone.isEmpty {
+                issues.append("請填寫聯絡電話。")
+            } else if !isPhoneNumberValid(cleanedPhone) {
+                issues.append("聯絡電話格式有誤，請輸入至少 8 碼數字。")
+            }
+            return issues
+        default:
+            return []
+        }
+    }
+
+    private func isPhoneNumberValid(_ value: String) -> Bool {
+        value.filter(\.isNumber).count >= 8
+    }
+
+    private func inlineValidationMessage(_ message: String) -> some View {
+        Text(message)
+            .font(Theme.Typography.caption)
+            .foregroundStyle(Theme.Colors.error)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func summaryCompactRow(title: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.xs) {
+            Text(title)
+                .font(Theme.Typography.chip)
+                .foregroundStyle(Theme.Colors.blueGray)
+                .frame(width: 84, alignment: .leading)
+            Text(value)
+                .font(Theme.Typography.body)
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
