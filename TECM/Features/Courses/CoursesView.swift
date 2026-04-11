@@ -25,14 +25,20 @@ struct CoursesView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 ForEach(filteredCourses) { course in
                     CuratedCourseCard(course: course)
                         .premiumEntrance(delay: 0.02)
-                    HStack {
-                        Text("學習成果：\(course.focusTags.joined(separator: "、"))")
-                            .font(Theme.Typography.caption)
-                            .foregroundStyle(Theme.Colors.textSecondary)
+                    HStack(alignment: .center) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(course.ageGroup) · \(course.level)")
+                                .font(Theme.Typography.caption)
+                                .foregroundStyle(Theme.Colors.blueGray)
+                            Text("學習重點：\(course.focusTags.joined(separator: "、"))")
+                                .font(Theme.Typography.caption)
+                                .foregroundStyle(Theme.Colors.textSecondary)
+                                .lineLimit(1)
+                        }
                         Spacer()
                         NavigationLink("了解更多") {
                             CourseDetailView(course: course)
@@ -41,7 +47,8 @@ struct CoursesView: View {
                         .foregroundStyle(Theme.Colors.primary)
                     }
                     .padding(.horizontal, Theme.Spacing.sm)
-                    .padding(.bottom, Theme.Spacing.sm)
+                    .padding(.top, -4)
+                    .padding(.bottom, Theme.Spacing.xs)
                 }
             }
 

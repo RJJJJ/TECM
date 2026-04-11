@@ -57,7 +57,9 @@ struct BrandHeroSection: View {
 
             HStack(spacing: Theme.Spacing.sm) {
                 PrimaryCTAButton(title: primaryTitle, action: primaryAction)
+                    .frame(height: 46)
                 SecondaryCTAButton(title: secondaryTitle, action: secondaryAction)
+                    .frame(height: 46)
             }
             .padding(.top, Theme.Spacing.xs)
         }
@@ -191,7 +193,7 @@ struct ConciergeStepHeader: View {
             .frame(height: 6)
         }
         .padding(Theme.Spacing.md)
-        .background(Theme.Colors.warmSurface)
+                        .background(Theme.Colors.card)
         .overlay {
             RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                 .stroke(Theme.Colors.line.opacity(0.55), lineWidth: 0.8)
