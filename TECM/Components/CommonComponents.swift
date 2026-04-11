@@ -30,7 +30,7 @@ struct RefinedPrimaryButtonStyle: ButtonStyle {
                 LinearGradient(
                     colors: disabled
                     ? [Theme.Colors.blueGray.opacity(0.45), Theme.Colors.blueGray.opacity(0.35)]
-                    : [Theme.Colors.primary, Theme.Colors.primary.opacity(0.85)],
+                    : [Theme.Colors.primary, Theme.Colors.primary.opacity(0.88)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -110,10 +110,10 @@ struct QuietCard<Content: View>: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) { content }
             .padding(Theme.Spacing.md)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial.opacity(0.6), in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+            .background(Theme.Colors.warmSurface, in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                    .stroke(Theme.Colors.line.opacity(0.5), lineWidth: 0.8)
+                    .stroke(Theme.Colors.line.opacity(0.6), lineWidth: 0.8)
             }
     }
 }
@@ -154,7 +154,7 @@ struct BookingStatusChip: View {
         .foregroundStyle(status.color)
         .padding(.horizontal, Theme.Spacing.sm)
         .padding(.vertical, Theme.Spacing.xxs + 2)
-        .background(status.color.opacity(0.13))
+        .background(status.color.opacity(0.12))
         .overlay {
             Capsule().stroke(status.color.opacity(0.35), lineWidth: 0.7)
         }
@@ -169,10 +169,10 @@ struct StatusChip: View {
     var body: some View {
         Text(title)
             .font(Theme.Typography.chip)
-            .foregroundStyle(color)
+        .foregroundStyle(color)
             .padding(.horizontal, Theme.Spacing.sm)
             .padding(.vertical, Theme.Spacing.xxs + 2)
-            .background(color.opacity(0.12))
+        .background(color.opacity(0.12))
             .clipShape(Capsule())
     }
 }

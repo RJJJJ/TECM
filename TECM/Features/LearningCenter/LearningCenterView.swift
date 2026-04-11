@@ -2,7 +2,7 @@ import SwiftUI
 
 struct LearningCenterView: View {
     var body: some View {
-        ScreenContainer(title: "考前練習") {
+        ScreenContainer(title: "考前練習", showBackButton: true) {
             PremiumSectionHeader(
                 eyebrow: "Practice Studio",
                 title: "考前練習中心",

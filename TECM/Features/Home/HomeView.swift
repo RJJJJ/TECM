@@ -19,9 +19,9 @@ struct HomeView: View {
         ScreenContainer {
             BrandHeroSection(
                 title: "TECM 澳門編程教育中心",
-                subtitle: "聚焦 Python、Scratch、C++ 的系統化學習路線，結合評估、課堂與考前練習，讓家長清楚看見孩子的下一步。",
-                primaryTitle: "預約體驗",
-                secondaryTitle: "瀏覽課程",
+                subtitle: "聚焦 Python、Scratch、C++ 的系統化學習路線，結合顧問評估與課堂規劃，讓家長清楚看見孩子的下一步。",
+                primaryTitle: "預約評估",
+                secondaryTitle: "課程總覽",
                 primaryAction: { goBooking = true },
                 secondaryAction: { goCourses = true }
             )
@@ -56,11 +56,8 @@ struct HomeView: View {
             proofSection
                 .premiumEntrance(delay: 0.06)
 
-            practiceEntrySection
-                .premiumEntrance(delay: 0.09)
-
             curatedShortcutSection
-                .premiumEntrance(delay: 0.12)
+                .premiumEntrance(delay: 0.09)
         }
     }
 
@@ -111,16 +108,6 @@ struct HomeView: View {
         }
     }
 
-    private var practiceEntrySection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            PremiumSectionHeader(eyebrow: "Learning Tools", title: "考前練習入口", subtitle: "用短題練習快速檢查觀念，維持考前節奏")
-            NavigationLink(destination: LearningCenterView()) {
-                QuickActionTile(title: "進入考前練習中心", subtitle: "先選科目，再選等級與試卷開始練習", icon: "checklist")
-            }
-            .buttonStyle(PressableScaleStyle())
-        }
-    }
-
     private var curatedShortcutSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             PremiumSectionHeader(eyebrow: "Quick Access", title: "精選入口", subtitle: "保留必要入口，不讓首頁變成功能牆")
@@ -131,6 +118,11 @@ struct HomeView: View {
 
             NavigationLink(destination: BookingView()) {
                 QuickActionTile(title: "預約體驗", subtitle: "以 3-4 步驟完成顧問式預約", icon: "calendar.badge.plus")
+            }
+            .buttonStyle(PressableScaleStyle())
+
+            NavigationLink(destination: LearningCenterView()) {
+                QuickActionTile(title: "考前練習中心", subtitle: "先選科目，再選等級與試卷開始練習", icon: "checklist")
             }
             .buttonStyle(PressableScaleStyle())
 

@@ -44,7 +44,7 @@ struct BrandHeroSection: View {
             Text("TECM EDUCATION")
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .tracking(0.7)
-                .foregroundStyle(Theme.Colors.blueGray)
+                .foregroundStyle(Theme.Colors.brandOrange)
 
             Text(title)
                 .font(Theme.Typography.heroTitle)
@@ -184,7 +184,7 @@ struct ConciergeStepHeader: View {
                 .foregroundStyle(Theme.Colors.textSecondary)
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4).fill(Theme.Colors.line.opacity(0.4))
+            RoundedRectangle(cornerRadius: 4).fill(Theme.Colors.line.opacity(0.45))
                     RoundedRectangle(cornerRadius: 4).fill(Theme.Colors.primary.opacity(0.85)).frame(width: proxy.size.width * CGFloat(currentStep) / CGFloat(totalSteps))
                 }
             }

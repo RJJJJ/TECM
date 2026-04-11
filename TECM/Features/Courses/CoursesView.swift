@@ -12,11 +12,6 @@ struct CoursesView: View {
         ScreenContainer(title: "課程") {
             PremiumSectionHeader(eyebrow: "Curated Catalog", title: "為不同階段設計的學習路線", subtitle: "先了解課程定位，再安排體驗與銜接方向")
 
-            NavigationLink(destination: LearningCenterView()) {
-                QuickActionTile(title: "考前練習中心", subtitle: "Python / Scratch / C++ 試卷練習入口", icon: "checklist")
-            }
-            .buttonStyle(PressableScaleStyle())
-
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Theme.Spacing.xs) {
                     ForEach(levels, id: \.self) { level in
@@ -49,6 +44,11 @@ struct CoursesView: View {
                     .padding(.bottom, Theme.Spacing.sm)
                 }
             }
+
+            Text("其他學習工具可於首頁精選入口進入。")
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .padding(.horizontal, Theme.Spacing.sm)
         }
     }
 }

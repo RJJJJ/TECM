@@ -2,18 +2,23 @@ import SwiftUI
 
 enum Theme {
     enum Colors {
-        static let background = Color(hex: "#F3F6FB")
-        static let warmSurface = Color(hex: "#F7FAFF")
-        static let card = Color(hex: "#FFFFFF")
-        static let primary = Color(hex: "#1F4B7A")
-        static let mistBlue = Color(hex: "#E7F0FA")
-        static let blueGray = Color(hex: "#5F7691")
-        static let textPrimary = Color(hex: "#18293D")
-        static let textSecondary = Color(hex: "#556B83")
-        static let line = Color(hex: "#CFDAE8")
-        static let accent = Color(hex: "#2F6FAE")
+        static let backgroundTop = Color(hex: "#E6E6FA")
+        static let backgroundBottom = Color(hex: "#FADADD")
+        static let background = Color(hex: "#EFF1FC")
+        static let warmSurface = Color(hex: "#FFFFFFCC")
+        static let card = Color(hex: "#FFFFFFF2")
+        static let primary = Color(hex: "#4E81EE")
+        static let mistBlue = Color(hex: "#EEF2FF")
+        static let blueGray = Color(hex: "#6B7280")
+        static let textPrimary = Color(hex: "#333333")
+        static let textSecondary = Color(hex: "#666666")
+        static let line = Color(hex: "#D9DEEA")
+        static let accent = Color(hex: "#7E22CE")
+        static let brandOrange = Color(hex: "#F58220")
+        static let badgeLavender = Color(hex: "#F3E8FF")
         static let success = Color(hex: "#2E7D63")
         static let warning = Color(hex: "#A97934")
+        static let loading = Color(hex: "#94A3B8")
     }
 
     enum Spacing {
@@ -34,7 +39,7 @@ enum Theme {
     }
 
     enum Shadow {
-        static let subtle = Color.black.opacity(0.05)
+        static let subtle = Color.black.opacity(0.07)
     }
 
     enum Icon {
