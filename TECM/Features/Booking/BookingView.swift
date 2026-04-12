@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct BookingView: View {
+    @EnvironmentObject private var tabRouter: TabRouter
+
     private enum Step: Int, CaseIterable {
         case service
         case schedule
@@ -38,6 +40,9 @@ struct BookingView: View {
     @State private var isLoadingStep = true
     @State private var submitted = false
     @State private var isShowingSummary = false
+    @State private var hasAttemptedContactNext = false
+    @State private var hasEditedParentName = false
+    @State private var hasEditedPhone = false
     @FocusState private var focusedField: BookingField?
 
     private enum BookingField: Hashable {
@@ -183,10 +188,13 @@ struct BookingView: View {
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedField, equals: .parentName)
                     .submitLabel(.next)
+                    .onChange(of: parentName) { _ in
+                        hasEditedParentName = true
+                    }
                     .onSubmit {
                         focusedField = .phone
                     }
-                if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if shouldShowParentNameValidation {
                     inlineValidationMessage("請填寫家長姓名。")
                 }
 
@@ -196,8 +204,11 @@ struct BookingView: View {
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.phonePad)
                     .focused($focusedField, equals: .phone)
-                if !phoneValidationMessage.isEmpty {
-                    inlineValidationMessage(phoneValidationMessage)
+                    .onChange(of: phone) { _ in
+                        hasEditedPhone = true
+                    }
+                if !phoneInlineValidationMessage.isEmpty {
+                    inlineValidationMessage(phoneInlineValidationMessage)
                 }
 
                 TextField("備註（選填）", text: $note, axis: .vertical)
@@ -261,8 +272,8 @@ struct BookingView: View {
             summaryCompactRow(title: "時段", value: "\(formattedSlot(startSlot)) - \(formattedSlot(recommendedEndSlot(for: startSlot)))")
 
             HStack(spacing: Theme.Spacing.sm) {
-                NavigationLink {
-                    ParentCenterView()
+                Button {
+                    tabRouter.select(.parentCenter)
                 } label: {
                     Text("查看家長中心")
                         .font(Theme.Typography.body)
@@ -292,16 +303,24 @@ struct BookingView: View {
     }
 
     private var isPrimaryActionDisabled: Bool {
-        !submitted && !validationIssues(for: currentStep).isEmpty
+        if submitted { return false }
+        if currentStep == .contact { return false }
+        return !validationIssues(for: currentStep).isEmpty
     }
 
     private var contactValidationMessage: String {
         validationIssues(for: .contact).first ?? ""
     }
 
-    private var phoneValidationMessage: String {
+    private var shouldShowParentNameValidation: Bool {
+        let isInvalid = parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return isInvalid && (hasAttemptedContactNext || hasEditedParentName)
+    }
+
+    private var phoneInlineValidationMessage: String {
+        guard hasAttemptedContactNext || hasEditedPhone else { return "" }
         let cleanedPhone = phone.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanedPhone.isEmpty else { return "" }
+        guard !cleanedPhone.isEmpty else { return "請填寫聯絡電話。" }
         return isPhoneNumberValid(cleanedPhone) ? "" : "電話格式請輸入至少 8 碼數字。"
     }
 
@@ -311,7 +330,14 @@ struct BookingView: View {
             return
         }
 
-        if isPrimaryActionDisabled { return }
+        if currentStep == .contact {
+            hasAttemptedContactNext = true
+            if !validationIssues(for: .contact).isEmpty {
+                return
+            }
+        } else if isPrimaryActionDisabled {
+            return
+        }
 
         if currentStep == .confirm {
             isShowingSummary = true
@@ -334,6 +360,9 @@ struct BookingView: View {
             parentName = ""
             phone = ""
             note = ""
+            hasAttemptedContactNext = false
+            hasEditedParentName = false
+            hasEditedPhone = false
             startSlot = BookingPolicy.defaultStartSlot
             preferredDate = Calendar.current.startOfDay(for: Date.now.addingTimeInterval(86400 * 2))
         }
@@ -453,4 +482,5 @@ struct BookingView: View {
 
 #Preview {
     NavigationStack { BookingView() }
+        .environmentObject(TabRouter())
 }
