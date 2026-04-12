@@ -4,7 +4,7 @@ struct BookingSummaryView: View {
     @Environment(\.dismiss) private var dismiss
     let courseType: String
     let school: String
-    let childProfile: String
+    let childAge: String
     let campus: String
     let preferredDate: Date
     let startTimeSlot: String
@@ -51,7 +51,7 @@ struct BookingSummaryView: View {
                 groupedHeader("預約資訊")
                 summaryRow(title: "課程 / 服務", value: courseType)
                 summaryRow(title: "孩子就讀學校", value: fallbackValue(trimmedSchool))
-                summaryRow(title: "孩子階段", value: childProfile)
+                summaryRow(title: "孩子年齡", value: childAge)
                 summaryRow(title: "校區 / 地點", value: campus)
                 summaryRow(title: "日期", value: preferredDate.formatted(date: .complete, time: .omitted))
                 summaryRow(title: "開始時間", value: startTimeSlot)
@@ -71,7 +71,7 @@ struct BookingSummaryView: View {
                         .font(Theme.Typography.cardTitle)
                     Text("請先補齊：\(missingFields.joined(separator: "、"))，再提交預約。")
                         .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.error)
+                        .foregroundStyle(Color.red)
                 }
             }
 
@@ -120,7 +120,7 @@ struct BookingSummaryView: View {
         BookingSummaryView(
             courseType: "小學數理思維",
             school: "培正中學附屬小學",
-            childProfile: "6-8歲",
+            childAge: "6歲",
             campus: "澳門半島校區",
             preferredDate: .now,
             startTimeSlot: "11:00",

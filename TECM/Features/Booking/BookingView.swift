@@ -12,7 +12,7 @@ struct BookingView: View {
 
         var title: String {
             switch self {
-            case .service: return "選擇課程、學校與孩子階段"
+            case .service: return "選擇課程、學校與孩子年齡"
             case .schedule: return "選擇日期與可預約時段"
             case .contact: return "填寫聯絡資訊"
             case .confirm: return "確認並提交"
@@ -21,7 +21,7 @@ struct BookingView: View {
 
         var subtitle: String {
             switch self {
-            case .service: return "先確認本次課程方向、就讀學校與孩子階段。"
+            case .service: return "先確認本次課程方向、就讀學校與孩子年齡。"
             case .schedule: return "結束時間將由系統自動推算，減少重複選擇。"
             case .contact: return "僅需填寫必要資料，方便顧問與你聯繫。"
             case .confirm: return "核對重點資訊後，再進入最終摘要提交。"
@@ -31,7 +31,7 @@ struct BookingView: View {
 
     @State private var courseType: String
     @State private var school = ""
-    @State private var childProfile = "6-8歲"
+    @State private var childAge = "6歲"
     @State private var campus = "澳門半島校區"
     @State private var preferredDate = Calendar.current.startOfDay(for: Date.now.addingTimeInterval(86400 * 2))
     @State private var startSlot = BookingPolicy.defaultStartSlot
@@ -45,6 +45,7 @@ struct BookingView: View {
     @State private var hasAttemptedContactNext = false
     @State private var hasEditedParentName = false
     @State private var hasEditedPhone = false
+    @State private var hasInteractedWithSlotScroll = false
     @FocusState private var focusedField: BookingField?
 
     private enum BookingField: Hashable {
@@ -64,7 +65,7 @@ struct BookingView: View {
     }
 
     private let courses = ["幼兒雙語啟蒙", "小學數理思維", "公開演說與表達", "學術閱讀工作坊"]
-    private let profiles = ["3-5歲", "6-8歲", "9-12歲"]
+    private let childAgeOptions = (3...17).map { "\($0)歲" } + ["18歲以上"]
     private let schools = [
         "培正中學附屬小學",
         "教業中學附屬小學",
@@ -166,7 +167,7 @@ struct BookingView: View {
             BookingSummaryView(
                 courseType: courseType,
                 school: school,
-                childProfile: childProfile,
+                childAge: childAge,
                 campus: campus,
                 preferredDate: preferredDate,
                 startTimeSlot: formattedSlot(startSlot),
@@ -189,7 +190,7 @@ struct BookingView: View {
             ElevatedCard {
                 selectRow(title: "課程或服務", selection: $courseType, options: courses)
                 selectRow(title: "孩子就讀學校", selection: $school, options: schools, placeholder: "請選擇學校")
-                visibleSelector(title: "孩子階段", selection: $childProfile, options: profiles)
+                visibleSelector(title: "孩子年齡", selection: $childAge, options: childAgeOptions)
             }
         case .schedule:
             ElevatedCard {
@@ -249,7 +250,7 @@ struct BookingView: View {
             ElevatedCard {
                 Text("預約摘要")
                     .font(Theme.Typography.cardTitle)
-                Text("\(courseType) ・ \(childProfile)")
+                Text("\(courseType) ・ \(childAge)")
                     .font(Theme.Typography.body)
                 Text("就讀學校：\(school)")
                     .font(Theme.Typography.caption)
@@ -296,7 +297,7 @@ struct BookingView: View {
 
             Divider()
 
-            summaryCompactRow(title: "課程 / 服務", value: "\(courseType)（\(childProfile)）")
+            summaryCompactRow(title: "課程 / 服務", value: "\(courseType)（\(childAge)）")
             summaryCompactRow(title: "就讀學校", value: school)
             summaryCompactRow(title: "校區與日期", value: "\(campus) ・ \(preferredDate.formatted(date: .abbreviated, time: .omitted))")
             summaryCompactRow(title: "時段", value: "\(formattedSlot(startSlot)) - \(formattedSlot(recommendedEndSlot(for: startSlot)))")
@@ -478,14 +479,38 @@ struct BookingView: View {
                 .font(Theme.Typography.chip)
                 .foregroundStyle(Theme.Colors.blueGray)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Theme.Spacing.xs) {
-                    ForEach(timeSlots, id: \.self) { slot in
-                        slotButton(slot)
+            ZStack(alignment: .trailing) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        ForEach(timeSlots, id: \.self) { slot in
+                            slotButton(slot)
+                        }
                     }
+                    .padding(.vertical, 2)
                 }
-                .padding(.vertical, 2)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { value in
+                            if abs(value.translation.width) > 12 {
+                                hasInteractedWithSlotScroll = true
+                            }
+                        }
+                )
+
+                LinearGradient(
+                    colors: [Theme.Colors.background.opacity(0), Theme.Colors.background.opacity(0.9)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: 28)
+                .allowsHitTesting(false)
+                .opacity(hasInteractedWithSlotScroll ? 0.2 : 0.9)
             }
+
+            Text("左右滑動可查看更多時段")
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .opacity(hasInteractedWithSlotScroll ? 0.55 : 1)
 
             Text("已選擇 \(formattedSlot(startSlot))，預估至 \(formattedSlot(recommendedEndSlot(for: startSlot)))")
                 .font(Theme.Typography.caption)
@@ -652,7 +677,7 @@ struct BookingView: View {
     private func inlineValidationMessage(_ message: String) -> some View {
         Text(message)
             .font(Theme.Typography.caption)
-            .foregroundStyle(Theme.Colors.error)
+            .foregroundStyle(Color.red)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
