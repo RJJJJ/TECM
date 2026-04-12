@@ -3,6 +3,7 @@ import SwiftUI
 struct BookingSummaryView: View {
     @Environment(\.dismiss) private var dismiss
     let courseType: String
+    let school: String
     let childProfile: String
     let campus: String
     let preferredDate: Date
@@ -14,11 +15,13 @@ struct BookingSummaryView: View {
     let onConfirm: () -> Void
 
     private var trimmedParentName: String { parentName.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var trimmedSchool: String { school.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var trimmedPhone: String { phone.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var trimmedNote: String { note.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private var missingFields: [String] {
         var fields: [String] = []
+        if trimmedSchool.isEmpty { fields.append("孩子就讀學校") }
         if trimmedParentName.isEmpty { fields.append("家長姓名") }
         if trimmedPhone.isEmpty { fields.append("聯絡電話") }
         return fields
@@ -47,6 +50,7 @@ struct BookingSummaryView: View {
 
                 groupedHeader("預約資訊")
                 summaryRow(title: "課程 / 服務", value: courseType)
+                summaryRow(title: "孩子就讀學校", value: fallbackValue(trimmedSchool))
                 summaryRow(title: "孩子階段", value: childProfile)
                 summaryRow(title: "校區 / 地點", value: campus)
                 summaryRow(title: "日期", value: preferredDate.formatted(date: .complete, time: .omitted))
@@ -115,6 +119,7 @@ struct BookingSummaryView: View {
     NavigationStack {
         BookingSummaryView(
             courseType: "小學數理思維",
+            school: "培正中學附屬小學",
             childProfile: "6-8歲",
             campus: "澳門半島校區",
             preferredDate: .now,

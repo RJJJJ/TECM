@@ -2,6 +2,7 @@ import SwiftUI
 
 struct BookingView: View {
     @EnvironmentObject private var tabRouter: TabRouter
+    @Environment(\.calendar) private var calendar
 
     private enum Step: Int, CaseIterable {
         case service
@@ -11,7 +12,7 @@ struct BookingView: View {
 
         var title: String {
             switch self {
-            case .service: return "選擇課程與孩子階段"
+            case .service: return "選擇課程、學校與孩子階段"
             case .schedule: return "選擇日期與可預約時段"
             case .contact: return "填寫聯絡資訊"
             case .confirm: return "確認並提交"
@@ -20,7 +21,7 @@ struct BookingView: View {
 
         var subtitle: String {
             switch self {
-            case .service: return "先確認本次要安排的課程與學習階段。"
+            case .service: return "先確認本次課程方向、就讀學校與孩子階段。"
             case .schedule: return "結束時間將由系統自動推算，減少重複選擇。"
             case .contact: return "僅需填寫必要資料，方便顧問與你聯繫。"
             case .confirm: return "核對重點資訊後，再進入最終摘要提交。"
@@ -29,6 +30,7 @@ struct BookingView: View {
     }
 
     @State private var courseType: String
+    @State private var school = ""
     @State private var childProfile = "6-8歲"
     @State private var campus = "澳門半島校區"
     @State private var preferredDate = Calendar.current.startOfDay(for: Date.now.addingTimeInterval(86400 * 2))
@@ -63,8 +65,24 @@ struct BookingView: View {
 
     private let courses = ["幼兒雙語啟蒙", "小學數理思維", "公開演說與表達", "學術閱讀工作坊"]
     private let profiles = ["3-5歲", "6-8歲", "9-12歲"]
+    private let schools = [
+        "培正中學附屬小學",
+        "教業中學附屬小學",
+        "聖若瑟教區中學（第五校）",
+        "嘉諾撒聖心英文中學附屬小學",
+        "鏡平學校（小學部）",
+        "聖羅撒英文中學（小學部）",
+        "中葡職業技術學校（基礎課程）",
+        "澳門坊眾學校（小學部）"
+    ]
     private let campuses = ["澳門半島校區", "氹仔校區", "路氹城校區"]
     private var timeSlots: [Int] { Array(BookingPolicy.openingSlot...BookingPolicy.latestStartSlot) }
+    private let mockBookedSlotLookup: [String: Set<Int>] = [
+        "澳門半島校區|2026-04-14": [22, 27, 33],
+        "澳門半島校區|2026-04-15": [24, 25],
+        "氹仔校區|2026-04-14": [26, 31],
+        "路氹城校區|2026-04-14": [22, 23, 24]
+    ]
     private let isSubPage: Bool
 
     init(prefilledCourse: String? = nil) {
@@ -135,13 +153,19 @@ struct BookingView: View {
             if !timeSlots.contains(newValue) {
                 startSlot = BookingPolicy.defaultStartSlot
             }
+            ensureSelectedSlotIsAvailable()
         }
         .onChange(of: preferredDate) { newDate in
             preferredDate = Calendar.current.startOfDay(for: newDate)
+            ensureSelectedSlotIsAvailable()
+        }
+        .onChange(of: campus) { _ in
+            ensureSelectedSlotIsAvailable()
         }
         .navigationDestination(isPresented: $isShowingSummary) {
             BookingSummaryView(
                 courseType: courseType,
+                school: school,
                 childProfile: childProfile,
                 campus: campus,
                 preferredDate: preferredDate,
@@ -164,7 +188,8 @@ struct BookingView: View {
         case .service:
             ElevatedCard {
                 selectRow(title: "課程或服務", selection: $courseType, options: courses)
-                selectRow(title: "孩子階段", selection: $childProfile, options: profiles)
+                selectRow(title: "孩子就讀學校", selection: $school, options: schools, placeholder: "請選擇學校")
+                visibleSelector(title: "孩子階段", selection: $childProfile, options: profiles)
             }
         case .schedule:
             ElevatedCard {
@@ -176,6 +201,7 @@ struct BookingView: View {
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .padding(.top, 4)
                 startTimePicker
+                slotStatusLegend
                 Text("固定營業時段：\(formattedSlot(BookingPolicy.openingSlot)) - \(formattedSlot(BookingPolicy.closingSlot))。預估結束時間會依課程時長自動計算。")
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textSecondary)
@@ -225,6 +251,9 @@ struct BookingView: View {
                     .font(Theme.Typography.cardTitle)
                 Text("\(courseType) ・ \(childProfile)")
                     .font(Theme.Typography.body)
+                Text("就讀學校：\(school)")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textSecondary)
                 Text("\(campus) ・ 期望日期：\(preferredDate.formatted(date: .abbreviated, time: .omitted))")
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textSecondary)
@@ -268,6 +297,7 @@ struct BookingView: View {
             Divider()
 
             summaryCompactRow(title: "課程 / 服務", value: "\(courseType)（\(childProfile)）")
+            summaryCompactRow(title: "就讀學校", value: school)
             summaryCompactRow(title: "校區與日期", value: "\(campus) ・ \(preferredDate.formatted(date: .abbreviated, time: .omitted))")
             summaryCompactRow(title: "時段", value: "\(formattedSlot(startSlot)) - \(formattedSlot(recommendedEndSlot(for: startSlot)))")
 
@@ -364,6 +394,7 @@ struct BookingView: View {
             hasEditedParentName = false
             hasEditedPhone = false
             startSlot = BookingPolicy.defaultStartSlot
+            school = ""
             preferredDate = Calendar.current.startOfDay(for: Date.now.addingTimeInterval(86400 * 2))
         }
         simulateStepLoading()
@@ -395,34 +426,179 @@ struct BookingView: View {
         }
     }
 
+    private func selectRow(title: String, selection: Binding<String>, options: [String], placeholder: String) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+            Picker(title, selection: selection) {
+                Text(placeholder).tag("")
+                ForEach(options, id: \.self) { item in
+                    Text(item).tag(item)
+                }
+            }
+            .pickerStyle(.menu)
+        }
+    }
+
+    private func visibleSelector(title: String, selection: Binding<String>, options: [String]) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.Spacing.xs) {
+                    ForEach(options, id: \.self) { option in
+                        let isSelected = selection.wrappedValue == option
+                        Button {
+                            selection.wrappedValue = option
+                        } label: {
+                            Text(option)
+                                .font(Theme.Typography.body)
+                                .foregroundStyle(isSelected ? Theme.Colors.primary : Theme.Colors.textPrimary)
+                                .padding(.vertical, Theme.Spacing.xs)
+                                .padding(.horizontal, Theme.Spacing.sm)
+                                .background(
+                                    RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                                        .fill(isSelected ? Theme.Colors.mistBlue.opacity(0.45) : Theme.Colors.card)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                                        .stroke(isSelected ? Theme.Colors.primary.opacity(0.7) : Theme.Colors.line.opacity(0.75), lineWidth: isSelected ? 1.2 : 0.8)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
     private var startTimePicker: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            pickerColumn(title: "可預約時段", value: $startSlot, options: timeSlots)
+            Text("可預約時段")
+                .font(Theme.Typography.chip)
+                .foregroundStyle(Theme.Colors.blueGray)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.Spacing.xs) {
+                    ForEach(timeSlots, id: \.self) { slot in
+                        slotButton(slot)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
             Text("已選擇 \(formattedSlot(startSlot))，預估至 \(formattedSlot(recommendedEndSlot(for: startSlot)))")
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
     }
 
-    private func pickerColumn(title: String, value: Binding<Int>, options: [Int]) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text(title)
-                .font(Theme.Typography.chip)
-                .foregroundStyle(Theme.Colors.blueGray)
-            Picker(title, selection: value) {
-                ForEach(options, id: \.self) { slot in
-                    Text(formattedSlot(slot)).tag(slot)
+    private func slotButton(_ slot: Int) -> some View {
+        let status = slotStatus(for: slot)
+        return Button {
+            guard status != .booked else { return }
+            startSlot = slot
+        } label: {
+            VStack(spacing: 2) {
+                Text(formattedSlot(slot))
+                    .font(Theme.Typography.body)
+                if status == .booked {
+                    Text("已滿")
+                        .font(.system(size: 11, weight: .semibold))
                 }
             }
-            .pickerStyle(.wheel)
-            .frame(maxWidth: .infinity)
-            .frame(height: 120)
-            .clipped()
+            .foregroundStyle(slotTextColor(for: status))
+            .padding(.vertical, Theme.Spacing.xs)
+            .padding(.horizontal, Theme.Spacing.sm)
+            .background(slotBackground(for: status), in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
-                    .stroke(Theme.Colors.line.opacity(0.75), lineWidth: 0.8)
+                    .stroke(slotBorder(for: status), lineWidth: status == .selected ? 1.2 : 0.8)
             }
-            .background(Theme.Colors.card, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(status == .booked)
+        .accessibilityLabel("\(formattedSlot(slot)) \(status == .booked ? "已滿" : status == .selected ? "已選擇" : "可預約")")
+    }
+
+    private var slotStatusLegend: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            legendItem(title: "可預約", color: Theme.Colors.card)
+            legendItem(title: "已滿", color: Theme.Colors.line.opacity(0.5))
+            legendItem(title: "已選中", color: Theme.Colors.mistBlue.opacity(0.45))
+        }
+        .font(Theme.Typography.caption)
+    }
+
+    private func legendItem(title: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(color)
+                .frame(width: 12, height: 12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(Theme.Colors.line.opacity(0.7), lineWidth: 0.8)
+                )
+            Text(title)
+                .foregroundStyle(Theme.Colors.textSecondary)
+        }
+    }
+
+    private enum SlotStatus {
+        case available
+        case booked
+        case selected
+    }
+
+    private func slotStatus(for slot: Int) -> SlotStatus {
+        if bookedSlotsForSelection.contains(slot) { return .booked }
+        if startSlot == slot { return .selected }
+        return .available
+    }
+
+    private var bookedSlotsForSelection: Set<Int> {
+        let key = "\(campus)|\(dateKey(preferredDate))"
+        return mockBookedSlotLookup[key] ?? []
+    }
+
+    private func dateKey(_ date: Date) -> String {
+        let year = calendar.component(.year, from: date)
+        let month = calendar.component(.month, from: date)
+        let day = calendar.component(.day, from: date)
+        return String(format: "%04d-%02d-%02d", year, month, day)
+    }
+
+    private var firstAvailableSlot: Int? {
+        timeSlots.first(where: { !bookedSlotsForSelection.contains($0) })
+    }
+
+    private func ensureSelectedSlotIsAvailable() {
+        if bookedSlotsForSelection.contains(startSlot), let fallbackSlot = firstAvailableSlot {
+            startSlot = fallbackSlot
+        }
+    }
+
+    private func slotTextColor(for status: SlotStatus) -> Color {
+        switch status {
+        case .available: return Theme.Colors.textPrimary
+        case .booked: return Theme.Colors.textSecondary
+        case .selected: return Theme.Colors.primary
+        }
+    }
+
+    private func slotBackground(for status: SlotStatus) -> Color {
+        switch status {
+        case .available: return Theme.Colors.card
+        case .booked: return Theme.Colors.line.opacity(0.28)
+        case .selected: return Theme.Colors.mistBlue.opacity(0.45)
+        }
+    }
+
+    private func slotBorder(for status: SlotStatus) -> Color {
+        switch status {
+        case .available: return Theme.Colors.line.opacity(0.75)
+        case .booked: return Theme.Colors.line.opacity(0.55)
+        case .selected: return Theme.Colors.primary.opacity(0.75)
         }
     }
 
@@ -438,6 +614,20 @@ struct BookingView: View {
 
     private func validationIssues(for step: Step) -> [String] {
         switch step {
+        case .service:
+            var issues: [String] = []
+            if school.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                issues.append("請選擇孩子就讀學校。")
+            }
+            return issues
+        case .schedule:
+            if bookedSlotsForSelection.contains(startSlot) {
+                return ["所選時段已被預約，請改選其他時段。"]
+            }
+            if firstAvailableSlot == nil {
+                return ["該日期目前沒有可預約時段，請更改日期或校區。"]
+            }
+            return []
         case .contact, .confirm:
             var issues: [String] = []
             if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
