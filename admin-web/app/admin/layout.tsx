@@ -24,7 +24,7 @@ export default async function AdminLayout({
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Admin Console</p>
             <h1 className="text-lg font-semibold text-slate-900">TECM Admin Web</h1>
-            <p className="text-sm text-slate-600">Bookings, Courses and News management operations</p>
+            <p className="text-sm text-slate-600">Bookings, Courses, FAQ and News management operations</p>
           </div>
           <div className="flex items-center gap-2">
             <nav className="flex items-center gap-2" aria-label="Admin sections">
@@ -39,6 +39,12 @@ export default async function AdminLayout({
                 className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
               >
                 Courses
+              </Link>
+              <Link
+                href="/admin/faq"
+                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              >
+                FAQ
               </Link>
               <Link
                 href="/admin/news"
