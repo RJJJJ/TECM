@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { verifyActiveStaffAccess } from '@/lib/auth/staff-access';
 
 export type UpdateFormState = {
   status: 'idle' | 'success' | 'error';
@@ -30,6 +31,15 @@ export async function updateBookingAction(
   }
 
   const supabase = createServerSupabaseClient();
+  const access = await verifyActiveStaffAccess(supabase);
+
+  if (!access.allowed) {
+    await supabase.auth.signOut();
+    return {
+      status: 'error',
+      message: '你沒有權限更新 booking。'
+    };
+  }
 
   const { data, error } = await supabase
     .from('bookings')
