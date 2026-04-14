@@ -4,6 +4,8 @@ struct BookingView: View {
     @EnvironmentObject private var tabRouter: TabRouter
     @Environment(\.calendar) private var calendar
     @StateObject private var viewModel = BookingViewModel()
+    @StateObject private var submitViewModel = BookingSubmitViewModel()
+    @EnvironmentObject private var authViewModel: AuthViewModel
 
     private enum Step: Int, CaseIterable {
         case service
@@ -132,7 +134,7 @@ struct BookingView: View {
 
                 PrimaryCTAButton(
                     title: submitted ? "再次預約" : primaryTitle,
-                    isDisabled: isPrimaryActionDisabled
+                    isDisabled: isPrimaryActionDisabled || submitViewModel.isSubmitting
                 ) {
                     handlePrimaryAction()
                 }
@@ -161,8 +163,22 @@ struct BookingView: View {
         }
         .task {
             await viewModel.loadCampuses()
+            await submitViewModel.prepare(userID: authViewModel.currentUser?.id)
             if !availableCampuses.contains(campus), let first = availableCampuses.first {
                 campus = first
+            }
+            if let profile = submitViewModel.profile {
+                if parentName.isEmpty { parentName = profile.fullName }
+                if phone.isEmpty { phone = profile.phone ?? "" }
+            }
+        }
+        .onChange(of: authViewModel.currentUser?.id) { userID in
+            Task {
+                await submitViewModel.prepare(userID: userID)
+                if let profile = submitViewModel.profile {
+                    if !hasEditedParentName { parentName = profile.fullName }
+                    if !hasEditedPhone { phone = profile.phone ?? "" }
+                }
             }
         }
         .onChange(of: startSlot) { newValue in
@@ -263,6 +279,10 @@ struct BookingView: View {
                     inlineValidationMessage(phoneInlineValidationMessage)
                 }
 
+                if let prepareErrorMessage = submitViewModel.prepareErrorMessage {
+                    inlineValidationMessage("帳號資料載入失敗：\(prepareErrorMessage)")
+                }
+
                 TextField("備註（選填）", text: $note, axis: .vertical)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .tint(Theme.Colors.primary)
@@ -297,6 +317,14 @@ struct BookingView: View {
                     inlineValidationMessage(contactValidationMessage)
                 }
 
+                if !authRequiredMessage.isEmpty {
+                    inlineValidationMessage(authRequiredMessage)
+                }
+
+                if let submitErrorMessage = submitViewModel.submitErrorMessage {
+                    inlineValidationMessage("提交失敗：\(submitErrorMessage)")
+                }
+
                 OutlineCard {
                     Text("提交前提醒")
                         .font(Theme.Typography.chip)
@@ -327,6 +355,10 @@ struct BookingView: View {
             summaryCompactRow(title: "校區與日期", value: "\(campus) ・ \(preferredDate.formatted(date: .abbreviated, time: .omitted))")
             summaryCompactRow(title: "時段", value: "\(formattedSlot(startSlot)) - \(formattedSlot(recommendedEndSlot(for: startSlot)))")
 
+            if let inserted = submitViewModel.submittedBooking {
+                summaryCompactRow(title: "預約編號", value: inserted.id.uuidString.prefix(8).uppercased())
+            }
+
             HStack(spacing: Theme.Spacing.sm) {
                 Button {
                     tabRouter.select(.parentCenter)
@@ -352,6 +384,13 @@ struct BookingView: View {
                 .foregroundStyle(Theme.Colors.primary)
             }
         }
+    }
+
+    private var authRequiredMessage: String {
+        if currentStep == .confirm && submitViewModel.profile == nil {
+            return "請先在家長中心登入，才可提交預約。"
+        }
+        return ""
     }
 
     private var primaryTitle: String {
@@ -403,9 +442,26 @@ struct BookingView: View {
     }
 
     private func submitBooking() {
-        isShowingSummary = false
-        withAnimation(.easeInOut(duration: 0.28)) {
-            submitted = true
+        Task {
+            let formInput = BookingFormInput(
+                courseName: courseType,
+                childAgeLabel: childAge,
+                schoolName: school,
+                campusName: campus,
+                preferredDate: preferredDate,
+                startSlot: startSlot,
+                endSlot: recommendedEndSlot(for: startSlot),
+                parentName: parentName.trimmingCharacters(in: .whitespacesAndNewlines),
+                phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
+                note: note.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            let succeeded = await submitViewModel.submit(formInput: formInput)
+            if succeeded {
+                isShowingSummary = false
+                withAnimation(.easeInOut(duration: 0.28)) {
+                    submitted = true
+                }
+            }
         }
     }
 
@@ -416,6 +472,7 @@ struct BookingView: View {
             parentName = ""
             phone = ""
             note = ""
+            submitViewModel.resetSubmissionState()
             hasAttemptedContactNext = false
             hasEditedParentName = false
             hasEditedPhone = false
@@ -688,6 +745,9 @@ struct BookingView: View {
                 issues.append("請填寫聯絡電話。")
             } else if !isPhoneNumberValid(cleanedPhone) {
                 issues.append("聯絡電話格式有誤，請輸入至少 8 碼數字。")
+            }
+            if step == .confirm && submitViewModel.profile == nil {
+                issues.append("請先登入家長帳號。")
             }
             return issues
         default:
