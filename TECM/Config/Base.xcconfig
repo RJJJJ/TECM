@@ -1,0 +1,3 @@
+// Shared config for all build configurations.
+#include? "Secrets.xcconfig"
+#include "Secrets.template.xcconfig"
