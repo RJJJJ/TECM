@@ -4,12 +4,14 @@ import NewsCreateForm from './news-create-form';
 
 type NewsItemRow = {
   id: string;
+  category: string | null;
   title: string;
   summary: string | null;
   content: string | null;
+  is_featured: boolean;
   is_active: boolean;
   published_at: string;
-  created_at: string;
+  sort_order: number;
   updated_at: string;
 };
 
@@ -36,14 +38,23 @@ function activeBadge(isActive: boolean) {
   return 'inline-flex rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600';
 }
 
+function featuredBadge(isFeatured: boolean) {
+  if (isFeatured) {
+    return 'inline-flex rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700';
+  }
+
+  return 'inline-flex rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600';
+}
+
 export default async function AdminNewsPage() {
   const supabase = createServerSupabaseClient();
 
   const { data, error } = await supabase
     .from('news_items')
-    .select('id, title, summary, content, is_active, published_at, created_at, updated_at')
+    .select('id, category, title, summary, content, is_featured, is_active, published_at, sort_order, updated_at')
     .order('published_at', { ascending: false })
-    .order('created_at', { ascending: false });
+    .order('sort_order', { ascending: true })
+    .order('updated_at', { ascending: false });
 
   const newsItems = (data ?? []) as NewsItemRow[];
 
@@ -52,7 +63,7 @@ export default async function AdminNewsPage() {
       <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">News Management</h2>
-          <p className="mt-1 text-sm text-slate-600">管理首頁 news_items（依發布時間新到舊）</p>
+          <p className="mt-1 text-sm text-slate-600">管理首頁 news_items（published_at desc / sort_order asc）</p>
         </div>
         <NewsCreateForm />
       </section>
@@ -81,8 +92,11 @@ export default async function AdminNewsPage() {
               <thead className="bg-slate-50">
                 <tr>
                   <th className="px-4 py-3 text-left font-medium text-slate-600">Title</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">Category</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">Featured</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">Active</th>
                   <th className="px-4 py-3 text-left font-medium text-slate-600">Published At</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Is Active</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">Sort Order</th>
                   <th className="px-4 py-3 text-left font-medium text-slate-600">Updated At</th>
                   <th className="px-4 py-3 text-right font-medium text-slate-600">Action</th>
                 </tr>
@@ -96,10 +110,15 @@ export default async function AdminNewsPage() {
                         <p className="mt-1 line-clamp-2 text-xs text-slate-500">{item.summary ?? item.content}</p>
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDateTime(item.published_at)}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-700">{item.category ?? '-'}</td>
+                    <td className="px-4 py-3">
+                      <span className={featuredBadge(item.is_featured)}>{item.is_featured ? 'Featured' : 'Normal'}</span>
+                    </td>
                     <td className="px-4 py-3">
                       <span className={activeBadge(item.is_active)}>{item.is_active ? 'Active' : 'Inactive'}</span>
                     </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDateTime(item.published_at)}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-700">{item.sort_order}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDateTime(item.updated_at)}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-right">
                       <Link

@@ -5,11 +5,15 @@ import NewsEditForm from './news-edit-form';
 
 type NewsDetail = {
   id: string;
+  category: string | null;
   title: string;
   summary: string | null;
   content: string | null;
+  image_url: string | null;
+  is_featured: boolean;
   is_active: boolean;
   published_at: string;
+  sort_order: number;
   created_at: string;
   updated_at: string;
 };
@@ -38,7 +42,9 @@ export default async function NewsDetailPage({
 
   const { data, error } = await supabase
     .from('news_items')
-    .select('id, title, summary, content, is_active, published_at, created_at, updated_at')
+    .select(
+      'id, category, title, summary, content, image_url, is_featured, is_active, published_at, sort_order, created_at, updated_at'
+    )
     .eq('id', params.id)
     .maybeSingle();
 
@@ -60,7 +66,7 @@ export default async function NewsDetailPage({
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-semibold text-slate-900">News Detail</h2>
+          <h2 className="text-2xl font-semibold text-slate-900">News Edit</h2>
           <p className="mt-1 text-sm text-slate-600">News ID: {newsItem.id}</p>
         </div>
         <Link
@@ -85,6 +91,14 @@ export default async function NewsDetailPage({
           <div>
             <dt className="text-xs text-slate-500">published_at</dt>
             <dd className="mt-1 text-slate-800">{formatDateTime(newsItem.published_at)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">sort_order</dt>
+            <dd className="mt-1 text-slate-800">{newsItem.sort_order}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">is_featured</dt>
+            <dd className="mt-1 text-slate-800">{newsItem.is_featured ? 'true' : 'false'}</dd>
           </div>
           <div>
             <dt className="text-xs text-slate-500">is_active</dt>
