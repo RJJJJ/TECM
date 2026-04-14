@@ -1,6 +1,7 @@
+import Link from 'next/link';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 
-type BookingStatus = 'pending' | 'confirmed' | 'completed' | 'cancelled' | string;
+type BookingStatus = 'pending' | 'confirmed' | 'completed' | 'cancelled';
 
 type BookingRow = {
   id: string;
@@ -10,12 +11,36 @@ type BookingRow = {
   booking_date: string | null;
   start_time: string | null;
   end_time: string | null;
-  status: BookingStatus | null;
+  status: string | null;
   created_at: string;
   campuses: {
     name: string | null;
   } | null;
 };
+
+type CampusOption = {
+  id: string;
+  name: string;
+};
+
+type SearchParams = {
+  status?: string | string[];
+  campus?: string | string[];
+  date?: string | string[];
+};
+
+const STATUS_OPTIONS: Array<{ label: string; value: 'all' | BookingStatus }> = [
+  { label: 'All', value: 'all' },
+  { label: 'Pending', value: 'pending' },
+  { label: 'Confirmed', value: 'confirmed' },
+  { label: 'Completed', value: 'completed' },
+  { label: 'Cancelled', value: 'cancelled' }
+];
+
+function pickSingle(value?: string | string[]) {
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
 
 function formatDate(dateValue: string | null) {
   if (!dateValue) return '-';
@@ -50,10 +75,25 @@ function statusBadgeClass(status: string | null) {
   }
 }
 
-export default async function AdminBookingsPage() {
+export default async function AdminBookingsPage({
+  searchParams
+}: {
+  searchParams?: SearchParams;
+}) {
   const supabase = createServerSupabaseClient();
 
-  const { data, error } = await supabase
+  const selectedStatus = pickSingle(searchParams?.status) ?? 'all';
+  const selectedCampusId = pickSingle(searchParams?.campus) ?? 'all';
+  const selectedDate = pickSingle(searchParams?.date) ?? '';
+
+  const { data: campusData } = await supabase
+    .from('campuses')
+    .select('id, name')
+    .order('name', { ascending: true });
+
+  const campuses = (campusData ?? []) as CampusOption[];
+
+  let bookingsQuery = supabase
     .from('bookings')
     .select(
       `
@@ -71,16 +111,98 @@ export default async function AdminBookingsPage() {
     )
     .order('created_at', { ascending: false });
 
+  if (selectedStatus !== 'all') {
+    bookingsQuery = bookingsQuery.eq('status', selectedStatus);
+  }
+
+  if (selectedCampusId !== 'all') {
+    bookingsQuery = bookingsQuery.eq('campus_id', selectedCampusId);
+  }
+
+  if (selectedDate) {
+    bookingsQuery = bookingsQuery.eq('booking_date', selectedDate);
+  }
+
+  const { data, error } = await bookingsQuery;
+
   const bookings = (data ?? []) as BookingRow[];
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Booking Management</h1>
-          <p className="mt-1 text-sm text-slate-600">最新 booking 列表（依建立時間由新到舊）</p>
-        </div>
+      <div className="mb-5">
+        <h1 className="text-2xl font-semibold text-slate-900">Booking Management</h1>
+        <p className="mt-1 text-sm text-slate-600">最新 booking 列表（依建立時間由新到舊）</p>
       </div>
+
+      <form
+        method="get"
+        className="mb-5 grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-4"
+      >
+        <div>
+          <label htmlFor="status" className="mb-1 block text-xs font-medium text-slate-600">
+            Status
+          </label>
+          <select
+            id="status"
+            name="status"
+            defaultValue={selectedStatus}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-slate-300 focus:ring"
+          >
+            {STATUS_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="campus" className="mb-1 block text-xs font-medium text-slate-600">
+            Campus
+          </label>
+          <select
+            id="campus"
+            name="campus"
+            defaultValue={selectedCampusId}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-slate-300 focus:ring"
+          >
+            <option value="all">All</option>
+            {campuses.map((campus) => (
+              <option key={campus.id} value={campus.id}>
+                {campus.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="date" className="mb-1 block text-xs font-medium text-slate-600">
+            Booking Date
+          </label>
+          <input
+            id="date"
+            name="date"
+            type="date"
+            defaultValue={selectedDate}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-slate-300 focus:ring"
+          />
+        </div>
+
+        <div className="flex items-end gap-2">
+          <button
+            type="submit"
+            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
+          >
+            套用篩選
+          </button>
+          <Link
+            href="/admin/bookings"
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            清除
+          </Link>
+        </div>
+      </form>
 
       {error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -88,7 +210,7 @@ export default async function AdminBookingsPage() {
         </div>
       ) : bookings.length === 0 ? (
         <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
-          目前沒有 booking 資料。
+          查無符合條件的 booking。
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-slate-200">
