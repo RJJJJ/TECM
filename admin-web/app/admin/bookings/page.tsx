@@ -254,12 +254,12 @@ export default async function AdminBookingsPage({
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      type="button"
-                      className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+                    <Link
+                      href={`/admin/bookings/${booking.id}`}
+                      className="inline-flex rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
                     >
                       查看詳情
-                    </button>
+                    </Link>
                   </td>
                 </tr>
               ))}
