@@ -1,13 +1,15 @@
 import SwiftUI
 
 struct ParentReservationSummaryView: View {
+    @StateObject private var viewModel = ParentCenterViewModel()
+    @EnvironmentObject private var authViewModel: AuthViewModel
+
     @State private var selectedFilter: ReservationSummaryFilter = .all
     @State private var selectedReservation: ParentReservationSummaryItem?
-    private let reservations = MockDataStore.parentReservationSummaries
 
     private var filteredReservations: [ParentReservationSummaryItem] {
-        guard let status = selectedFilter.status else { return reservations }
-        return reservations.filter { $0.status == status }
+        guard let status = selectedFilter.status else { return viewModel.reservations }
+        return viewModel.reservations.filter { $0.status == status }
     }
 
     var body: some View {
@@ -20,7 +22,14 @@ struct ParentReservationSummaryView: View {
 
             filterChips
 
-            if filteredReservations.isEmpty {
+            if authViewModel.currentUser == nil {
+                EmptyStateView(title: "尚未登入", message: "請先登入家長帳號以查看私人預約資料。")
+            } else if viewModel.isLoading {
+                SkeletonCard()
+                SkeletonCard()
+            } else if let errorMessage = viewModel.errorMessage {
+                EmptyStateView(title: "載入失敗", message: errorMessage)
+            } else if filteredReservations.isEmpty {
                 EmptyStateView(
                     title: "目前沒有\(selectedFilter.title)預約",
                     message: "你可以先切換其他狀態，或返回家長中心提交新的體驗需求。"
@@ -37,6 +46,12 @@ struct ParentReservationSummaryView: View {
         .sheet(item: $selectedReservation) { item in
             ReservationDetailSheet(item: item)
                 .presentationDetents([.medium, .large])
+        }
+        .task {
+            await viewModel.load(userID: authViewModel.currentUser?.id)
+        }
+        .onChange(of: authViewModel.currentUser?.id) { userID in
+            Task { await viewModel.load(userID: userID) }
         }
     }
 
@@ -166,5 +181,6 @@ private struct ReservationDetailSheet: View {
 #Preview {
     NavigationStack {
         ParentReservationSummaryView()
+            .environmentObject(AuthViewModel())
     }
 }

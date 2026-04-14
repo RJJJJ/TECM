@@ -63,6 +63,24 @@ enum BookingStatus: String, CaseIterable, Identifiable {
     case completed = "已完成"
     case cancelled = "已取消"
 
+    init(apiValue: String) {
+        switch apiValue.lowercased() {
+        case "confirmed": self = .confirmed
+        case "completed": self = .completed
+        case "cancelled": self = .cancelled
+        default: self = .pending
+        }
+    }
+
+    var apiValue: String {
+        switch self {
+        case .pending: return "pending"
+        case .confirmed: return "confirmed"
+        case .completed: return "completed"
+        case .cancelled: return "cancelled"
+        }
+    }
+
     var id: String { rawValue }
 
     var color: Color {
