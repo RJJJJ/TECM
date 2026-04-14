@@ -23,11 +23,26 @@ export async function updateBookingAction(
   const endTime = String(formData.get('end_time') ?? '').trim();
 
   if (!ALLOWED_STATUSES.has(status)) {
-    return { status: 'error', message: 'Status 不合法。' };
+    return {
+      status: 'error',
+      message: 'Status 僅允許 pending / confirmed / completed / cancelled。'
+    };
   }
 
-  if (!bookingDate || !startTime || !endTime) {
-    return { status: 'error', message: 'booking date / start time / end time 為必填。' };
+  if (!bookingDate) {
+    return { status: 'error', message: 'Booking date 為必填。' };
+  }
+
+  if (!startTime) {
+    return { status: 'error', message: 'Start time 為必填。' };
+  }
+
+  if (!endTime) {
+    return { status: 'error', message: 'End time 為必填。' };
+  }
+
+  if (startTime > endTime) {
+    return { status: 'error', message: 'Start time 不可晚於 end time。' };
   }
 
   const supabase = createServerSupabaseClient();
@@ -66,6 +81,6 @@ export async function updateBookingAction(
 
   return {
     status: 'success',
-    message: 'Booking 已更新。'
+    message: 'Booking 已更新，列表與詳情資料已同步。'
   };
 }

@@ -4,6 +4,7 @@ import Supabase
 protocol BookingServicing {
     func submitBooking(input: BookingFormInput, profile: ParentProfile) async throws -> BookingRecord
     func fetchMyBookings(parentID: UUID) async throws -> [ParentReservationSummaryItem]
+    func fetchBookingDetail(bookingID: UUID, parentID: UUID) async throws -> ParentBookingDetail
 }
 
 struct BookingService: BookingServicing {
@@ -59,6 +60,22 @@ struct BookingService: BookingServicing {
         return rows.map { $0.toSummaryItem() }
     }
 
+    func fetchBookingDetail(bookingID: UUID, parentID: UUID) async throws -> ParentBookingDetail {
+        let rows: [BookingDTO] = try await client
+            .from("bookings")
+            .select("id,parent_name,phone,child_name,child_age,school_name,course_title_snapshot,booking_date,start_time,end_time,note,status,created_at,campus:campuses(name)")
+            .eq("id", value: bookingID)
+            .eq("parent_id", value: parentID)
+            .limit(1)
+            .execute()
+            .value
+
+        guard let row = rows.first else {
+            throw BookingServiceError.bookingNotFound
+        }
+        return row.toParentBookingDetail()
+    }
+
     private func resolveCourseID(title: String) async throws -> UUID? {
         let courses: [CourseLookupDTO] = try await client
             .from("courses")
@@ -93,6 +110,17 @@ struct BookingService: BookingServicing {
         let hour = slot / 2
         let minute = slot % 2 == 0 ? "00" : "30"
         return String(format: "%02d:%@:00", hour, minute)
+    }
+}
+
+enum BookingServiceError: LocalizedError {
+    case bookingNotFound
+
+    var errorDescription: String? {
+        switch self {
+        case .bookingNotFound:
+            return "找不到這筆預約資料，可能已被移除或你沒有檢視權限。"
+        }
     }
 }
 

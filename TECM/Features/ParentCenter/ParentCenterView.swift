@@ -44,6 +44,9 @@ struct ParentCenterView: View {
         .task {
             await viewModel.load(userID: authViewModel.currentUser?.id)
         }
+        .refreshable {
+            await viewModel.load(userID: authViewModel.currentUser?.id)
+        }
         .onChange(of: authViewModel.currentUser?.id) { userID in
             Task {
                 await viewModel.load(userID: userID)
