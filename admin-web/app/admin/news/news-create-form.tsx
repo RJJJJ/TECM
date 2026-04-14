@@ -24,10 +24,13 @@ function CreateButton() {
 
 function clientValidate(formData: FormData) {
   const title = String(formData.get('title') ?? '').trim();
-  if (!title) return 'Title 為必填。';
-
   const publishedAt = String(formData.get('published_at') ?? '').trim();
+  const sortOrderRaw = String(formData.get('sort_order') ?? '').trim();
+
+  if (!title) return 'Title 為必填。';
   if (!publishedAt) return 'Publish date 為必填。';
+  if (!sortOrderRaw) return 'Sort order 為必填。';
+  if (!Number.isFinite(Number(sortOrderRaw))) return 'Sort order 必須是數字。';
 
   return null;
 }
@@ -62,6 +65,34 @@ export default function NewsCreateForm() {
       }}
     >
       <div className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-2">
+        <div>
+          <label htmlFor="category" className="mb-1 block text-sm font-medium text-slate-700">
+            Category
+          </label>
+          <input
+            id="category"
+            name="category"
+            type="text"
+            maxLength={80}
+            placeholder="可選，例：活動公告"
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
+          />
+        </div>
+
+        <div>
+          <label htmlFor="sort_order" className="mb-1 block text-sm font-medium text-slate-700">
+            Sort Order
+          </label>
+          <input
+            id="sort_order"
+            name="sort_order"
+            type="number"
+            required
+            defaultValue={0}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
+          />
+        </div>
+
         <div className="md:col-span-2">
           <label htmlFor="title" className="mb-1 block text-sm font-medium text-slate-700">
             Title
@@ -91,6 +122,21 @@ export default function NewsCreateForm() {
         </div>
 
         <div>
+          <label htmlFor="is_featured" className="mb-1 block text-sm font-medium text-slate-700">
+            Is Featured
+          </label>
+          <select
+            id="is_featured"
+            name="is_featured"
+            defaultValue="false"
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
+          >
+            <option value="false">No</option>
+            <option value="true">Yes</option>
+          </select>
+        </div>
+
+        <div>
           <label htmlFor="is_active" className="mb-1 block text-sm font-medium text-slate-700">
             Is Active
           </label>
@@ -103,6 +149,19 @@ export default function NewsCreateForm() {
             <option value="true">Active</option>
             <option value="false">Inactive</option>
           </select>
+        </div>
+
+        <div className="md:col-span-2">
+          <label htmlFor="image_url" className="mb-1 block text-sm font-medium text-slate-700">
+            Image URL
+          </label>
+          <input
+            id="image_url"
+            name="image_url"
+            type="text"
+            placeholder="可選，圖片連結"
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
+          />
         </div>
 
         <div className="md:col-span-2">

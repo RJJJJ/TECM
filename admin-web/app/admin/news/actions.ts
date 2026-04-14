@@ -9,6 +9,11 @@ export type CreateNewsFormState = {
   message?: string;
 };
 
+function normalizeOptionalText(value: FormDataEntryValue | null) {
+  const normalized = String(value ?? '').trim();
+  return normalized || null;
+}
+
 function parsePublishedAt(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
@@ -19,11 +24,15 @@ export async function createNewsAction(
   _prevState: CreateNewsFormState,
   formData: FormData
 ): Promise<CreateNewsFormState> {
+  const category = normalizeOptionalText(formData.get('category'));
   const title = String(formData.get('title') ?? '').trim();
-  const summary = String(formData.get('summary') ?? '').trim();
-  const content = String(formData.get('content') ?? '').trim();
-  const isActiveRaw = String(formData.get('is_active') ?? 'true').trim();
+  const summary = normalizeOptionalText(formData.get('summary'));
+  const content = normalizeOptionalText(formData.get('content'));
+  const imageUrl = normalizeOptionalText(formData.get('image_url'));
+  const isFeatured = String(formData.get('is_featured') ?? 'false') === 'true';
+  const isActive = String(formData.get('is_active') ?? 'true') === 'true';
   const publishedAtRaw = String(formData.get('published_at') ?? '').trim();
+  const sortOrderRaw = String(formData.get('sort_order') ?? '').trim();
 
   if (!title) {
     return { status: 'error', message: 'Title 為必填。' };
@@ -38,7 +47,14 @@ export async function createNewsAction(
     return { status: 'error', message: 'Publish date 格式錯誤。' };
   }
 
-  const isActive = isActiveRaw === 'true';
+  if (!sortOrderRaw) {
+    return { status: 'error', message: 'Sort order 為必填。' };
+  }
+
+  const sortOrder = Number(sortOrderRaw);
+  if (!Number.isFinite(sortOrder)) {
+    return { status: 'error', message: 'Sort order 必須是數字。' };
+  }
 
   const supabase = createServerSupabaseClient();
   const access = await verifyActiveStaffAccess(supabase);
@@ -54,11 +70,15 @@ export async function createNewsAction(
   const { data, error } = await supabase
     .from('news_items')
     .insert({
+      category,
       title,
-      summary: summary || null,
-      content: content || null,
+      summary,
+      content,
+      image_url: imageUrl,
+      is_featured: isFeatured,
       is_active: isActive,
-      published_at: publishedAt
+      published_at: publishedAt,
+      sort_order: sortOrder
     })
     .select('id')
     .single();

@@ -6,11 +6,15 @@ import { updateNewsAction, type UpdateNewsFormState } from './actions';
 
 type NewsEditable = {
   id: string;
+  category: string | null;
   title: string;
   summary: string | null;
   content: string | null;
+  image_url: string | null;
+  is_featured: boolean;
   is_active: boolean;
   published_at: string;
+  sort_order: number;
 };
 
 type Props = {
@@ -47,9 +51,12 @@ function normalizeDateTimeLocal(value: string) {
 function clientValidate(formData: FormData) {
   const title = String(formData.get('title') ?? '').trim();
   const publishedAt = String(formData.get('published_at') ?? '').trim();
+  const sortOrderRaw = String(formData.get('sort_order') ?? '').trim();
 
   if (!title) return 'Title 為必填。';
   if (!publishedAt) return 'Publish date 為必填。';
+  if (!sortOrderRaw) return 'Sort order 為必填。';
+  if (!Number.isFinite(Number(sortOrderRaw))) return 'Sort order 必須是數字。';
 
   return null;
 }
@@ -74,7 +81,7 @@ export default function NewsEditForm({ newsItem }: Props) {
     <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div>
         <h3 className="text-lg font-semibold text-slate-900">編輯 News</h3>
-        <p className="mt-1 text-xs text-slate-500">可更新 title / summary / content / is_active / publish_date。</p>
+        <p className="mt-1 text-xs text-slate-500">可更新 news_items 全部主要欄位。</p>
       </div>
 
       <form
@@ -92,6 +99,34 @@ export default function NewsEditForm({ newsItem }: Props) {
         }}
       >
         <div className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-2">
+          <div>
+            <label htmlFor="category" className="mb-1 block text-sm font-medium text-slate-700">
+              Category
+            </label>
+            <input
+              id="category"
+              name="category"
+              type="text"
+              maxLength={80}
+              defaultValue={newsItem.category ?? ''}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="sort_order" className="mb-1 block text-sm font-medium text-slate-700">
+              Sort Order
+            </label>
+            <input
+              id="sort_order"
+              name="sort_order"
+              type="number"
+              required
+              defaultValue={newsItem.sort_order}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
+            />
+          </div>
+
           <div className="md:col-span-2">
             <label htmlFor="title" className="mb-1 block text-sm font-medium text-slate-700">
               Title
@@ -122,6 +157,21 @@ export default function NewsEditForm({ newsItem }: Props) {
           </div>
 
           <div>
+            <label htmlFor="is_featured" className="mb-1 block text-sm font-medium text-slate-700">
+              Is Featured
+            </label>
+            <select
+              id="is_featured"
+              name="is_featured"
+              defaultValue={newsItem.is_featured ? 'true' : 'false'}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
+            >
+              <option value="false">No</option>
+              <option value="true">Yes</option>
+            </select>
+          </div>
+
+          <div>
             <label htmlFor="is_active" className="mb-1 block text-sm font-medium text-slate-700">
               Is Active
             </label>
@@ -134,6 +184,19 @@ export default function NewsEditForm({ newsItem }: Props) {
               <option value="true">Active</option>
               <option value="false">Inactive</option>
             </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <label htmlFor="image_url" className="mb-1 block text-sm font-medium text-slate-700">
+              Image URL
+            </label>
+            <input
+              id="image_url"
+              name="image_url"
+              type="text"
+              defaultValue={newsItem.image_url ?? ''}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
+            />
           </div>
 
           <div className="md:col-span-2">
