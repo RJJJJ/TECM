@@ -3,6 +3,7 @@ import SwiftUI
 struct BookingView: View {
     @EnvironmentObject private var tabRouter: TabRouter
     @Environment(\.calendar) private var calendar
+    @StateObject private var viewModel = BookingViewModel()
 
     private enum Step: Int, CaseIterable {
         case service
@@ -76,8 +77,16 @@ struct BookingView: View {
         "中葡職業技術學校（基礎課程）",
         "澳門坊眾學校（小學部）"
     ]
-    private let campuses = ["澳門半島校區", "氹仔校區", "路氹城校區"]
     private var timeSlots: [Int] { Array(BookingPolicy.openingSlot...BookingPolicy.latestStartSlot) }
+
+    private var availableCampuses: [String] {
+        let remoteCampuses = viewModel.campuses
+        if remoteCampuses.isEmpty {
+            return ["澳門半島校區", "氹仔校區", "路氹城校區"]
+        }
+        return remoteCampuses
+    }
+
     private let mockBookedSlotLookup: [String: Set<Int>] = [
         "澳門半島校區|2026-04-14": [22, 27, 33],
         "澳門半島校區|2026-04-15": [24, 25],
@@ -150,6 +159,12 @@ struct BookingView: View {
             simulateStepLoading()
             preferredDate = Calendar.current.startOfDay(for: preferredDate)
         }
+        .task {
+            await viewModel.loadCampuses()
+            if !availableCampuses.contains(campus), let first = availableCampuses.first {
+                campus = first
+            }
+        }
         .onChange(of: startSlot) { newValue in
             if !timeSlots.contains(newValue) {
                 startSlot = BookingPolicy.defaultStartSlot
@@ -194,7 +209,17 @@ struct BookingView: View {
             }
         case .schedule:
             ElevatedCard {
-                selectRow(title: "校區偏好", selection: $campus, options: campuses)
+                selectRow(title: "校區偏好", selection: $campus, options: availableCampuses)
+                if viewModel.isLoading {
+                    Text("校區資料載入中…")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.blueGray)
+                } else if let errorMessage = viewModel.errorMessage {
+                    inlineValidationMessage("校區同步失敗：\(errorMessage)")
+                } else if viewModel.campuses.isEmpty {
+                    inlineValidationMessage("目前沒有可預約校區，請稍後再試。")
+                }
+
                 DatePicker("期望日期", selection: $preferredDate, displayedComponents: .date)
                     .font(Theme.Typography.body)
 
