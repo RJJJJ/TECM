@@ -44,6 +44,38 @@ function formatTime(timeValue: string | null) {
   return timeValue.slice(0, 5);
 }
 
+function statusBadgeClass(status: string | null) {
+  const base = 'inline-flex min-w-[88px] justify-center rounded-full border px-2.5 py-1 text-xs font-semibold';
+
+  switch (status) {
+    case 'pending':
+      return `${base} border-amber-200 bg-amber-50 text-amber-800`;
+    case 'confirmed':
+      return `${base} border-blue-200 bg-blue-50 text-blue-800`;
+    case 'completed':
+      return `${base} border-emerald-200 bg-emerald-50 text-emerald-800`;
+    case 'cancelled':
+      return `${base} border-rose-200 bg-rose-50 text-rose-800`;
+    default:
+      return `${base} border-slate-200 bg-slate-100 text-slate-700`;
+  }
+}
+
+function statusLabel(status: string | null) {
+  switch (status) {
+    case 'pending':
+      return 'Pending';
+    case 'confirmed':
+      return 'Confirmed';
+    case 'completed':
+      return 'Completed';
+    case 'cancelled':
+      return 'Cancelled';
+    default:
+      return 'Unknown';
+  }
+}
+
 export default async function BookingDetailPage({
   params
 }: {
@@ -89,67 +121,70 @@ export default async function BookingDetailPage({
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Booking Detail</h1>
+          <h2 className="text-2xl font-semibold text-slate-900">Booking Detail</h2>
           <p className="mt-1 text-sm text-slate-600">ID: {booking.id}</p>
         </div>
-        <Link
-          href="/admin/bookings"
-          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-        >
-          返回列表
-        </Link>
+        <div className="flex items-center gap-2">
+          <span className={statusBadgeClass(booking.status)}>{statusLabel(booking.status)}</span>
+          <Link
+            href="/admin/bookings"
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            返回列表
+          </Link>
+        </div>
       </div>
 
-      <section className="grid grid-cols-1 gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2">
-        <h2 className="md:col-span-2 text-lg font-semibold text-slate-900">基本資料</h2>
+      <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-900">Booking 資訊</h3>
 
-        <div>
-          <p className="text-xs text-slate-500">Parent Name</p>
-          <p className="mt-1 text-sm text-slate-800">{displayValue(booking.parent_name)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-500">Phone</p>
-          <p className="mt-1 text-sm text-slate-800">{displayValue(booking.phone)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-500">Child Name</p>
-          <p className="mt-1 text-sm text-slate-800">{displayValue(booking.child_name)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-500">Child Age</p>
-          <p className="mt-1 text-sm text-slate-800">{displayValue(booking.child_age)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-500">School</p>
-          <p className="mt-1 text-sm text-slate-800">{displayValue(booking.school_name)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-500">Course</p>
-          <p className="mt-1 text-sm text-slate-800">{displayValue(booking.course_title_snapshot)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-500">Campus</p>
-          <p className="mt-1 text-sm text-slate-800">{displayValue(booking.campuses?.name ?? null)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-500">Status</p>
-          <p className="mt-1 text-sm text-slate-800">{displayValue(booking.status)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-500">Booking Date</p>
-          <p className="mt-1 text-sm text-slate-800">{formatDate(booking.booking_date)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-500">Time</p>
-          <p className="mt-1 text-sm text-slate-800">
-            {formatTime(booking.start_time)} - {formatTime(booking.end_time)}
-          </p>
-        </div>
-        <div className="md:col-span-2">
-          <p className="text-xs text-slate-500">Note</p>
-          <p className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{displayValue(booking.note)}</p>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div>
+            <p className="text-xs text-slate-500">Parent Name</p>
+            <p className="mt-1 text-sm text-slate-800">{displayValue(booking.parent_name)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-500">Phone</p>
+            <p className="mt-1 text-sm text-slate-800">{displayValue(booking.phone)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-500">Child Name</p>
+            <p className="mt-1 text-sm text-slate-800">{displayValue(booking.child_name)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-500">Child Age</p>
+            <p className="mt-1 text-sm text-slate-800">{displayValue(booking.child_age)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-500">School</p>
+            <p className="mt-1 text-sm text-slate-800">{displayValue(booking.school_name)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-500">Course</p>
+            <p className="mt-1 text-sm text-slate-800">{displayValue(booking.course_title_snapshot)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-500">Campus</p>
+            <p className="mt-1 text-sm text-slate-800">{displayValue(booking.campuses?.name ?? null)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-500">Booking Date</p>
+            <p className="mt-1 text-sm text-slate-800">{formatDate(booking.booking_date)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-500">Time</p>
+            <p className="mt-1 text-sm text-slate-800">
+              {formatTime(booking.start_time)} - {formatTime(booking.end_time)}
+            </p>
+          </div>
+          <div className="md:col-span-2">
+            <p className="text-xs text-slate-500">Note</p>
+            <p className="mt-1 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-800">
+              {displayValue(booking.note)}
+            </p>
+          </div>
         </div>
       </section>
 
