@@ -241,6 +241,22 @@ struct BookingDTO: Decodable {
         )
     }
 
+    func toParentBookingDetail() -> ParentBookingDetail {
+        ParentBookingDetail(
+            id: id,
+            parentName: parentName,
+            phone: phone ?? "未提供",
+            childName: childName,
+            courseTitle: courseTitleSnapshot ?? "課程待確認",
+            campusName: campus?.name ?? "待確認",
+            bookingDate: bookingDate,
+            startTime: startTime,
+            endTime: endTime,
+            status: BookingStatus(apiValue: status),
+            note: (note?.isEmpty == false ? note : nil) ?? "無"
+        )
+    }
+
     private static func reservationDate(bookingDate: String, startTime: String) -> Date? {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
