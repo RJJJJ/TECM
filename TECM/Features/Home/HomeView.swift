@@ -3,11 +3,8 @@ import Combine
 
 struct HomeView: View {
     @State private var revealInternalAccess = false
+    @StateObject private var viewModel = HomeViewModel()
     @EnvironmentObject private var tabRouter: TabRouter
-
-    private var featuredNews: [NewsItem] {
-        Array(MockDataStore.news.prefix(3))
-    }
 
     private let proofItems: [(String, String)] = [
         ("Python / Scratch / C++ 系統課程", "對應不同年齡與起點，從基礎理解到考級與比賽應用。"),
@@ -18,14 +15,14 @@ struct HomeView: View {
     var body: some View {
         ScreenContainer {
             BrandHeroSection(
-                            title: "TECM 澳門編程教育中心",
-                            subtitle: "聚焦 Python、Scratch、C++ 的系統化學習路線，結合顧問評估與課堂規劃，讓家長清楚看見孩子的下一步。",
-                            primaryTitle: "預約評估",
-                            secondaryTitle: "課程總覽",
-                            logoURL: URL(string: "https://tecmacau.com/favicon.png?v=2"),
-                            primaryAction: { tabRouter.select(.booking) },
-                            secondaryAction: { tabRouter.select(.courses) }
-                        )
+                title: "TECM 澳門編程教育中心",
+                subtitle: "聚焦 Python、Scratch、C++ 的系統化學習路線，結合顧問評估與課堂規劃，讓家長清楚看見孩子的下一步。",
+                primaryTitle: "預約評估",
+                secondaryTitle: "課程總覽",
+                logoURL: URL(string: "https://tecmacau.com/favicon.png?v=2"),
+                primaryAction: { tabRouter.select(.booking) },
+                secondaryAction: { tabRouter.select(.courses) }
+            )
             .onLongPressGesture(minimumDuration: 1.2) {
                 withAnimation(.easeInOut(duration: 0.24)) { revealInternalAccess.toggle() }
             }
@@ -54,42 +51,57 @@ struct HomeView: View {
             curatedShortcutSection
                 .premiumEntrance(delay: 0.09)
         }
+        .task {
+            await viewModel.loadNews()
+        }
     }
 
     private var curatedUpdatesSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             PremiumSectionHeader(eyebrow: "Curated Updates", title: "精選資訊", subtitle: "活動、課程資訊與最新消息")
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Theme.Spacing.md) {
-                    ForEach(featuredNews) { item in
-                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                            HStack {
-                                StatusChip(title: item.category, color: Theme.Colors.accent)
-                                Spacer()
-                                Text(item.date)
-                                    .font(Theme.Typography.caption)
-                                    .foregroundStyle(Theme.Colors.blueGray)
-                            }
-                            Text(item.title)
-                                .font(.system(size: 17, weight: .semibold, design: .rounded))
-                                .foregroundStyle(Theme.Colors.textPrimary)
-                                .lineLimit(2)
-                            Text(item.summary)
-                                .font(Theme.Typography.caption)
-                                .foregroundStyle(Theme.Colors.textSecondary)
-                                .lineLimit(2)
-                        }
-                        .padding(Theme.Spacing.md)
-                        .frame(width: min(UIScreen.main.bounds.width * 0.78, 290), alignment: .leading)
-                        .background(Theme.Colors.card)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                                .stroke(Theme.Colors.line.opacity(0.5), lineWidth: 0.8)
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
-                    }
+
+            if viewModel.isLoading {
+                VStack(spacing: Theme.Spacing.md) {
+                    SkeletonCard()
+                    SkeletonCard()
                 }
-                .padding(.vertical, 2)
+            } else if let errorMessage = viewModel.errorMessage {
+                EmptyStateView(title: "消息載入失敗", message: errorMessage)
+            } else if viewModel.featuredNews.isEmpty {
+                EmptyStateView(title: "目前沒有公開消息", message: "請稍後再回來查看最新資訊。")
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Theme.Spacing.md) {
+                        ForEach(viewModel.featuredNews) { item in
+                            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                                HStack {
+                                    StatusChip(title: item.category, color: Theme.Colors.accent)
+                                    Spacer()
+                                    Text(item.date)
+                                        .font(Theme.Typography.caption)
+                                        .foregroundStyle(Theme.Colors.blueGray)
+                                }
+                                Text(item.title)
+                                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(Theme.Colors.textPrimary)
+                                    .lineLimit(2)
+                                Text(item.summary)
+                                    .font(Theme.Typography.caption)
+                                    .foregroundStyle(Theme.Colors.textSecondary)
+                                    .lineLimit(2)
+                            }
+                            .padding(Theme.Spacing.md)
+                            .frame(width: min(UIScreen.main.bounds.width * 0.78, 290), alignment: .leading)
+                            .background(Theme.Colors.card)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                                    .stroke(Theme.Colors.line.opacity(0.5), lineWidth: 0.8)
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
             }
         }
     }
