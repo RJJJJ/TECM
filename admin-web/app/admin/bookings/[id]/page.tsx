@@ -5,6 +5,10 @@ import BookingUpdateForm from './booking-update-form';
 
 type BookingDetail = {
   id: string;
+  parent_id: string | null;
+  child_id: string | null;
+  course_id: string | null;
+  campus_id: string | null;
   parent_name: string | null;
   phone: string | null;
   child_name: string | null;
@@ -16,6 +20,8 @@ type BookingDetail = {
   end_time: string | null;
   note: string | null;
   status: string | null;
+  created_at: string;
+  updated_at: string;
   campuses: {
     name: string | null;
   } | null;
@@ -36,6 +42,21 @@ function formatDate(dateValue: string | null) {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit'
+  }).format(date);
+}
+
+function formatDateTime(dateValue: string | null) {
+  if (!dateValue) return '-';
+
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return dateValue;
+
+  return new Intl.DateTimeFormat('zh-Hant-TW', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
   }).format(date);
 }
 
@@ -76,18 +97,34 @@ function statusLabel(status: string | null) {
   }
 }
 
+function resolveReturnTo(rawReturnTo?: string | string[]) {
+  const candidate = Array.isArray(rawReturnTo) ? rawReturnTo[0] : rawReturnTo;
+  if (!candidate || !candidate.startsWith('/admin/bookings')) {
+    return '/admin/bookings';
+  }
+
+  return candidate;
+}
+
 export default async function BookingDetailPage({
-  params
+  params,
+  searchParams
 }: {
   params: { id: string };
+  searchParams?: { returnTo?: string | string[] };
 }) {
   const supabase = createServerSupabaseClient();
+  const backToListHref = resolveReturnTo(searchParams?.returnTo);
 
   const { data, error } = await supabase
     .from('bookings')
     .select(
       `
       id,
+      parent_id,
+      child_id,
+      course_id,
+      campus_id,
       parent_name,
       phone,
       child_name,
@@ -99,6 +136,8 @@ export default async function BookingDetailPage({
       end_time,
       note,
       status,
+      created_at,
+      updated_at,
       campuses(name)
     `
     )
@@ -124,12 +163,12 @@ export default async function BookingDetailPage({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">Booking Detail</h2>
-          <p className="mt-1 text-sm text-slate-600">ID: {booking.id}</p>
+          <p className="mt-1 text-sm text-slate-600">Booking ID: {booking.id}</p>
         </div>
         <div className="flex items-center gap-2">
           <span className={statusBadgeClass(booking.status)}>{statusLabel(booking.status)}</span>
           <Link
-            href="/admin/bookings"
+            href={backToListHref}
             className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
           >
             返回列表
@@ -179,6 +218,14 @@ export default async function BookingDetailPage({
               {formatTime(booking.start_time)} - {formatTime(booking.end_time)}
             </p>
           </div>
+          <div>
+            <p className="text-xs text-slate-500">Created At</p>
+            <p className="mt-1 text-sm text-slate-800">{formatDateTime(booking.created_at)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-500">Updated At</p>
+            <p className="mt-1 text-sm text-slate-800">{formatDateTime(booking.updated_at)}</p>
+          </div>
           <div className="md:col-span-2">
             <p className="text-xs text-slate-500">Note</p>
             <p className="mt-1 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-800">
@@ -186,6 +233,28 @@ export default async function BookingDetailPage({
             </p>
           </div>
         </div>
+      </section>
+
+      <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-900">Metadata</h3>
+        <dl className="grid grid-cols-1 gap-3 rounded-lg bg-slate-50 p-4 text-sm md:grid-cols-2">
+          <div>
+            <dt className="text-xs text-slate-500">parent_id</dt>
+            <dd className="mt-1 break-all font-mono text-xs text-slate-700">{displayValue(booking.parent_id)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">child_id</dt>
+            <dd className="mt-1 break-all font-mono text-xs text-slate-700">{displayValue(booking.child_id)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">course_id</dt>
+            <dd className="mt-1 break-all font-mono text-xs text-slate-700">{displayValue(booking.course_id)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">campus_id</dt>
+            <dd className="mt-1 break-all font-mono text-xs text-slate-700">{displayValue(booking.campus_id)}</dd>
+          </div>
+        </dl>
       </section>
 
       <BookingUpdateForm

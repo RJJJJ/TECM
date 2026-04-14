@@ -6,6 +6,7 @@ type BookingStatus = 'pending' | 'confirmed' | 'completed' | 'cancelled';
 type BookingRow = {
   id: string;
   parent_name: string | null;
+  phone: string | null;
   child_name: string | null;
   course_title_snapshot: string | null;
   booking_date: string | null;
@@ -13,6 +14,7 @@ type BookingRow = {
   end_time: string | null;
   status: string | null;
   created_at: string;
+  updated_at: string;
   campuses: {
     name: string | null;
   } | null;
@@ -27,6 +29,7 @@ type SearchParams = {
   status?: string | string[];
   campus?: string | string[];
   date?: string | string[];
+  keyword?: string | string[];
 };
 
 const STATUS_OPTIONS: Array<{ label: string; value: 'all' | BookingStatus }> = [
@@ -107,6 +110,22 @@ function statusBadgeClass(status: string | null) {
   }
 }
 
+function buildListStateQuery(params: {
+  status: string;
+  campus: string;
+  date: string;
+  keyword: string;
+}) {
+  const query = new URLSearchParams();
+
+  if (params.status && params.status !== 'all') query.set('status', params.status);
+  if (params.campus && params.campus !== 'all') query.set('campus', params.campus);
+  if (params.date) query.set('date', params.date);
+  if (params.keyword) query.set('keyword', params.keyword);
+
+  return query.toString();
+}
+
 export default async function AdminBookingsPage({
   searchParams
 }: {
@@ -117,6 +136,7 @@ export default async function AdminBookingsPage({
   const selectedStatus = pickSingle(searchParams?.status) ?? 'all';
   const selectedCampusId = pickSingle(searchParams?.campus) ?? 'all';
   const selectedDate = pickSingle(searchParams?.date) ?? '';
+  const selectedKeyword = (pickSingle(searchParams?.keyword) ?? '').trim();
 
   const { data: campusData } = await supabase
     .from('campuses')
@@ -131,6 +151,7 @@ export default async function AdminBookingsPage({
       `
       id,
       parent_name,
+      phone,
       child_name,
       course_title_snapshot,
       booking_date,
@@ -138,6 +159,7 @@ export default async function AdminBookingsPage({
       end_time,
       status,
       created_at,
+      updated_at,
       campuses(name)
     `
     )
@@ -155,9 +177,23 @@ export default async function AdminBookingsPage({
     bookingsQuery = bookingsQuery.eq('booking_date', selectedDate);
   }
 
+  if (selectedKeyword) {
+    const escapedKeyword = selectedKeyword.replace(/[%_]/g, (char) => `\\${char}`);
+    bookingsQuery = bookingsQuery.or(
+      `parent_name.ilike.%${escapedKeyword}%,child_name.ilike.%${escapedKeyword}%,phone.ilike.%${escapedKeyword}%`
+    );
+  }
+
   const { data, error } = await bookingsQuery;
 
   const bookings = (data ?? []) as BookingRow[];
+  const listStateQuery = buildListStateQuery({
+    status: selectedStatus,
+    campus: selectedCampusId,
+    date: selectedDate,
+    keyword: selectedKeyword
+  });
+  const returnTo = `/admin/bookings${listStateQuery ? `?${listStateQuery}` : ''}`;
 
   return (
     <section className="space-y-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
@@ -173,8 +209,22 @@ export default async function AdminBookingsPage({
 
       <form
         method="get"
-        className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-4"
+        className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-5"
       >
+        <div className="md:col-span-2">
+          <label htmlFor="keyword" className="mb-1 block text-xs font-medium text-slate-600">
+            Keyword
+          </label>
+          <input
+            id="keyword"
+            name="keyword"
+            type="search"
+            placeholder="parent / child / phone"
+            defaultValue={selectedKeyword}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-slate-300 focus:ring"
+          />
+        </div>
+
         <div>
           <label htmlFor="status" className="mb-1 block text-xs font-medium text-slate-600">
             Status
@@ -225,7 +275,7 @@ export default async function AdminBookingsPage({
           />
         </div>
 
-        <div className="flex items-end gap-2">
+        <div className="md:col-span-5 flex items-end gap-2">
           <button
             type="submit"
             className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
@@ -261,7 +311,7 @@ export default async function AdminBookingsPage({
                 <th className="px-4 py-3 font-medium">Course / Campus</th>
                 <th className="px-4 py-3 font-medium">Booking Time</th>
                 <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Created</th>
+                <th className="px-4 py-3 font-medium">Timeline</th>
                 <th className="px-4 py-3 font-medium">Action</th>
               </tr>
             </thead>
@@ -271,6 +321,7 @@ export default async function AdminBookingsPage({
                   <td className="px-4 py-3">
                     <p className="font-medium text-slate-800">{booking.parent_name || '-'}</p>
                     <p className="mt-1 text-xs text-slate-500">Child: {booking.child_name || '-'}</p>
+                    <p className="mt-1 text-xs text-slate-500">Phone: {booking.phone || '-'}</p>
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-medium text-slate-800">{booking.course_title_snapshot || '-'}</p>
@@ -286,12 +337,13 @@ export default async function AdminBookingsPage({
                     <span className={statusBadgeClass(booking.status)}>{statusLabel(booking.status)}</span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-600">
-                    {formatDateTime(booking.created_at)}
+                    <p>Created: {formatDateTime(booking.created_at)}</p>
+                    <p className="mt-1">Updated: {formatDateTime(booking.updated_at)}</p>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center">
                       <Link
-                        href={`/admin/bookings/${booking.id}`}
+                        href={`/admin/bookings/${booking.id}?returnTo=${encodeURIComponent(returnTo)}`}
                         className="inline-flex rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
                       >
                         查看詳情
