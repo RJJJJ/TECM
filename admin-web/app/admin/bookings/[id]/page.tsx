@@ -27,6 +27,15 @@ type BookingDetail = {
   } | null;
 };
 
+type BookingStatusLog = {
+  id: string;
+  old_status: string | null;
+  new_status: string;
+  changed_by: string | null;
+  note: string | null;
+  created_at: string;
+};
+
 function displayValue(value: string | number | null) {
   if (value === null || value === '') return '-';
   return String(value);
@@ -144,6 +153,21 @@ export default async function BookingDetailPage({
     .eq('id', params.id)
     .maybeSingle();
 
+  const { data: statusLogs, error: statusLogsError } = await supabase
+    .from('booking_status_logs')
+    .select(
+      `
+      id,
+      old_status,
+      new_status,
+      changed_by,
+      note,
+      created_at
+    `
+    )
+    .eq('booking_id', params.id)
+    .order('created_at', { ascending: false });
+
   if (error) {
     return (
       <section className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700">
@@ -157,6 +181,7 @@ export default async function BookingDetailPage({
   }
 
   const booking = data as BookingDetail;
+  const bookingStatusLogs = (statusLogs ?? []) as BookingStatusLog[];
 
   return (
     <div className="space-y-5">
@@ -267,6 +292,61 @@ export default async function BookingDetailPage({
           end_time: booking.end_time
         }}
       />
+
+      <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div>
+          <h3 className="text-lg font-semibold text-slate-900">Status History</h3>
+          <p className="mt-1 text-sm text-slate-600">Booking status change logs (latest first)</p>
+        </div>
+
+        {statusLogsError ? (
+          <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            讀取 status log 失敗：{statusLogsError.message}
+          </div>
+        ) : bookingStatusLogs.length === 0 ? (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            目前沒有 status log 紀錄。
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {bookingStatusLogs.map((log) => (
+              <article key={log.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-slate-900">
+                  <span>{statusLabel(log.old_status)}</span>
+                  <span className="text-slate-400">→</span>
+                  <span>{statusLabel(log.new_status)}</span>
+                </div>
+                <dl className="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+                  <div>
+                    <dt className="text-xs text-slate-500">Changed At</dt>
+                    <dd className="mt-1 text-slate-800">{formatDateTime(log.created_at)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-slate-500">Changed By</dt>
+                    <dd className="mt-1 break-all text-slate-800">{log.changed_by ?? 'System / Unknown'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-slate-500">Old Status</dt>
+                    <dd className="mt-1 text-slate-800">{statusLabel(log.old_status)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-slate-500">New Status</dt>
+                    <dd className="mt-1 text-slate-800">{statusLabel(log.new_status)}</dd>
+                  </div>
+                  {log.note ? (
+                    <div className="md:col-span-2">
+                      <dt className="text-xs text-slate-500">Note</dt>
+                      <dd className="mt-1 whitespace-pre-wrap rounded-md bg-white px-3 py-2 text-slate-800">
+                        {log.note}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
