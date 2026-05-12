@@ -980,3 +980,636 @@ where schemaname = 'public'
     'news_items', 'faq_topics', 'faq_items', 'bookings', 'booking_status_logs', 'notifications'
   )
 order by tablename;
+
+/* =========================================================
+   9) EXAM COHORT ATTENDANCE & MAKEUP TRACKING
+   ========================================================= */
+
+-- Teachers are intentionally kept out of staff_roles.
+-- staff_roles remains the staff/admin gate for admin web / boss operations.
+
+create table if not exists public.students (
+  id uuid primary key default gen_random_uuid(),
+  child_id uuid unique references public.children(id) on delete set null,
+  display_name text not null,
+  school_name text,
+  birth_date date,
+  status text not null default 'active' check (status in ('active', 'inactive')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.parent_student_links (
+  id uuid primary key default gen_random_uuid(),
+  parent_profile_id uuid not null references public.parent_profiles(id) on delete cascade,
+  parent_user_id uuid references auth.users(id) on delete cascade,
+  student_id uuid not null references public.students(id) on delete cascade,
+  relationship text not null default 'parent',
+  is_primary boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique(parent_profile_id, student_id)
+);
+
+create table if not exists public.teacher_profiles (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references auth.users(id) on delete cascade,
+  display_name text not null,
+  phone text,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.exam_cohorts (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  subject text not null check (subject in ('Python', 'Scratch', 'C++')),
+  level text not null,
+  exam_date date not null,
+  weekday_pattern text not null check (weekday_pattern in ('saturday', 'sunday')),
+  course_id uuid references public.courses(id) on delete set null,
+  campus_id uuid references public.campuses(id) on delete set null,
+  lead_teacher_id uuid references public.teacher_profiles(id) on delete set null,
+  status text not null default 'draft' check (status in ('draft', 'active', 'completed', 'cancelled')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.cohort_students (
+  id uuid primary key default gen_random_uuid(),
+  cohort_id uuid not null references public.exam_cohorts(id) on delete cascade,
+  student_id uuid not null references public.students(id) on delete cascade,
+  status text not null default 'active' check (status in ('active', 'withdrawn', 'completed')),
+  is_active_membership boolean not null default false,
+  joined_at date not null default current_date,
+  left_at date,
+  created_at timestamptz not null default now(),
+  unique(cohort_id, student_id)
+);
+
+create table if not exists public.lesson_plans (
+  id uuid primary key default gen_random_uuid(),
+  cohort_id uuid not null references public.exam_cohorts(id) on delete cascade,
+  sequence_no integer not null check (sequence_no between 1 and 12),
+  title text not null,
+  teaching_content text,
+  knowledge_points jsonb not null default '[]'::jsonb,
+  makeup_guidance text,
+  planned_date date,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(cohort_id, sequence_no)
+);
+
+create table if not exists public.lesson_sessions (
+  id uuid primary key default gen_random_uuid(),
+  cohort_id uuid not null references public.exam_cohorts(id) on delete cascade,
+  lesson_plan_id uuid not null references public.lesson_plans(id) on delete restrict,
+  teacher_id uuid not null references public.teacher_profiles(id) on delete restrict,
+  starts_at timestamptz not null,
+  ends_at timestamptz not null,
+  status text not null default 'scheduled' check (status in ('scheduled', 'completed', 'cancelled')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint lesson_sessions_time_check check (ends_at > starts_at)
+);
+
+create table if not exists public.attendance_records (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references public.lesson_sessions(id) on delete cascade,
+  student_id uuid not null references public.students(id) on delete cascade,
+  status text not null check (status in ('present', 'excused', 'absent', 'makeup_completed')),
+  recorded_by uuid references auth.users(id) on delete set null,
+  recorded_at timestamptz not null default now(),
+  internal_note text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(session_id, student_id)
+);
+
+create table if not exists public.makeup_tasks (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid not null references public.students(id) on delete cascade,
+  cohort_id uuid not null references public.exam_cohorts(id) on delete cascade,
+  lesson_plan_id uuid not null references public.lesson_plans(id) on delete restrict,
+  original_session_id uuid not null references public.lesson_sessions(id) on delete cascade,
+  attendance_record_id uuid not null unique references public.attendance_records(id) on delete cascade,
+  missed_status text not null check (missed_status in ('absent', 'excused')),
+  status text not null default 'pending' check (status in ('pending', 'recommended', 'scheduled', 'completed', 'waived', 'cancelled')),
+  priority text not null default 'normal' check (priority in ('normal', 'high', 'urgent')),
+  parent_visible_summary text,
+  internal_note text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.makeup_sessions (
+  id uuid primary key default gen_random_uuid(),
+  makeup_task_id uuid not null references public.makeup_tasks(id) on delete cascade,
+  student_id uuid not null references public.students(id) on delete cascade,
+  teacher_id uuid references public.teacher_profiles(id) on delete set null,
+  scheduled_at timestamptz not null,
+  completed_at timestamptz,
+  status text not null default 'scheduled' check (status in ('scheduled', 'completed', 'cancelled', 'no_show')),
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.makeup_recommendations (
+  id uuid primary key default gen_random_uuid(),
+  makeup_task_id uuid not null references public.makeup_tasks(id) on delete cascade,
+  recommended_session_id uuid references public.lesson_sessions(id) on delete set null,
+  recommendation_text text,
+  score numeric,
+  status text not null default 'open' check (status in ('open', 'accepted', 'rejected', 'expired')),
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_students_child on public.students(child_id);
+create index if not exists idx_parent_student_links_parent on public.parent_student_links(parent_profile_id);
+create index if not exists idx_parent_student_links_user on public.parent_student_links(parent_user_id);
+create index if not exists idx_teacher_profiles_user on public.teacher_profiles(user_id);
+create index if not exists idx_exam_cohorts_status_exam on public.exam_cohorts(status, exam_date);
+create index if not exists idx_exam_cohorts_teacher on public.exam_cohorts(lead_teacher_id);
+create unique index if not exists unique_active_exam_membership
+  on public.cohort_students(student_id)
+  where is_active_membership = true;
+create index if not exists idx_lesson_plans_cohort_sequence on public.lesson_plans(cohort_id, sequence_no);
+create index if not exists idx_lesson_sessions_teacher_starts on public.lesson_sessions(teacher_id, starts_at);
+create index if not exists idx_attendance_session on public.attendance_records(session_id);
+create index if not exists idx_makeup_tasks_status_priority on public.makeup_tasks(status, priority, created_at);
+create index if not exists idx_makeup_sessions_task on public.makeup_sessions(makeup_task_id);
+
+create trigger trg_students_updated_at
+before update on public.students
+for each row execute function public.set_updated_at();
+
+create trigger trg_teacher_profiles_updated_at
+before update on public.teacher_profiles
+for each row execute function public.set_updated_at();
+
+create trigger trg_exam_cohorts_updated_at
+before update on public.exam_cohorts
+for each row execute function public.set_updated_at();
+
+create trigger trg_lesson_plans_updated_at
+before update on public.lesson_plans
+for each row execute function public.set_updated_at();
+
+create trigger trg_lesson_sessions_updated_at
+before update on public.lesson_sessions
+for each row execute function public.set_updated_at();
+
+create trigger trg_attendance_records_updated_at
+before update on public.attendance_records
+for each row execute function public.set_updated_at();
+
+create trigger trg_makeup_tasks_updated_at
+before update on public.makeup_tasks
+for each row execute function public.set_updated_at();
+
+create trigger trg_makeup_sessions_updated_at
+before update on public.makeup_sessions
+for each row execute function public.set_updated_at();
+
+create or replace function public.sync_cohort_student_active_membership()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  cohort_status text;
+begin
+  select status into cohort_status from public.exam_cohorts where id = new.cohort_id;
+  new.is_active_membership = (new.status = 'active' and cohort_status = 'active');
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_cohort_students_active_membership on public.cohort_students;
+create trigger trg_cohort_students_active_membership
+before insert or update on public.cohort_students
+for each row execute function public.sync_cohort_student_active_membership();
+
+create or replace function public.refresh_cohort_active_memberships()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.cohort_students cs
+  set is_active_membership = (cs.status = 'active' and new.status = 'active')
+  where cs.cohort_id = new.id;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_exam_cohorts_refresh_memberships on public.exam_cohorts;
+create trigger trg_exam_cohorts_refresh_memberships
+after update of status on public.exam_cohorts
+for each row execute function public.refresh_cohort_active_memberships();
+
+create or replace function public.is_active_teacher()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.teacher_profiles tp
+    where tp.user_id = auth.uid() and tp.is_active = true
+  );
+$$;
+
+create or replace function public.is_teacher_for_cohort(target_cohort_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.exam_cohorts ec
+    join public.teacher_profiles tp on tp.id = ec.lead_teacher_id
+    where ec.id = target_cohort_id
+      and tp.user_id = auth.uid()
+      and tp.is_active = true
+  );
+$$;
+
+create or replace function public.is_teacher_for_session(target_session_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.lesson_sessions ls
+    join public.teacher_profiles tp on tp.id = ls.teacher_id
+    where ls.id = target_session_id
+      and tp.user_id = auth.uid()
+      and tp.is_active = true
+  );
+$$;
+
+create or replace function public.is_parent_of_student(target_student_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.parent_student_links psl
+    where psl.student_id = target_student_id
+      and psl.parent_user_id = auth.uid()
+  );
+$$;
+
+create or replace function public.ensure_makeup_task_for_attendance()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  session_row public.lesson_sessions%rowtype;
+begin
+  if new.status in ('absent', 'excused') then
+    select * into session_row from public.lesson_sessions where id = new.session_id;
+
+    insert into public.makeup_tasks (
+      student_id,
+      cohort_id,
+      lesson_plan_id,
+      original_session_id,
+      attendance_record_id,
+      missed_status,
+      status,
+      parent_visible_summary
+    )
+    values (
+      new.student_id,
+      session_row.cohort_id,
+      session_row.lesson_plan_id,
+      new.session_id,
+      new.id,
+      new.status,
+      'pending',
+      '待補課 1 節'
+    )
+    on conflict (attendance_record_id) do update set
+      missed_status = excluded.missed_status,
+      status = case
+        when public.makeup_tasks.status in ('completed', 'waived', 'cancelled') then public.makeup_tasks.status
+        else 'pending'
+      end,
+      updated_at = now();
+  elsif new.status = 'makeup_completed' then
+    update public.makeup_tasks
+    set status = 'completed', updated_at = now()
+    where attendance_record_id = new.id;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_attendance_makeup_task on public.attendance_records;
+create trigger trg_attendance_makeup_task
+after insert or update of status on public.attendance_records
+for each row execute function public.ensure_makeup_task_for_attendance();
+
+alter table public.students enable row level security;
+alter table public.parent_student_links enable row level security;
+alter table public.teacher_profiles enable row level security;
+alter table public.exam_cohorts enable row level security;
+alter table public.cohort_students enable row level security;
+alter table public.lesson_plans enable row level security;
+alter table public.lesson_sessions enable row level security;
+alter table public.attendance_records enable row level security;
+alter table public.makeup_tasks enable row level security;
+alter table public.makeup_sessions enable row level security;
+alter table public.makeup_recommendations enable row level security;
+
+create policy students_parent_summary_read
+on public.students for select
+using (public.is_parent_of_student(id) or public.is_staff_or_admin() or exists (
+  select 1 from public.cohort_students cs
+  where cs.student_id = students.id and public.is_teacher_for_cohort(cs.cohort_id)
+));
+
+create policy students_staff_manage
+on public.students for all
+using (public.is_staff_or_admin())
+with check (public.is_staff_or_admin());
+
+create policy parent_student_links_parent_read
+on public.parent_student_links for select
+using (parent_user_id = auth.uid() or public.is_staff_or_admin());
+
+create policy parent_student_links_staff_manage
+on public.parent_student_links for all
+using (public.is_staff_or_admin())
+with check (public.is_staff_or_admin());
+
+create policy teacher_profiles_self_read
+on public.teacher_profiles for select
+using (user_id = auth.uid() or public.is_staff_or_admin());
+
+create policy teacher_profiles_staff_manage
+on public.teacher_profiles for all
+using (public.is_staff_or_admin())
+with check (public.is_staff_or_admin());
+
+create policy exam_cohorts_teacher_read
+on public.exam_cohorts for select
+using (public.is_teacher_for_cohort(id) or public.is_staff_or_admin());
+
+create policy exam_cohorts_staff_manage
+on public.exam_cohorts for all
+using (public.is_staff_or_admin())
+with check (public.is_staff_or_admin());
+
+create policy cohort_students_teacher_read
+on public.cohort_students for select
+using (public.is_teacher_for_cohort(cohort_id) or public.is_staff_or_admin());
+
+create policy cohort_students_staff_manage
+on public.cohort_students for all
+using (public.is_staff_or_admin())
+with check (public.is_staff_or_admin());
+
+create policy lesson_plans_teacher_read
+on public.lesson_plans for select
+using (public.is_teacher_for_cohort(cohort_id) or public.is_staff_or_admin());
+
+create policy lesson_plans_staff_manage
+on public.lesson_plans for all
+using (public.is_staff_or_admin())
+with check (public.is_staff_or_admin());
+
+create policy lesson_sessions_teacher_read
+on public.lesson_sessions for select
+using (public.is_teacher_for_session(id) or public.is_staff_or_admin());
+
+create policy lesson_sessions_staff_manage
+on public.lesson_sessions for all
+using (public.is_staff_or_admin())
+with check (public.is_staff_or_admin());
+
+create policy attendance_teacher_write_own_session
+on public.attendance_records for all
+using (public.is_teacher_for_session(session_id) or public.is_staff_or_admin())
+with check (public.is_teacher_for_session(session_id) or public.is_staff_or_admin());
+
+create policy makeup_tasks_teacher_read
+on public.makeup_tasks for select
+using (public.is_teacher_for_cohort(cohort_id) or public.is_staff_or_admin());
+
+create policy makeup_tasks_staff_manage
+on public.makeup_tasks for all
+using (public.is_staff_or_admin())
+with check (public.is_staff_or_admin());
+
+create policy makeup_sessions_teacher_read
+on public.makeup_sessions for select
+using (
+  public.is_staff_or_admin()
+  or exists (
+    select 1 from public.makeup_tasks mt
+    where mt.id = makeup_sessions.makeup_task_id
+      and public.is_teacher_for_cohort(mt.cohort_id)
+  )
+);
+
+create policy makeup_sessions_staff_manage
+on public.makeup_sessions for all
+using (public.is_staff_or_admin())
+with check (public.is_staff_or_admin());
+
+create policy makeup_recommendations_staff_manage
+on public.makeup_recommendations for all
+using (public.is_staff_or_admin())
+with check (public.is_staff_or_admin());
+
+create or replace view public.parent_exam_attendance_summary
+with (security_invoker = true)
+as
+select
+  psl.parent_user_id,
+  s.id as student_id,
+  s.display_name as student_name,
+  ec.id as cohort_id,
+  ec.name as cohort_name,
+  count(ar.id) filter (where ar.status in ('present', 'makeup_completed')) as completed_lessons,
+  count(ar.id) filter (where ar.status in ('present', 'excused', 'absent', 'makeup_completed')) as recorded_lessons,
+  count(mt.id) filter (where mt.status in ('pending', 'recommended')) as pending_makeup_count,
+  count(mt.id) filter (where mt.status = 'scheduled') as scheduled_makeup_count,
+  case
+    when count(mt.id) filter (where mt.status in ('pending', 'recommended')) = 0 then '暫無待補課'
+    else '待補課 ' || count(mt.id) filter (where mt.status in ('pending', 'recommended')) || ' 節'
+  end as display_text
+from public.parent_student_links psl
+join public.students s on s.id = psl.student_id
+join public.cohort_students cs on cs.student_id = s.id and cs.status = 'active'
+join public.exam_cohorts ec on ec.id = cs.cohort_id
+left join public.lesson_sessions ls on ls.cohort_id = ec.id
+left join public.attendance_records ar on ar.session_id = ls.id and ar.student_id = s.id
+left join public.makeup_tasks mt on mt.student_id = s.id and mt.cohort_id = ec.id
+group by psl.parent_user_id, s.id, s.display_name, ec.id, ec.name;
+
+create or replace function public.get_parent_attendance_summary()
+returns table (
+  student_id uuid,
+  student_name text,
+  cohort_id uuid,
+  cohort_name text,
+  completed_lessons bigint,
+  recorded_lessons bigint,
+  pending_makeup_count bigint,
+  scheduled_makeup_count bigint,
+  display_text text
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    student_id,
+    student_name,
+    cohort_id,
+    cohort_name,
+    completed_lessons,
+    recorded_lessons,
+    pending_makeup_count,
+    scheduled_makeup_count,
+    display_text
+  from public.parent_exam_attendance_summary
+  where parent_user_id = auth.uid();
+$$;
+
+create or replace function public.get_teacher_today_sessions()
+returns table (
+  session_id uuid,
+  cohort_id uuid,
+  cohort_name text,
+  subject text,
+  level text,
+  lesson_plan_id uuid,
+  sequence_no integer,
+  lesson_title text,
+  teaching_content text,
+  starts_at timestamptz,
+  ends_at timestamptz,
+  attendance_count bigint,
+  student_count bigint
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    ls.id,
+    ec.id,
+    ec.name,
+    ec.subject,
+    ec.level,
+    lp.id,
+    lp.sequence_no,
+    lp.title,
+    lp.teaching_content,
+    ls.starts_at,
+    ls.ends_at,
+    count(distinct ar.id),
+    count(distinct cs.student_id)
+  from public.lesson_sessions ls
+  join public.teacher_profiles tp on tp.id = ls.teacher_id
+  join public.exam_cohorts ec on ec.id = ls.cohort_id
+  join public.lesson_plans lp on lp.id = ls.lesson_plan_id
+  left join public.cohort_students cs on cs.cohort_id = ec.id and cs.status = 'active'
+  left join public.attendance_records ar on ar.session_id = ls.id
+  where tp.user_id = auth.uid()
+    and tp.is_active = true
+    and ls.starts_at::date = current_date
+  group by ls.id, ec.id, ec.name, ec.subject, ec.level, lp.id, lp.sequence_no, lp.title, lp.teaching_content, ls.starts_at, ls.ends_at
+  order by ls.starts_at;
+$$;
+
+create or replace function public.submit_attendance(target_session_id uuid, records jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  item jsonb;
+begin
+  if not (public.is_teacher_for_session(target_session_id) or public.is_staff_or_admin()) then
+    raise exception 'not allowed to submit attendance for this session';
+  end if;
+
+  for item in select * from jsonb_array_elements(records)
+  loop
+    insert into public.attendance_records (
+      session_id,
+      student_id,
+      status,
+      recorded_by,
+      recorded_at,
+      internal_note
+    )
+    values (
+      target_session_id,
+      (item->>'student_id')::uuid,
+      item->>'status',
+      auth.uid(),
+      now(),
+      nullif(item->>'internal_note', '')
+    )
+    on conflict (session_id, student_id) do update set
+      status = excluded.status,
+      recorded_by = excluded.recorded_by,
+      recorded_at = excluded.recorded_at,
+      internal_note = excluded.internal_note,
+      updated_at = now();
+  end loop;
+end;
+$$;
+
+create or replace function public.get_lesson_session_students(target_session_id uuid)
+returns table (
+  student_id uuid,
+  display_name text,
+  school_name text,
+  attendance_status text
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    s.id,
+    s.display_name,
+    s.school_name,
+    ar.status
+  from public.lesson_sessions ls
+  join public.cohort_students cs on cs.cohort_id = ls.cohort_id and cs.status = 'active'
+  join public.students s on s.id = cs.student_id
+  left join public.attendance_records ar on ar.session_id = ls.id and ar.student_id = s.id
+  where ls.id = target_session_id
+    and (public.is_teacher_for_session(ls.id) or public.is_staff_or_admin())
+  order by s.display_name;
+$$;

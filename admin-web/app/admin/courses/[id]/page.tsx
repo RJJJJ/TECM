@@ -83,7 +83,7 @@ export default async function CourseDetailPage({
     notFound();
   }
 
-  const course = courseData as CourseDetail;
+  const course = courseData as unknown as CourseDetail;
   const tags = (tagsData ?? []) as CourseTag[];
   const campuses = (campusData ?? []) as CampusOption[];
 

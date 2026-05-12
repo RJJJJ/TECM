@@ -3,6 +3,7 @@ import Combine
 
 struct RootTabView: View {
     @StateObject private var router = TabRouter()
+    @EnvironmentObject private var authViewModel: AuthViewModel
 
     var body: some View {
         TabView(selection: tabSelection) {
@@ -37,6 +38,16 @@ struct RootTabView: View {
                 Label(AppTab.agent.title, systemImage: AppTab.agent.icon)
             }
             .tag(AppTab.agent)
+
+            if authViewModel.currentRole == .teacher || authViewModel.currentRole == .admin {
+                NavigationStack(path: $router.teacherPath) {
+                    TeacherTodayClassView()
+                }
+                .tabItem {
+                    Label(AppTab.teacher.title, systemImage: AppTab.teacher.icon)
+                }
+                .tag(AppTab.teacher)
+            }
 
             NavigationStack(path: $router.parentCenterPath) {
                 ParentCenterView()

@@ -336,3 +336,150 @@ struct BookingInsertPayload: Encodable {
         case status
     }
 }
+
+struct StaffRoleLookupDTO: Decodable {
+    let role: String
+    let isActive: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case role
+        case isActive = "is_active"
+    }
+}
+
+struct TeacherProfileLookupDTO: Decodable {
+    let id: UUID
+    let userID: UUID
+    let displayName: String
+    let isActive: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userID = "user_id"
+        case displayName = "display_name"
+        case isActive = "is_active"
+    }
+}
+
+struct TeacherTodaySessionDTO: Decodable {
+    let sessionID: UUID
+    let cohortID: UUID
+    let cohortName: String
+    let subject: String
+    let level: String
+    let lessonPlanID: UUID
+    let sequenceNo: Int
+    let lessonTitle: String
+    let teachingContent: String?
+    let startsAt: Date
+    let endsAt: Date
+    let attendanceCount: Int
+    let studentCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case cohortID = "cohort_id"
+        case cohortName = "cohort_name"
+        case subject
+        case level
+        case lessonPlanID = "lesson_plan_id"
+        case sequenceNo = "sequence_no"
+        case lessonTitle = "lesson_title"
+        case teachingContent = "teaching_content"
+        case startsAt = "starts_at"
+        case endsAt = "ends_at"
+        case attendanceCount = "attendance_count"
+        case studentCount = "student_count"
+    }
+
+    func toModel() -> TeacherTodaySession {
+        TeacherTodaySession(
+            id: sessionID,
+            cohortID: cohortID,
+            cohortName: cohortName,
+            subject: subject,
+            level: level,
+            lessonPlanID: lessonPlanID,
+            sequenceNo: sequenceNo,
+            lessonTitle: lessonTitle,
+            teachingContent: teachingContent,
+            startsAt: startsAt,
+            endsAt: endsAt,
+            attendanceCount: attendanceCount,
+            studentCount: studentCount
+        )
+    }
+}
+
+struct TeacherSessionStudentDTO: Decodable {
+    let studentID: UUID
+    let displayName: String
+    let schoolName: String?
+    let attendanceStatus: String?
+
+    enum CodingKeys: String, CodingKey {
+        case studentID = "student_id"
+        case displayName = "display_name"
+        case schoolName = "school_name"
+        case attendanceStatus = "attendance_status"
+    }
+
+    func toModel() -> TeacherSessionStudent {
+        TeacherSessionStudent(
+            id: studentID,
+            displayName: displayName,
+            schoolName: schoolName,
+            status: ExamAttendanceStatus(rawValue: attendanceStatus ?? "") ?? .present
+        )
+    }
+}
+
+struct AttendanceSubmitPayload: Encodable {
+    let studentID: UUID
+    let status: String
+    let internalNote: String?
+
+    enum CodingKeys: String, CodingKey {
+        case studentID = "student_id"
+        case status
+        case internalNote = "internal_note"
+    }
+}
+
+struct ParentExamAttendanceSummaryDTO: Decodable {
+    let studentID: UUID
+    let studentName: String
+    let cohortID: UUID
+    let cohortName: String
+    let completedLessons: Int
+    let recordedLessons: Int
+    let pendingMakeupCount: Int
+    let scheduledMakeupCount: Int
+    let displayText: String
+
+    enum CodingKeys: String, CodingKey {
+        case studentID = "student_id"
+        case studentName = "student_name"
+        case cohortID = "cohort_id"
+        case cohortName = "cohort_name"
+        case completedLessons = "completed_lessons"
+        case recordedLessons = "recorded_lessons"
+        case pendingMakeupCount = "pending_makeup_count"
+        case scheduledMakeupCount = "scheduled_makeup_count"
+        case displayText = "display_text"
+    }
+
+    func toModel() -> ParentExamAttendanceSummary {
+        ParentExamAttendanceSummary(
+            studentID: studentID,
+            studentName: studentName,
+            cohortID: cohortID,
+            cohortName: cohortName,
+            completedLessons: completedLessons,
+            recordedLessons: recordedLessons,
+            pendingMakeupCount: pendingMakeupCount,
+            scheduledMakeupCount: scheduledMakeupCount,
+            displayText: displayText
+        )
+    }
+}

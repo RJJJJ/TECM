@@ -1,0 +1,12 @@
+{
+  "active": true,
+  "mode": "ralplan",
+  "current_phase": "planning",
+  "started_at": "2026-05-12T13:15:26.304Z",
+  "updated_at": "2026-05-12T13:15:26.304Z",
+  "session_id": "omx-1778588686160-kd6spw",
+  "thread_id": "019e1c25-b076-7893-930b-30eebb1308b5",
+  "turn_id": "019e1c38-1d22-71a3-9b23-44a0d3a372be",
+  "iteration": 1,
+  "last_turn_at": "2026-05-12T13:47:15.539Z"
+}

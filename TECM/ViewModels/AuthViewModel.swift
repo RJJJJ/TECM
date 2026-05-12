@@ -5,13 +5,19 @@ import Combine
 @MainActor
 final class AuthViewModel: ObservableObject {
     @Published private(set) var currentUser: User?
+    @Published private(set) var currentRole: UserAppRole = .guest
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
 
     private let authService: AuthServicing
+    private let userRoleService: UserRoleServicing
 
-    init(authService: AuthServicing = AuthService()) {
+    init(
+        authService: AuthServicing = AuthService(),
+        userRoleService: UserRoleServicing = UserRoleService()
+    ) {
         self.authService = authService
+        self.userRoleService = userRoleService
         Task {
             await restoreSession()
         }
@@ -24,8 +30,10 @@ final class AuthViewModel: ObservableObject {
 
         do {
             currentUser = try await authService.signIn(email: email, password: password)
+            await resolveRole()
         } catch {
             currentUser = nil
+            currentRole = .guest
             errorMessage = error.localizedDescription
         }
     }
@@ -38,6 +46,7 @@ final class AuthViewModel: ObservableObject {
         do {
             try await authService.signOut()
             currentUser = nil
+            currentRole = .guest
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -48,8 +57,23 @@ final class AuthViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             currentUser = try await authService.restoreSession()
+            await resolveRole()
         } catch {
             currentUser = nil
+            currentRole = .guest
+        }
+    }
+
+    func resolveRole() async {
+        guard let userID = currentUser?.id else {
+            currentRole = .guest
+            return
+        }
+
+        do {
+            currentRole = try await userRoleService.resolveRole(userID: userID)
+        } catch {
+            currentRole = .guest
         }
     }
 }

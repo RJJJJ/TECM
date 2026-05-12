@@ -66,7 +66,7 @@ export default async function AdminCoursesPage() {
     supabase.from('campuses').select('id, name, is_active').order('name', { ascending: true })
   ]);
 
-  const courses = (courseData ?? []) as CourseRow[];
+  const courses = (courseData ?? []) as unknown as CourseRow[];
   const campuses = (campusData ?? []) as CampusOption[];
 
   return (

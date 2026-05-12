@@ -180,7 +180,7 @@ export default async function BookingDetailPage({
     notFound();
   }
 
-  const booking = data as BookingDetail;
+  const booking = data as unknown as BookingDetail;
   const bookingStatusLogs = (statusLogs ?? []) as BookingStatusLog[];
 
   return (

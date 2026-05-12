@@ -73,7 +73,7 @@ export default async function AdminFaqPage() {
   ]);
 
   const topics = (topicData ?? []) as FaqTopicRow[];
-  const items = ((itemData ?? []) as FaqItemRow[]).sort((a, b) => {
+  const items = ((itemData ?? []) as unknown as FaqItemRow[]).sort((a, b) => {
     const topicSortA = a.faq_topics?.sort_order ?? Number.MAX_SAFE_INTEGER;
     const topicSortB = b.faq_topics?.sort_order ?? Number.MAX_SAFE_INTEGER;
     if (topicSortA !== topicSortB) return topicSortA - topicSortB;

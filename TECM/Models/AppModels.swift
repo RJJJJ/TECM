@@ -182,6 +182,86 @@ struct ParentReservationSummaryItem: Identifiable {
     }
 }
 
+enum UserAppRole: String {
+    case guest
+    case parent
+    case teacher
+    case admin
+}
+
+enum ExamAttendanceStatus: String, CaseIterable, Identifiable, Codable {
+    case present
+    case excused
+    case absent
+    case makeupCompleted = "makeup_completed"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .present: return "Present"
+        case .excused: return "Excused"
+        case .absent: return "Absent"
+        case .makeupCompleted: return "Makeup completed"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .present: return "checkmark.circle.fill"
+        case .excused: return "calendar.badge.clock"
+        case .absent: return "xmark.circle.fill"
+        case .makeupCompleted: return "checkmark.seal.fill"
+        }
+    }
+}
+
+struct TeacherTodaySession: Identifiable {
+    let id: UUID
+    let cohortID: UUID
+    let cohortName: String
+    let subject: String
+    let level: String
+    let lessonPlanID: UUID
+    let sequenceNo: Int
+    let lessonTitle: String
+    let teachingContent: String?
+    let startsAt: Date
+    let endsAt: Date
+    let attendanceCount: Int
+    let studentCount: Int
+
+    var timeRangeText: String {
+        "\(startsAt.formatted(date: .omitted, time: .shortened)) - \(endsAt.formatted(date: .omitted, time: .shortened))"
+    }
+}
+
+struct TeacherSessionStudent: Identifiable {
+    let id: UUID
+    let displayName: String
+    let schoolName: String?
+    var status: ExamAttendanceStatus
+}
+
+struct ParentExamAttendanceSummary: Identifiable {
+    let id = UUID()
+    let studentID: UUID
+    let studentName: String
+    let cohortID: UUID
+    let cohortName: String
+    let completedLessons: Int
+    let recordedLessons: Int
+    let pendingMakeupCount: Int
+    let scheduledMakeupCount: Int
+    let displayText: String
+
+    var attendanceRateText: String {
+        guard recordedLessons > 0 else { return "暫未開始" }
+        let value = Double(completedLessons) / Double(recordedLessons)
+        return value.formatted(.percent.precision(.fractionLength(0)))
+    }
+}
+
 struct LearningResource: Identifiable {
     let id = UUID()
     let title: String

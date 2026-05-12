@@ -186,7 +186,7 @@ export default async function AdminBookingsPage({
 
   const { data, error } = await bookingsQuery;
 
-  const bookings = (data ?? []) as BookingRow[];
+  const bookings = (data ?? []) as unknown as BookingRow[];
   const listStateQuery = buildListStateQuery({
     status: selectedStatus,
     campus: selectedCampusId,

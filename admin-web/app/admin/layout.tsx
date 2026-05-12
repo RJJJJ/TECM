@@ -41,6 +41,24 @@ export default async function AdminLayout({
                 Courses
               </Link>
               <Link
+                href="/admin/exam-cohorts"
+                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              >
+                Exam Cohorts
+              </Link>
+              <Link
+                href="/admin/makeup"
+                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              >
+                Makeup
+              </Link>
+              <Link
+                href="/admin/teachers"
+                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              >
+                Teachers
+              </Link>
+              <Link
                 href="/admin/faq"
                 className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
               >

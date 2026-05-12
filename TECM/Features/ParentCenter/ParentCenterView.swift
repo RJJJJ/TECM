@@ -29,6 +29,8 @@ struct ParentCenterView: View {
                 }
             } else if let profile = viewModel.profile {
                 profileCard(profile)
+                ParentAttendanceSummaryView(summaries: viewModel.examSummaries)
+                ParentMakeupReminderView(summaries: viewModel.examSummaries)
                 serviceEntry
                 notificationsSection
             } else {

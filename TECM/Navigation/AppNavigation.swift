@@ -6,6 +6,7 @@ enum AppTab: Int, CaseIterable {
     case courses
     case booking
     case agent
+    case teacher
     case parentCenter
 
     var title: String {
@@ -14,6 +15,7 @@ enum AppTab: Int, CaseIterable {
         case .courses: return "課程"
         case .booking: return "預約"
         case .agent: return "TECM AGENT"
+        case .teacher: return "Teacher"
         case .parentCenter: return "家長中心"
         }
     }
@@ -24,6 +26,7 @@ enum AppTab: Int, CaseIterable {
         case .courses: return "book.closed.fill"
         case .booking: return "calendar.badge.plus"
         case .agent: return "bubble.left.and.bubble.right.fill"
+        case .teacher: return "checklist.checked"
         case .parentCenter: return "person.crop.circle.fill"
         }
     }
@@ -36,6 +39,7 @@ final class TabRouter: ObservableObject {
     @Published var coursesPath = NavigationPath()
     @Published var bookingPath = NavigationPath()
     @Published var agentPath = NavigationPath()
+    @Published var teacherPath = NavigationPath()
     @Published var parentCenterPath = NavigationPath()
 
     func select(_ tab: AppTab) {
@@ -60,6 +64,8 @@ final class TabRouter: ObservableObject {
             bookingPath = NavigationPath()
         case .agent:
             agentPath = NavigationPath()
+        case .teacher:
+            teacherPath = NavigationPath()
         case .parentCenter:
             parentCenterPath = NavigationPath()
         }
