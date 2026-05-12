@@ -4,7 +4,7 @@
     "omx-1778588686160-kd6spw": {
       "session_id": "omx-1778588686160-kd6spw",
       "leader_thread_id": "019e1c3a-0d7b-7723-b0b9-53ae5176a8c6",
-      "updated_at": "2026-05-12T13:47:15.532Z",
+      "updated_at": "2026-05-12T13:57:48.380Z",
       "threads": {
         "019e1c3a-0d7b-7723-b0b9-53ae5176a8c6": {
           "thread_id": "019e1c3a-0d7b-7723-b0b9-53ae5176a8c6",
@@ -50,9 +50,9 @@
           "thread_id": "019e1c25-b076-7893-930b-30eebb1308b5",
           "kind": "subagent",
           "first_seen_at": "2026-05-12T13:15:26.288Z",
-          "last_seen_at": "2026-05-12T13:47:15.532Z",
-          "last_turn_id": "019e1c54-552d-7ca2-951a-5e67c6f4e0e3",
-          "turn_count": 2
+          "last_seen_at": "2026-05-12T13:57:48.380Z",
+          "last_turn_id": "019e1c77-475a-7481-acb6-c2bdbeaca88a",
+          "turn_count": 3
         }
       }
     }
