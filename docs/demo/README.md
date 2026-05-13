@@ -59,3 +59,14 @@ TECM 是一個面向澳門教育中心的 parent-facing iOS app + Admin Web + Su
 - [Final iOS regression report](../ios-final-regression/final-ios-regression-report.md)
 
 Status: pending execution in VM / Xcode. Do not treat iOS regression as passed until the final report is completed.
+## v1.1 readiness preparation
+
+Preparation packages for the next phase are available:
+
+- [v1.1 readiness](../v1.1-readiness/README.md)
+- [Staging deployment](../staging-deployment/README.md)
+- [Production automation](../production-automation/README.md)
+- [Real AI provider](../real-ai-provider/README.md)
+- [Testing](../testing/README.md)
+
+Status: preparation only. iOS regression, staging, real AI provider, production scheduler, and automated test coverage are not yet complete.

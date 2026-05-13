@@ -56,3 +56,12 @@ This is a local release candidate, not a production release.
 5. Add real AI provider node after staff approves prompt/output format.
 6. Add scheduled daily digest only after manual workflow remains stable.
 7. Perform production readiness review before public launch.
+## v1.1 readiness references
+
+- [v1.1 readiness package](../v1.1-readiness/README.md)
+- [Staging deployment package](../staging-deployment/README.md)
+- [Production automation package](../production-automation/README.md)
+- [Real AI provider package](../real-ai-provider/README.md)
+- [Testing package](../testing/README.md)
+
+These packages prepare next steps only; they do not mean iOS regression, staging deployment, production scheduler, real AI provider integration, or full automated tests have passed.

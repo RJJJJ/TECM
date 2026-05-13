@@ -22,3 +22,10 @@
 - dashboard metrics
 - test harness
 - production observability
+## v1.1 readiness references
+
+- [v1.1 readiness package](../v1.1-readiness/README.md)
+- [Staging deployment package](../staging-deployment/README.md)
+- [Production automation package](../production-automation/README.md)
+- [Real AI provider package](../real-ai-provider/README.md)
+- [Testing package](../testing/README.md)

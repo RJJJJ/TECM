@@ -50,3 +50,12 @@ TECM v1 keeps humans in the loop. The workflows generate `suggested_message` or 
 - [TECM AI Operations Demo Package](../demo/README.md)
 - [UAT checklist](../demo/uat-checklist.md)
 - [Local runbook](../demo/local-runbook.md)
+## v1.1 automation readiness
+
+- [v1.1 readiness](../v1.1-readiness/README.md)
+- [Staging n8n configuration](../staging-deployment/n8n-staging-configuration.md)
+- [Production automation preparation](../production-automation/README.md)
+- [Real AI provider preparation](../real-ai-provider/README.md)
+- [n8n test plan](../testing/n8n-test-plan.md)
+
+Status: these are preparation documents. The production scheduler and real AI provider are not active.

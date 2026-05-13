@@ -72,3 +72,10 @@ It does not add product features and should not require Swift code changes.
 ## Important note
 
 This package is documentation only. iOS regression remains pending until it is executed in VM / Xcode and the final report is filled in.
+## v1.1 readiness links
+
+- [v1.1 readiness roadmap](../v1.1-readiness/README.md)
+- [Staging deployment preparation](../staging-deployment/README.md)
+- [Testing preparation](../testing/README.md)
+
+Status: this iOS regression package is still pending VM / Xcode execution.
