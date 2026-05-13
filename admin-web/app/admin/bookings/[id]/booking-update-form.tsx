@@ -61,6 +61,8 @@ export default function BookingUpdateForm({ booking }: Props) {
   const [state, action] = useFormState(formAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [showSavedHint, setShowSavedHint] = useState(false);
+  const [selectedStatus, setSelectedStatus] = useState(booking.status ?? 'pending');
+  const shouldDefaultNotifyParent = booking.status !== 'confirmed' && selectedStatus === 'confirmed';
 
   useEffect(() => {
     if (state.status === 'success') {
@@ -102,7 +104,8 @@ export default function BookingUpdateForm({ booking }: Props) {
             <select
               id="status"
               name="status"
-              defaultValue={booking.status ?? 'pending'}
+              value={selectedStatus}
+              onChange={(event) => setSelectedStatus(event.target.value)}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
             >
               <option value="pending">Pending</option>
@@ -166,6 +169,24 @@ export default function BookingUpdateForm({ booking }: Props) {
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
             />
           </div>
+
+          {selectedStatus === 'confirmed' ? (
+            <label className="flex items-start gap-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-sm text-blue-900 md:col-span-2">
+              <input
+                type="checkbox"
+                name="notify_parent_on_confirmed"
+                value="true"
+                defaultChecked={shouldDefaultNotifyParent}
+                className="mt-0.5 rounded border-blue-300"
+              />
+              <span>
+                <span className="block font-medium">確認預約時同步建立 App 內家長通知</span>
+                <span className="mt-1 block text-xs text-blue-700">
+                  只會發送正式的預約確認通知，不會發送 AI 內部跟進建議；同一 booking 會避免重複通知。
+                </span>
+              </span>
+            </label>
+          ) : null}
         </div>
 
         <div className="flex flex-wrap items-center gap-3">

@@ -190,3 +190,126 @@ Future work can add a separate protected endpoint for parent notifications, but 
 - [ ] Invalid automation secret is rejected.
 - [ ] Service role secret is server-only and not exposed to frontend.
 - [ ] iOS booking submission flow is unchanged.
+
+## 11. Follow-up Dashboard
+
+Admin Web now includes a daily operations queue:
+
+```text
+/admin/follow-ups
+```
+
+The dashboard shows all `follow_up_tasks` and defaults to `status=open`. Staff can filter by:
+
+- status: all / open / done / dismissed
+- priority: all / high / medium / low
+- channel: all / WeChat / WhatsApp / phone / in-app
+- booking date
+- keyword across parent name, phone, child name, course, and intent summary
+
+The page also shows summary cards for open tasks, high-priority open tasks, today booking follow-ups, and completed tasks.
+
+## 12. Recommended staff workflow
+
+1. Open `/admin/follow-ups` every morning.
+2. Handle high-priority tasks first.
+3. Review the AI suggestion and copy the WeChat / WhatsApp wording.
+4. Contact the parent manually by WeChat, WhatsApp, or phone.
+5. Mark the task as done after contact.
+6. Dismiss irrelevant or stale tasks.
+7. Open the linked Booking detail when staff need full booking context.
+
+## 13. Parent notification distinction
+
+`follow_up_tasks` are internal staff-only tasks. They may include AI intent summaries, suggested wording, and internal notes.
+
+`notifications` are parent-facing App notifications. Do not send AI internal notes or follow-up suggestions to parents.
+
+When staff confirm a booking in Admin Booking Detail, the booking update form can create a parent-facing App notification:
+
+```text
+預約已確認
+```
+
+The implementation uses `booking_parent_notifications` to avoid duplicate `booking_confirmed` notifications for the same booking.
+
+## 14. Daily digest endpoint
+
+n8n can request a staff-copyable digest without sending anything automatically:
+
+```text
+POST /api/automation/follow-up-digest
+```
+
+Security is the same as the other automation endpoints:
+
+```http
+x-tecm-automation-secret: <TECM_AUTOMATION_SECRET>
+```
+
+Request body is optional:
+
+```json
+{
+  "status": "open",
+  "date": "2026-05-13",
+  "limit": 20
+}
+```
+
+`limit` defaults to 20 and is capped at 50.
+
+Example curl:
+
+```bash
+curl -X POST http://localhost:3000/api/automation/follow-up-digest \
+  -H "Content-Type: application/json" \
+  -H "x-tecm-automation-secret: $TECM_AUTOMATION_SECRET" \
+  -d '{"status":"open","date":"2026-05-13","limit":20}'
+```
+
+Example response shape:
+
+```json
+{
+  "ok": true,
+  "summary": {
+    "open_count": 3,
+    "high_priority_open_count": 1,
+    "today_booking_follow_up_count": 2,
+    "done_count": 5
+  },
+  "items": [
+    {
+      "id": "...",
+      "booking_id": "...",
+      "priority": "high",
+      "channel": "wechat_manual",
+      "parent_name": "陳太",
+      "phone": "...",
+      "child_name": "...",
+      "course_title_snapshot": "Python 入門",
+      "booking_date": "2026-05-13",
+      "start_time": "10:00:00",
+      "intent_summary": "家長想確認孩子程度是否適合",
+      "suggested_message": "...",
+      "suggested_next_steps": ["確認時段", "詢問編程經驗"]
+    }
+  ],
+  "digest_text": "今日 TECM 跟進摘要：..."
+}
+```
+
+n8n can post `digest_text` into an internal staff workflow or prepare it for staff to manually copy into a WeChat work group. The endpoint does not send WeChat, WhatsApp, Telegram, or email.
+
+## 15. Updated acceptance checklist
+
+- [ ] `/admin/follow-ups` loads and defaults to open tasks.
+- [ ] Dashboard filters work and preserve URL state.
+- [ ] Copy suggested message works from dashboard.
+- [ ] Mark done / dismiss works from dashboard.
+- [ ] Booking Detail follow-up card still works.
+- [ ] Booking confirmed can create parent App notification without duplicates.
+- [ ] Invalid automation secret is rejected by digest endpoint.
+- [ ] Digest endpoint returns useful Traditional Chinese `digest_text`.
+- [ ] iOS booking flow remains unchanged.

@@ -11,6 +11,77 @@ export type UpdateFormState = {
 
 const ALLOWED_STATUSES = new Set(['pending', 'confirmed', 'completed', 'cancelled']);
 
+type BookingForNotification = {
+  id: string;
+  parent_id: string | null;
+  status: string | null;
+  course_title_snapshot: string | null;
+  booking_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  campuses: {
+    name: string | null;
+  } | null;
+};
+
+function formatNotificationTime(timeValue: string | null) {
+  if (!timeValue) return '-';
+  return timeValue.slice(0, 5);
+}
+
+function buildBookingConfirmedNotificationDetail(booking: BookingForNotification) {
+  const course = booking.course_title_snapshot ?? '體驗課';
+  const campus = booking.campuses?.name ?? 'TECM';
+  const date = booking.booking_date ?? '待確認日期';
+  const start = formatNotificationTime(booking.start_time);
+  const end = formatNotificationTime(booking.end_time);
+
+  return `您的${course}預約已確認。地點：${campus}；日期：${date}；時間：${start} - ${end}。如需更改，請聯絡 TECM staff。`;
+}
+
+async function createBookingConfirmedParentNotification(
+  supabase: ReturnType<typeof createServerSupabaseClient>,
+  booking: BookingForNotification
+) {
+  if (!booking.parent_id) return;
+
+  const { data: existingBridge } = await supabase
+    .from('booking_parent_notifications')
+    .select('id')
+    .eq('booking_id', booking.id)
+    .eq('type', 'booking_confirmed')
+    .maybeSingle();
+
+  if (existingBridge) return;
+
+  const { data: notification, error: notificationError } = await supabase
+    .from('notifications')
+    .insert({
+      parent_id: booking.parent_id,
+      title: '預約已確認',
+      detail: buildBookingConfirmedNotificationDetail(booking),
+      is_read: false
+    })
+    .select('id')
+    .single();
+
+  if (notificationError || !notification) {
+    throw new Error(notificationError?.message ?? 'Failed to create parent notification');
+  }
+
+  const { error: bridgeError } = await supabase
+    .from('booking_parent_notifications')
+    .insert({
+      booking_id: booking.id,
+      notification_id: notification.id,
+      type: 'booking_confirmed'
+    });
+
+  if (bridgeError && bridgeError.code !== '23505') {
+    throw new Error(bridgeError.message);
+  }
+}
+
 export async function updateBookingAction(
   bookingId: string,
   _prevState: UpdateFormState,
@@ -21,6 +92,7 @@ export async function updateBookingAction(
   const bookingDate = String(formData.get('booking_date') ?? '').trim();
   const startTime = String(formData.get('start_time') ?? '').trim();
   const endTime = String(formData.get('end_time') ?? '').trim();
+  const shouldNotifyParent = formData.get('notify_parent_on_confirmed') === 'true';
 
   if (!ALLOWED_STATUSES.has(status)) {
     return {
@@ -56,6 +128,30 @@ export async function updateBookingAction(
     };
   }
 
+  const { data: existingBooking, error: existingBookingError } = await supabase
+    .from('bookings')
+    .select(
+      `
+      id,
+      parent_id,
+      status,
+      course_title_snapshot,
+      booking_date,
+      start_time,
+      end_time,
+      campuses(name)
+    `
+    )
+    .eq('id', bookingId)
+    .maybeSingle();
+
+  if (existingBookingError || !existingBooking) {
+    return {
+      status: 'error',
+      message: existingBookingError?.message ?? '找不到 booking。'
+    };
+  }
+
   const { data, error } = await supabase
     .from('bookings')
     .update({
@@ -76,6 +172,29 @@ export async function updateBookingAction(
     };
   }
 
+  if (
+    status === 'confirmed' &&
+    shouldNotifyParent &&
+    (existingBooking as unknown as BookingForNotification).status !== 'confirmed'
+  ) {
+    try {
+      await createBookingConfirmedParentNotification(supabase, {
+        ...((existingBooking as unknown) as BookingForNotification),
+        booking_date: bookingDate,
+        start_time: `${startTime}:00`,
+        end_time: `${endTime}:00`
+      });
+    } catch (notificationError) {
+      return {
+        status: 'error',
+        message:
+          notificationError instanceof Error
+            ? `Booking 已更新，但建立家長通知失敗：${notificationError.message}`
+            : 'Booking 已更新，但建立家長通知失敗。'
+      };
+    }
+  }
+
   revalidatePath('/admin/bookings');
   revalidatePath(`/admin/bookings/${bookingId}`);
 
@@ -83,44 +202,4 @@ export async function updateBookingAction(
     status: 'success',
     message: 'Booking 已更新，列表與詳情資料已同步。'
   };
-}
-
-
-async function updateFollowUpTaskStatus(
-  taskId: string,
-  bookingId: string,
-  status: 'done' | 'dismissed'
-) {
-  const supabase = createServerSupabaseClient();
-  const access = await verifyActiveStaffAccess(supabase);
-
-  if (!access.allowed) {
-    await supabase.auth.signOut();
-    throw new Error('Not allowed to update follow-up tasks');
-  }
-
-  const timestampField = status === 'done' ? 'completed_at' : 'dismissed_at';
-  const { error } = await supabase
-    .from('follow_up_tasks')
-    .update({
-      status,
-      [timestampField]: new Date().toISOString()
-    })
-    .eq('id', taskId)
-    .eq('booking_id', bookingId);
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  revalidatePath('/admin/bookings');
-  revalidatePath(`/admin/bookings/${bookingId}`);
-}
-
-export async function markFollowUpTaskDoneAction(taskId: string, bookingId: string) {
-  await updateFollowUpTaskStatus(taskId, bookingId, 'done');
-}
-
-export async function dismissFollowUpTaskAction(taskId: string, bookingId: string) {
-  await updateFollowUpTaskStatus(taskId, bookingId, 'dismissed');
 }

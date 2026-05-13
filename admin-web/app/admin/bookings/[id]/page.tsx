@@ -2,8 +2,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import BookingUpdateForm from './booking-update-form';
-import FollowUpCopyButton from './follow-up-copy-button';
-import { dismissFollowUpTaskAction, markFollowUpTaskDoneAction } from './actions';
+import FollowUpCopyButton from '../../follow-up-copy-button';
+import { dismissFollowUpTaskAction, markFollowUpTaskDoneAction } from './follow-up-actions';
 import {
   type FollowUpTask,
   followUpChannelLabel,

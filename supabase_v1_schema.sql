@@ -192,6 +192,17 @@ create table if not exists public.notifications (
   created_at timestamptz not null default now()
 );
 
+-- 2.14 booking_parent_notifications
+-- Bridge table to prevent duplicate parent-facing notifications for the same booking event.
+create table if not exists public.booking_parent_notifications (
+  id uuid primary key default gen_random_uuid(),
+  booking_id uuid not null references public.bookings(id) on delete cascade,
+  notification_id uuid not null references public.notifications(id) on delete cascade,
+  type text not null check (type in ('booking_confirmed')),
+  created_at timestamptz not null default now(),
+  unique (booking_id, type)
+);
+
 /* =========================================================
    3) INDEXES
    ========================================================= */
@@ -237,6 +248,8 @@ create unique index if not exists idx_follow_up_tasks_one_open_auto_per_booking
 -- notifications
 create index if not exists idx_notifications_parent_read_created
   on public.notifications(parent_id, is_read, created_at desc);
+create index if not exists idx_booking_parent_notifications_booking_type
+  on public.booking_parent_notifications(booking_id, type);
 
 /* =========================================================
    4) TRIGGERS / FUNCTIONS
@@ -362,6 +375,7 @@ alter table public.bookings enable row level security;
 alter table public.booking_status_logs enable row level security;
 alter table public.follow_up_tasks enable row level security;
 alter table public.notifications enable row level security;
+alter table public.booking_parent_notifications enable row level security;
 
 /* =========================================================
    6) POLICIES
@@ -569,6 +583,12 @@ with check (public.is_staff_or_admin());
 
 create policy notifications_staff_manage
 on public.notifications
+for all
+using (public.is_staff_or_admin())
+with check (public.is_staff_or_admin());
+
+create policy booking_parent_notifications_staff_manage
+on public.booking_parent_notifications
 for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
@@ -1065,7 +1085,7 @@ from information_schema.tables
 where table_schema = 'public'
   and table_name in (
     'staff_roles', 'parent_profiles', 'children', 'campuses', 'courses', 'course_tags',
-    'news_items', 'faq_topics', 'faq_items', 'bookings', 'booking_status_logs', 'follow_up_tasks', 'notifications'
+    'news_items', 'faq_topics', 'faq_items', 'bookings', 'booking_status_logs', 'follow_up_tasks', 'notifications', 'booking_parent_notifications'
   )
 order by table_name;
 
@@ -1125,7 +1145,7 @@ from pg_tables
 where schemaname = 'public'
   and tablename in (
     'staff_roles', 'parent_profiles', 'children', 'campuses', 'courses', 'course_tags',
-    'news_items', 'faq_topics', 'faq_items', 'bookings', 'booking_status_logs', 'follow_up_tasks', 'notifications'
+    'news_items', 'faq_topics', 'faq_items', 'bookings', 'booking_status_logs', 'follow_up_tasks', 'notifications', 'booking_parent_notifications'
   )
 order by tablename;
 
