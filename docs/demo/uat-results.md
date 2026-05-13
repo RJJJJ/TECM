@@ -57,7 +57,7 @@
 
 ## 7. Remaining pending
 
-- iOS VM/Xcode regression
+- iOS VM/Xcode regression (`docs/ios-final-regression/` package prepared; execution still pending)
 - staging deployment
 - real AI provider node
 - production scheduler

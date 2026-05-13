@@ -2,7 +2,7 @@
 
 ## Current limitations
 
-- iOS VM/Xcode final regression pending
+- iOS VM/Xcode final regression pending; checklist package prepared in `docs/ios-final-regression/`
 - n8n workflow v1 manual only
 - AI output currently simulated in workflow template
 - no production scheduler
@@ -17,7 +17,7 @@
 - real AI provider node
 - scheduled daily digest
 - staging deployment
-- iOS notification regression
+- iOS notification regression using `docs/ios-final-regression/notification-regression.md`
 - staff assignment / owner field
 - dashboard metrics
 - test harness

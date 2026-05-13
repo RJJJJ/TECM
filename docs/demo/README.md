@@ -49,3 +49,13 @@ TECM 是一個面向澳門教育中心的 parent-facing iOS app + Admin Web + Su
 - [Final demo run record](final-demo-run-record.md)
 - [Local release candidate summary](release-candidate-summary.md)
 - [Screenshots README](screenshots/README.md)
+## iOS final regression package
+
+- [iOS final regression README](../ios-final-regression/README.md)
+- [Xcode build checklist](../ios-final-regression/xcode-build-checklist.md)
+- [Supabase connectivity checklist](../ios-final-regression/supabase-connectivity-checklist.md)
+- [Booking submit regression](../ios-final-regression/booking-submit-regression.md)
+- [Notification regression](../ios-final-regression/notification-regression.md)
+- [Final iOS regression report](../ios-final-regression/final-ios-regression-report.md)
+
+Status: pending execution in VM / Xcode. Do not treat iOS regression as passed until the final report is completed.

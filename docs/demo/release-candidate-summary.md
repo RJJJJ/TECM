@@ -40,7 +40,7 @@ This is a local release candidate, not a production release.
 
 ## 4. Remaining blockers before production
 
-- iOS VM/Xcode final regression remains pending.
+- iOS VM/Xcode final regression remains pending; execute `docs/ios-final-regression/` before production.
 - Staging deployment remains pending.
 - Real AI provider node remains pending.
 - Production scheduler remains pending.
@@ -50,7 +50,7 @@ This is a local release candidate, not a production release.
 ## 5. Recommended next steps
 
 1. Capture sanitized evidence screenshots under `docs/demo/screenshots/` or an external evidence folder.
-2. Complete iOS VM/Xcode notification regression.
+2. Complete the iOS VM/Xcode regression package in `docs/ios-final-regression/`, including build, Supabase connectivity, booking submit, parent center, and notification checks.
 3. Deploy staging Admin Web and apply staging Supabase schema.
 4. Import n8n workflows into staging and replace local URLs with deployed Admin Web URL.
 5. Add real AI provider node after staff approves prompt/output format.
