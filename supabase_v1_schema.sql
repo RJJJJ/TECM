@@ -997,7 +997,6 @@ on conflict (id) do update set
   detail = excluded.detail,
   is_read = excluded.is_read;
 
--- 7.8 demo internal follow-up tasks for Admin Web / automation preview only.
 insert into public.follow_up_tasks (
   id,
   booking_id,
@@ -1031,17 +1030,10 @@ select
   b.end_time,
   'wechat_manual',
   'high',
-  'å®¶é·å·²æäº¤ Python å
-¥éé«é©èª²é ç´ï¼å»ºè­°åªå
-ç¢ºèªå­©å­æ¯å¦æ Scratch æç·¨ç¨åºç¤ã',
+  '家長已提交 Python 入門體驗課預約，建議優先確認孩子是否有 Scratch 或其他編程基礎。',
   '您好，這裡是 TECM 澳門教育中心。已收到您為孩子預約 Python 入門體驗課的資料。想先跟您確認孩子是否曾學習 Scratch 或其他編程課程？我們可按程度安排最合適的體驗內容。',
-¥éé«é©èª²çè³æãæ³å
-è·æ¨ç¢ºèªå­©å­æ¯å¦æ¾å­¸ç¿ Scratch æå
-¶ä»ç·¨ç¨èª²ç¨ï¼æåå¯æç¨åº¦å®ææåé©çé«é©å
-§å®¹ã',
   array['確認孩子過往編程經驗', '確認體驗課日期及時段', '如家長回覆積極，可安排程度評估'],
   'Demo seed：內部 staff 跟進建議，不會自動發送給家長。',
-§é¨ staff è·é²å»ºè­°ï¼ä¸æèªåç¼éçµ¦å®¶é·ã',
   'manual_seed',
   'open'
 from public.bookings b
