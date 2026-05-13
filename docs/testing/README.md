@@ -30,3 +30,9 @@ This script uses a caller-provided base URL, automation secret, and booking ID. 
 - [Playwright future plan](playwright-future-plan.md)
 
 The smoke test script is available, but full automated coverage and Playwright are not enabled yet.
+## Smoke test scripts
+
+- Local/API smoke test: `scripts/testing/automation-api-smoke-test.ps1`
+- Staging smoke test: `scripts/testing/staging-smoke-test.ps1`
+
+Run the local smoke test during local RC checks. Run the staging smoke test after Admin Web is deployed and staging env vars are configured. Both scripts redact the automation secret and should not be modified to print secrets.

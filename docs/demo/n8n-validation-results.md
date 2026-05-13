@@ -34,7 +34,7 @@ Import status: passed
 | Issue | Fix | Status |
 | --- | --- | --- |
 | Docker localhost issue | Use `http://host.docker.internal:3000` for n8n Docker to call Admin Web. | Fixed |
-| Workflow JSON Chinese `???` issue | Repaired workflow/example JSON files as UTF-8 Traditional Chinese. | Fixed |
+| Workflow JSON Chinese mojibake issue | Repaired workflow/example JSON files as UTF-8 Traditional Chinese. | Fixed |
 | PowerShell Chinese payload issue | Send request body as UTF-8 bytes. | Fixed |
 | Next `.next` cache chunk issue | Remove `.next` and restart dev server. | Fixed |
 

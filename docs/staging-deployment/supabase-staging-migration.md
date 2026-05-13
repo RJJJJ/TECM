@@ -59,3 +59,6 @@ from public.booking_parent_notifications
 order by created_at desc
 limit 20;
 ```
+## Verification SQL file
+
+Use [`staging-supabase-verification.sql`](staging-supabase-verification.sql) for non-destructive staging verification queries. The file contains SELECT checks only and does not insert, update, delete, or drop data.

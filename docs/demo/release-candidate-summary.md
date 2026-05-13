@@ -74,3 +74,14 @@ These packages prepare next steps only; they do not mean iOS regression, staging
 - [Staging env example](../staging-deployment/staging-env.example)
 
 These are templates/support files. Staging is not deployed, real AI provider is not active, production scheduler is not active, and direct WeChat auto-send remains excluded.
+## Staging deployment support update
+
+- Full Local RC: Passed.
+- iOS core regression: Passed for build, launch, booking submit, Supabase/Admin visibility, and Admin notification bridge.
+- Staging deployment: support package prepared, pending execution.
+- Production scheduler: template prepared, not active.
+- Real AI provider: template prepared, not configured.
+- Automated smoke tests: local script prepared; staging smoke test script added.
+- iOS visual notification display: pending unless explicitly verified in the iOS UI.
+
+Do not treat staging as passed until `docs/staging-deployment/staging-validation-results-template.md` is completed with real evidence.

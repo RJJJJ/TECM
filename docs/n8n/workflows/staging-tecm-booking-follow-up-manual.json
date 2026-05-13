@@ -1,0 +1,300 @@
+{
+  "name": "STAGING - TECM Booking Follow-up Manual",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1d8bb6fa-99ec-4ec7-a0bd-42e1d5a4c801",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "base-url",
+              "name": "base_url",
+              "value": "REPLACE_WITH_STAGING_ADMIN_WEB_URL",
+              "type": "string"
+            },
+            {
+              "id": "automation-secret",
+              "name": "automation_secret",
+              "value": "REPLACE_WITH_STAGING_TECM_AUTOMATION_SECRET",
+              "type": "string"
+            },
+            {
+              "id": "booking-id",
+              "name": "booking_id",
+              "value": "REPLACE_WITH_STAGING_BOOKING_UUID",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7afb15ec-b0cf-4819-a673-e77bd6a1cc8a",
+      "name": "Set Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.base_url}}/api/automation/follow-up-preview",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-tecm-automation-secret",
+              "value": "={{$json.automation_secret}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"booking_id\": \"{{$json.booking_id}}\"\n}",
+        "options": {}
+      },
+      "id": "ec826ff0-84a8-468d-967f-bf92421940e1",
+      "name": "Follow-up Preview",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "booking-id",
+              "name": "booking_id",
+              "value": "={{$node['Set Config'].json.booking_id}}",
+              "type": "string"
+            },
+            {
+              "id": "channel",
+              "name": "channel",
+              "value": "wechat_manual",
+              "type": "string"
+            },
+            {
+              "id": "priority",
+              "name": "priority",
+              "value": "high",
+              "type": "string"
+            },
+            {
+              "id": "intent-summary",
+              "name": "intent_summary",
+              "value": "家長對 Python 體驗課有明確興趣，需要優先跟進。",
+              "type": "string"
+            },
+            {
+              "id": "suggested-message",
+              "name": "suggested_message",
+              "value": "您好，我們收到您的 Python 體驗預約。建議先做一次簡短程度評估，再為孩子安排合適班型。請問您方便確認預約時段嗎？",
+              "type": "string"
+            },
+            {
+              "id": "suggested-next-steps",
+              "name": "suggested_next_steps",
+              "value": "={{['確認時段', '安排程度評估', '記錄孩子過往學習經驗']}}",
+              "type": "array"
+            },
+            {
+              "id": "internal-note",
+              "name": "internal_note",
+              "value": "由 n8n manual workflow 測試建立。",
+              "type": "string"
+            },
+            {
+              "id": "source",
+              "name": "source",
+              "value": "n8n",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b7412e6d-8ef8-446c-9495-1e43151b33c1",
+      "name": "AI Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        700,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$node['Set Config'].json.base_url}}/api/automation/follow-up-tasks",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-tecm-automation-secret",
+              "value": "={{$node['Set Config'].json.automation_secret}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ booking_id: $json.booking_id, channel: $json.channel, priority: $json.priority, intent_summary: $json.intent_summary, suggested_message: $json.suggested_message, suggested_next_steps: $json.suggested_next_steps, internal_note: $json.internal_note, source: 'n8n_staging' }) }}",
+        "options": {}
+      },
+      "id": "7eddb2ee-74c0-44e6-b553-9489d3a4f2bd",
+      "name": "Create Follow-up Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        940,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ok",
+              "name": "ok",
+              "value": "={{$json.ok}}",
+              "type": "boolean"
+            },
+            {
+              "id": "task-id",
+              "name": "task_id",
+              "value": "={{$json.task_id || $json.task?.id || $json.id}}",
+              "type": "string"
+            },
+            {
+              "id": "booking-id",
+              "name": "booking_id",
+              "value": "={{$node['Set Config'].json.booking_id}}",
+              "type": "string"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "value": "={{$json.status || $json.task?.status}}",
+              "type": "string"
+            },
+            {
+              "id": "follow-ups-url",
+              "name": "admin_follow_ups_url",
+              "value": "={{$node['Set Config'].json.base_url}}/admin/follow-ups",
+              "type": "string"
+            },
+            {
+              "id": "booking-detail-url",
+              "name": "admin_booking_detail_url",
+              "value": "={{$node['Set Config'].json.base_url}}/admin/bookings/{{$node['Set Config'].json.booking_id}}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d7988f64-f679-4710-a775-c2e5ec018624",
+      "name": "Final Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1180,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Config": {
+      "main": [
+        [
+          {
+            "node": "Follow-up Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Follow-up Preview": {
+      "main": [
+        [
+          {
+            "node": "AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Output": {
+      "main": [
+        [
+          {
+            "node": "Create Follow-up Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Follow-up Task": {
+      "main": [
+        [
+          {
+            "node": "Final Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "b5f0978c-0c25-4f44-a70e-665e1f78c03c",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

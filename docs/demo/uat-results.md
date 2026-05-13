@@ -87,3 +87,14 @@ Config fixes recorded without committing secrets:
 - Inject `SUPABASE_URL` and `SUPABASE_ANON_KEY` into Target Info custom properties.
 - In `.xcconfig`, write Supabase URL as `https:/$()/<project-ref>.supabase.co` because `//` is treated as a comment.
 - Use `SUPABASE_ANON_KEY` for the current Swift Supabase client configuration.
+## Staging deployment support update
+
+- Full Local RC: Passed.
+- iOS core regression: Passed for build, launch, booking submit, Supabase/Admin visibility, and Admin notification bridge.
+- Staging deployment: support package prepared, pending execution.
+- Production scheduler: template prepared, not active.
+- Real AI provider: template prepared, not configured.
+- Automated smoke tests: local script prepared; staging smoke test script added.
+- iOS visual notification display: pending unless explicitly verified in the iOS UI.
+
+Do not treat staging as passed until `docs/staging-deployment/staging-validation-results-template.md` is completed with real evidence.

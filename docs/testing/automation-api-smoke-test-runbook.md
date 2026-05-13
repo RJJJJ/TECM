@@ -59,3 +59,15 @@ Use this runbook to repeat local or staging automation endpoint checks without h
 - The script does not print the full automation secret.
 - The script does not contain real secrets.
 - The create task check may create or update an open follow-up task for the provided booking. Staff may dismiss it after verification.
+## Related staging smoke test
+
+After deployment, use the staging-specific script:
+
+```powershell
+.\scripts\testing\staging-smoke-test.ps1 `
+  -BaseUrl "https://tecm-admin-staging.example.com" `
+  -AutomationSecret "<staging-secret>" `
+  -BookingId "<booking-uuid>"
+```
+
+Expected output is a PASS/FAIL summary. The script must not print the full secret.

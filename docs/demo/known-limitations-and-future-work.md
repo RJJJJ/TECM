@@ -35,3 +35,14 @@
 - scheduled digest workflow template prepared, but production scheduler is not active
 - future pending booking polling workflow documented as placeholder only
 - automation API smoke test script prepared for local/staging checks
+## Staging deployment support update
+
+- Full Local RC: Passed.
+- iOS core regression: Passed for build, launch, booking submit, Supabase/Admin visibility, and Admin notification bridge.
+- Staging deployment: support package prepared, pending execution.
+- Production scheduler: template prepared, not active.
+- Real AI provider: template prepared, not configured.
+- Automated smoke tests: local script prepared; staging smoke test script added.
+- iOS visual notification display: pending unless explicitly verified in the iOS UI.
+
+Do not treat staging as passed until `docs/staging-deployment/staging-validation-results-template.md` is completed with real evidence.

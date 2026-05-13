@@ -1,60 +1,52 @@
 # Admin Web Deployment Guide
 
-Deployment target is TBD. These notes are platform-neutral and can be adapted for Vercel, a Node server, or a Docker host.
+Deployment target is TBD. These notes are platform-neutral and can be adapted for Vercel-style hosting, a Node server, or a future Docker host.
 
-## Build commands
+## 1. Vercel-style deployment
+
+- Root directory: `admin-web`
+- Install command: `npm install`
+- Build command: `npm run build`
+- Output: Next.js app
+- Required environment variables:
+  - `NEXT_PUBLIC_SUPABASE_URL`
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+  - `TECM_AUTOMATION_SECRET`
+  - `NEXT_PUBLIC_APP_ENV=staging`
+
+Server-side env vars must not be prefixed with `NEXT_PUBLIC`. `SUPABASE_SERVICE_ROLE_KEY` and `TECM_AUTOMATION_SECRET` must remain server-side only.
+
+## 2. Node server deployment
 
 ```powershell
+cd admin-web
 npm install
 npm run build
-```
-
-## Start command for Node server
-
-```powershell
 npm run start
 ```
 
-## Required environment variables
+Reverse proxy, HTTPS, process supervision, and log retention are handled by the chosen platform.
 
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `TECM_AUTOMATION_SECRET`
+## 3. Docker deployment future note
 
-## Security
+Docker deployment is not implemented unless a Dockerfile exists. Do not invent or assume a Dockerfile for staging without a separate implementation task. If Docker is added later, keep secrets outside the image and pass them at runtime.
 
-- `SUPABASE_SERVICE_ROLE_KEY` must be server-only.
-- Never expose the service role key as `NEXT_PUBLIC_*`.
-- `TECM_AUTOMATION_SECRET` must be long and random.
-- Do not print secrets in deployment logs.
+## 4. Post-deploy checks
 
-## Platform notes
+- [ ] `GET /api/health` returns `ok: true`
+- [ ] `/login` loads
+- [ ] `/admin/bookings` loads after login
+- [ ] `/admin/follow-ups` loads after login
+- [ ] invalid automation secret returns `401`
+- [ ] valid digest endpoint works
+- [ ] deployed logs do not print secrets
 
-### Vercel
+## 5. Known deployment blockers
 
-- Configure env vars in project settings.
-- Confirm server-side routes can access `SUPABASE_SERVICE_ROLE_KEY`.
-- Use the generated deployment URL for smoke testing.
-
-### Node server
-
-- Install dependencies.
-- Build once.
-- Run `npm run start` behind the chosen process manager/reverse proxy.
-- Configure env vars in the server environment.
-
-### Docker host
-
-- Build and run using a platform-specific Dockerfile if one is introduced later.
-- Keep env vars outside the image.
-- Do not bake secrets into image layers.
-
-## Post-deploy checks
-
-- [ ] `/login` opens
-- [ ] `/admin/bookings` opens after auth
-- [ ] `/admin/follow-ups` opens after auth
-- [ ] `/api/automation/follow-up-digest` rejects wrong secret with `401`
-- [ ] valid automation secret works against staging Supabase
-- [ ] deployed logs do not print secret values
+- Missing `SUPABASE_SERVICE_ROLE_KEY`
+- Missing `TECM_AUTOMATION_SECRET`
+- Supabase project paused
+- RLS/auth mismatch
+- Next workspace root / multiple lockfile warning
+- Staging n8n workflow still using `localhost` or `host.docker.internal`

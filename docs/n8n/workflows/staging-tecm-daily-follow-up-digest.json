@@ -1,0 +1,216 @@
+{
+  "name": "STAGING - TECM Daily Follow-up Digest",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "4623f1be-934f-493a-acb7-d603f2230583",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "base-url",
+              "name": "base_url",
+              "value": "REPLACE_WITH_STAGING_ADMIN_WEB_URL",
+              "type": "string"
+            },
+            {
+              "id": "automation-secret",
+              "name": "automation_secret",
+              "value": "REPLACE_WITH_STAGING_TECM_AUTOMATION_SECRET",
+              "type": "string"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "value": "open",
+              "type": "string"
+            },
+            {
+              "id": "limit",
+              "name": "limit",
+              "value": 20,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "25b9d91c-b7fb-4b3b-bacb-99441bcf0ce0",
+      "name": "Set Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.base_url}}/api/automation/follow-up-digest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-tecm-automation-secret",
+              "value": "={{$json.automation_secret}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"{{$json.status}}\",\n  \"limit\": {{$json.limit}}\n}",
+        "options": {}
+      },
+      "id": "12e2e3cc-9086-402f-9b4c-149f51ae40ab",
+      "name": "Follow-up Digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ok",
+              "name": "ok",
+              "value": "={{$json.ok}}",
+              "type": "boolean"
+            },
+            {
+              "id": "summary",
+              "name": "summary",
+              "value": "={{$json.summary}}",
+              "type": "object"
+            },
+            {
+              "id": "digest-text",
+              "name": "digest_text",
+              "value": "={{$json.digest_text}}",
+              "type": "string"
+            },
+            {
+              "id": "items",
+              "name": "items",
+              "value": "={{$json.items}}",
+              "type": "array"
+            },
+            {
+              "id": "follow-ups-url",
+              "name": "admin_follow_ups_url",
+              "value": "={{$node['Set Config'].json.base_url}}/admin/follow-ups",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f4a9b24b-265d-4903-a97c-c5cc38b35386",
+      "name": "Format Digest Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        700,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "note",
+              "name": "note",
+              "value": "請 staff 手動複製 digest_text 到 WeChat / WhatsApp 工作群。本 workflow 不會自動發送訊息。",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "ae5b9a4f-ac0d-4045-96e8-e8c7552fd6b8",
+      "name": "Optional Notes",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        940,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Config": {
+      "main": [
+        [
+          {
+            "node": "Follow-up Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Follow-up Digest": {
+      "main": [
+        [
+          {
+            "node": "Format Digest Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Digest Output": {
+      "main": [
+        [
+          {
+            "node": "Optional Notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "9b0df662-6e06-4d0f-b12e-2cb61ef46ee7",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

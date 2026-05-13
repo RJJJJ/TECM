@@ -2,6 +2,7 @@
 
 ## Admin Web
 
+- [ ] GET /api/health returns ok: true and env presence booleans only
 - [ ] `/login` opens
 - [ ] `/admin/bookings` opens
 - [ ] `/admin/follow-ups` opens

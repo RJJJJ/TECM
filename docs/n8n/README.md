@@ -66,3 +66,12 @@ Status: these are preparation documents. The production scheduler and real AI pr
 - [Future pending booking polling template](workflows/tecm-pending-booking-polling-future-template.json) — disabled future placeholder; backend endpoint is not implemented yet.
 
 All v1.1 templates preserve human-in-the-loop review and do not send WeChat / WhatsApp automatically.
+## Staging workflow templates
+
+- [Staging manual follow-up workflow](workflows/staging-tecm-booking-follow-up-manual.json)
+- [Staging daily digest workflow](workflows/staging-tecm-daily-follow-up-digest.json)
+- [Staging real AI template](workflows/staging-tecm-real-ai-template.json)
+
+Local Docker workflows may use `host.docker.internal`. Staging workflows must use the deployed Admin Web URL and must never use `localhost` or `host.docker.internal`.
+
+n8n must never receive the Supabase service role key. It only needs `TECM_AUTOMATION_SECRET` or provider credentials stored in n8n credentials/env.
