@@ -104,25 +104,25 @@
             {
               "id": "intent-summary",
               "name": "intent_summary",
-              "value": "??? Python ????????????????",
+              "value": "家長對 Python 體驗課有明確興趣，需要優先跟進。",
               "type": "string"
             },
             {
               "id": "suggested-message",
               "name": "suggested_message",
-              "value": "????????? Python ??????????????????????????????????????????",
+              "value": "您好，我們收到您的 Python 體驗預約。建議先做一次簡短程度評估，再為孩子安排合適班型。請問您方便確認預約時段嗎？",
               "type": "string"
             },
             {
               "id": "suggested-next-steps",
               "name": "suggested_next_steps",
-              "value": "={{['????', '??????', '??????????']}}",
+              "value": "={{['確認時段', '安排程度評估', '記錄孩子過往學習經驗']}}",
               "type": "array"
             },
             {
               "id": "internal-note",
               "name": "internal_note",
-              "value": "? n8n manual workflow ?????",
+              "value": "由 n8n manual workflow 測試建立。",
               "type": "string"
             },
             {

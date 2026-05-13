@@ -139,7 +139,7 @@
             {
               "id": "note",
               "name": "note",
-              "value": "? staff ???? digest_text ? WeChat / WhatsApp ????? workflow ?????????",
+              "value": "請 staff 手動複製 digest_text 到 WeChat / WhatsApp 工作群。本 workflow 不會自動發送訊息。",
               "type": "string"
             }
           ]
