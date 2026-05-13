@@ -40,3 +40,12 @@ TECM 是一個面向澳門教育中心的 parent-facing iOS app + Admin Web + Su
 - [Manual booking follow-up workflow setup](../n8n/manual-follow-up-workflow-setup.md)
 - [Daily digest workflow setup](../n8n/daily-digest-workflow-setup.md)
 - [n8n validation checklist](../n8n/n8n-validation-checklist.md)
+
+## Final evidence pack
+
+- [Evidence index](evidence-index.md)
+- [UAT results](uat-results.md)
+- [n8n validation results](n8n-validation-results.md)
+- [Final demo run record](final-demo-run-record.md)
+- [Local release candidate summary](release-candidate-summary.md)
+- [Screenshots README](screenshots/README.md)
