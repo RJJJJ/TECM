@@ -129,11 +129,13 @@ export default async function BookingDetailPage({
   params,
   searchParams
 }: {
-  params: { id: string };
-  searchParams?: { returnTo?: string | string[] };
+  params: Promise<{ id: string }>;
+  searchParams?: Promise<{ returnTo?: string | string[] }>;
 }) {
-  const supabase = createServerSupabaseClient();
-  const backToListHref = resolveReturnTo(searchParams?.returnTo);
+  const { id } = await params;
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
+  const supabase = await createServerSupabaseClient();
+  const backToListHref = resolveReturnTo(resolvedSearchParams?.returnTo);
 
   const { data, error } = await supabase
     .from('bookings')
@@ -160,7 +162,7 @@ export default async function BookingDetailPage({
       campuses(name)
     `
     )
-    .eq('id', params.id)
+    .eq('id', id)
     .maybeSingle();
 
   const { data: statusLogs, error: statusLogsError } = await supabase
@@ -175,7 +177,7 @@ export default async function BookingDetailPage({
       created_at
     `
     )
-    .eq('booking_id', params.id)
+    .eq('booking_id', id)
     .order('created_at', { ascending: false });
 
   const { data: followUpTasksData, error: followUpTasksError } = await supabase
@@ -206,7 +208,7 @@ export default async function BookingDetailPage({
       updated_at
     `
     )
-    .eq('booking_id', params.id)
+    .eq('booking_id', id)
     .order('created_at', { ascending: false });
 
   if (error) {

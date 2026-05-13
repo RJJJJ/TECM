@@ -26,7 +26,7 @@ export async function updateFaqTopicAction(
     return { status: 'error', message: 'Sort order 必須是數字。' };
   }
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const access = await verifyActiveStaffAccess(supabase);
 
   if (!access.allowed) {

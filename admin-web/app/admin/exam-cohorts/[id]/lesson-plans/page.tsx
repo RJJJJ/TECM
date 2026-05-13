@@ -8,18 +8,19 @@ type LessonPlan = {
   makeup_guidance: string | null;
 };
 
-export default async function LessonPlanEditor({ params }: { params: { id: string } }) {
-  const supabase = createServerSupabaseClient();
+export default async function LessonPlanEditor({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const supabase = await createServerSupabaseClient();
   const { data } = await supabase
     .from('lesson_plans')
     .select('sequence_no,title,teaching_content,makeup_guidance')
-    .eq('cohort_id', params.id)
+    .eq('cohort_id', id)
     .order('sequence_no');
 
   const existing = new Map((data ?? []).map((row) => [(row as LessonPlan).sequence_no, row as LessonPlan]));
   async function saveAction(formData: FormData) {
     'use server';
-    await saveLessonPlanAction(params.id, { status: 'idle' }, formData);
+    await saveLessonPlanAction(id, { status: 'idle' }, formData);
   }
 
   return (

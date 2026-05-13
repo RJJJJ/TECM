@@ -36,16 +36,17 @@ function formatDateTime(dateValue: string | null) {
 export default async function NewsDetailPage({
   params
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const supabase = createServerSupabaseClient();
+  const { id } = await params;
+  const supabase = await createServerSupabaseClient();
 
   const { data, error } = await supabase
     .from('news_items')
     .select(
       'id, category, title, summary, content, image_url, is_featured, is_active, published_at, sort_order, created_at, updated_at'
     )
-    .eq('id', params.id)
+    .eq('id', id)
     .maybeSingle();
 
   if (error) {

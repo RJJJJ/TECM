@@ -54,9 +54,10 @@ function formatDateTime(dateValue: string | null) {
 export default async function CourseDetailPage({
   params
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const supabase = createServerSupabaseClient();
+  const { id } = await params;
+  const supabase = await createServerSupabaseClient();
 
   const [{ data: courseData, error: courseError }, { data: tagsData, error: tagsError }, { data: campusData }] =
     await Promise.all([
@@ -65,9 +66,9 @@ export default async function CourseDetailPage({
         .select(
           'id, title, category, level, age_group, summary, schedule_text, campus_id, recommended, is_active, sort_order, created_at, updated_at, campuses(name)'
         )
-        .eq('id', params.id)
+        .eq('id', id)
         .maybeSingle(),
-      supabase.from('course_tags').select('id, course_id, tag, created_at').eq('course_id', params.id).order('created_at'),
+      supabase.from('course_tags').select('id, course_id, tag, created_at').eq('course_id', id).order('created_at'),
       supabase.from('campuses').select('id, name, is_active').order('name', { ascending: true })
     ]);
 

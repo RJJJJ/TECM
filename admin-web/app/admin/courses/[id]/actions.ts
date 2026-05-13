@@ -20,7 +20,7 @@ function normalizeOptionalText(value: FormDataEntryValue | null) {
 }
 
 async function verifyCourseExists(courseId: string) {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const access = await verifyActiveStaffAccess(supabase);
 
   if (!access.allowed) {

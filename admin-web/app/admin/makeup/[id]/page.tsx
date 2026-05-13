@@ -19,8 +19,9 @@ type MakeupTask = {
   } | null;
 };
 
-export default async function MakeupTaskDetailPage({ params }: { params: { id: string } }) {
-  const supabase = createServerSupabaseClient();
+export default async function MakeupTaskDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase
     .from('makeup_tasks')
     .select(`
@@ -34,7 +35,7 @@ export default async function MakeupTaskDetailPage({ params }: { params: { id: s
       exam_cohorts(name,subject,level,exam_date),
       lesson_plans(sequence_no,title,teaching_content,makeup_guidance)
     `)
-    .eq('id', params.id)
+    .eq('id', id)
     .maybeSingle();
 
   if (error) {

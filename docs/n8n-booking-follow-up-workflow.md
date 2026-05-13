@@ -313,3 +313,124 @@ n8n can post `digest_text` into an internal staff workflow or prepare it for sta
 - [ ] Invalid automation secret is rejected by digest endpoint.
 - [ ] Digest endpoint returns useful Traditional Chinese `digest_text`.
 - [ ] iOS booking flow remains unchanged.
+
+## 16. Production readiness checklist
+
+### Required environment variables
+
+Admin Web deployment must define:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` — server-only; never expose in client code or `NEXT_PUBLIC_*` variables.
+- `TECM_AUTOMATION_SECRET` — long random production secret used in `x-tecm-automation-secret`.
+
+Keep real values out of git. Use `admin-web/.env.local.example` only as a template.
+
+### Supabase migration checklist
+
+Before applying `supabase_v1_schema.sql` to staging/production:
+
+1. Confirm the file uses `create table if not exists` and `create index if not exists`.
+2. Confirm it does **not** `drop table`, `truncate`, or delete production data.
+3. Confirm trigger drops appear after their tables are created and before `create trigger`.
+4. Confirm policy drops appear after RLS is enabled and before `create policy`.
+5. Apply the schema in Supabase SQL editor or your migration runner.
+6. Re-run it once on staging to verify it is safe to rerun.
+
+### Verify `follow_up_tasks`
+
+Run manually after schema apply:
+
+```sql
+select id, booking_id, priority, channel, status, created_at
+from public.follow_up_tasks
+order by created_at desc
+limit 20;
+```
+
+Expected: query succeeds; staff can manage rows through Admin Web; no demo follow-up seed is inserted by the schema.
+
+### Verify `booking_parent_notifications` bridge
+
+Run manually after confirming a booking in Admin Web:
+
+```sql
+select bpn.id, bpn.booking_id, bpn.notification_id, bpn.type, bpn.created_at
+from public.booking_parent_notifications bpn
+order by bpn.created_at desc
+limit 20;
+```
+
+Expected: one bridge row links the confirmed booking to the parent notification; repeating the same confirmed-booking action should not create duplicate bridge records.
+
+### Verify automation endpoints
+
+Use staging values and the shared secret header:
+
+```bash
+curl -X POST http://localhost:3000/api/automation/follow-up-preview \
+  -H "Content-Type: application/json" \
+  -H "x-tecm-automation-secret: $TECM_AUTOMATION_SECRET" \
+  -d '{"booking_id":"<BOOKING_UUID>"}'
+```
+
+Also verify:
+
+- invalid or missing `x-tecm-automation-secret` returns `401`;
+- `/api/automation/follow-up-tasks` can create/update an open automation task;
+- `/api/automation/follow-up-digest` returns staff-copyable digest text;
+- `/admin/follow-ups` displays the resulting task.
+
+### PowerShell UTF-8 testing note
+
+When testing Chinese JSON bodies from Windows PowerShell:
+
+```powershell
+chcp 65001
+$body = [System.Text.Encoding]::UTF8.GetBytes('{"booking_id":"<BOOKING_UUID>","note":"家長想了解 Python 課程"}')
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:3000/api/automation/follow-up-preview" `
+  -ContentType "application/json; charset=utf-8" `
+  -Headers @{ "x-tecm-automation-secret" = $env:TECM_AUTOMATION_SECRET } `
+  -Body $body
+```
+
+Do not rely on the console default encoding for Chinese request bodies.
+
+### WeChat v1 operating rule
+
+Do **not** use direct WeChat auto-send in v1. The supported production workflow is:
+
+1. automation creates an internal `follow_up_tasks` suggestion;
+2. staff reviews the suggested message in Admin Web;
+3. staff manually copies the wording;
+4. staff sends it through WeChat / WhatsApp / phone using the normal human workflow;
+5. staff marks the task done or dismissed in Admin Web.
+
+
+## n8n v1 Workflow Templates
+
+Safe manual v1 workflow templates are available under `docs/n8n/`:
+
+- [`docs/n8n/README.md`](n8n/README.md)
+- [`docs/n8n/manual-follow-up-workflow-setup.md`](n8n/manual-follow-up-workflow-setup.md)
+- [`docs/n8n/daily-digest-workflow-setup.md`](n8n/daily-digest-workflow-setup.md)
+- [`docs/n8n/workflows/tecm-booking-follow-up-manual.json`](n8n/workflows/tecm-booking-follow-up-manual.json)
+- [`docs/n8n/workflows/tecm-daily-follow-up-digest.json`](n8n/workflows/tecm-daily-follow-up-digest.json)
+
+The templates are manual/safe v1 workflows. Production event-driven automation should only be introduced after manual workflows are stable.
+
+### Final staging checklist
+
+- [ ] `npm run lint` passes in `admin-web`.
+- [ ] `npm run build` passes in `admin-web`.
+- [ ] `npm audit --audit-level=moderate` reviewed; no critical/high vulnerabilities remain, and any moderate findings are documented.
+- [ ] `supabase_v1_schema.sql` applied successfully.
+- [ ] `supabase_v1_schema.sql` can be re-run safely on staging.
+- [ ] `/admin/follow-ups` dashboard works.
+- [ ] Confirmed booking notification bridge works.
+- [ ] Invalid automation secret returns `401`.
+- [ ] Valid automation endpoint request works.
+- [ ] Manual WeChat copy workflow is followed; no automatic WeChat send is enabled.

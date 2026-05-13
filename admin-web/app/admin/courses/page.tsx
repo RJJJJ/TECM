@@ -55,7 +55,7 @@ function boolBadge(value: boolean, trueText: string, falseText: string) {
 }
 
 export default async function AdminCoursesPage() {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   const [{ data: courseData, error: courseError }, { data: campusData }] = await Promise.all([
     supabase

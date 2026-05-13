@@ -105,14 +105,15 @@ function todayDateString() {
   }).format(new Date());
 }
 
-export default async function AdminFollowUpsPage({ searchParams }: { searchParams?: SearchParams }) {
-  const supabase = createServerSupabaseClient();
+export default async function AdminFollowUpsPage({ searchParams }: { searchParams?: Promise<SearchParams> }) {
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
+  const supabase = await createServerSupabaseClient();
 
-  const selectedStatusRaw = pickSingle(searchParams?.status) ?? 'open';
-  const selectedPriorityRaw = pickSingle(searchParams?.priority) ?? 'all';
-  const selectedChannelRaw = pickSingle(searchParams?.channel) ?? 'all';
-  const selectedKeyword = (pickSingle(searchParams?.keyword) ?? '').trim();
-  const selectedDate = pickSingle(searchParams?.date) ?? '';
+  const selectedStatusRaw = pickSingle(resolvedSearchParams?.status) ?? 'open';
+  const selectedPriorityRaw = pickSingle(resolvedSearchParams?.priority) ?? 'all';
+  const selectedChannelRaw = pickSingle(resolvedSearchParams?.channel) ?? 'all';
+  const selectedKeyword = (pickSingle(resolvedSearchParams?.keyword) ?? '').trim();
+  const selectedDate = pickSingle(resolvedSearchParams?.date) ?? '';
 
   const selectedStatus = selectedStatusRaw === 'all' || isFollowUpStatus(selectedStatusRaw) ? selectedStatusRaw : 'open';
   const selectedPriority = selectedPriorityRaw === 'all' || isFollowUpPriority(selectedPriorityRaw) ? selectedPriorityRaw : 'all';

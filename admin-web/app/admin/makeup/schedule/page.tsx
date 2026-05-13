@@ -14,7 +14,7 @@ type MakeupSession = {
 };
 
 export default async function MakeupSchedulePage() {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase
     .from('makeup_sessions')
     .select(`

@@ -9,7 +9,7 @@ async function updateFollowUpTaskStatus(
   bookingId: string | null,
   status: 'done' | 'dismissed'
 ) {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const access = await verifyActiveStaffAccess(supabase);
 
   if (!access.allowed) {

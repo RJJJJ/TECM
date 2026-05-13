@@ -40,7 +40,7 @@ function buildBookingConfirmedNotificationDetail(booking: BookingForNotification
 }
 
 async function createBookingConfirmedParentNotification(
-  supabase: ReturnType<typeof createServerSupabaseClient>,
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>,
   booking: BookingForNotification
 ) {
   if (!booking.parent_id) return;
@@ -117,7 +117,7 @@ export async function updateBookingAction(
     return { status: 'error', message: 'Start time 不可晚於 end time。' };
   }
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const access = await verifyActiveStaffAccess(supabase);
 
   if (!access.allowed) {

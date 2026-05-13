@@ -10,7 +10,7 @@ export type MakeupFormState = {
 };
 
 async function requireStaff() {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const access = await verifyActiveStaffAccess(supabase);
   if (!access.allowed) {
     await supabase.auth.signOut();

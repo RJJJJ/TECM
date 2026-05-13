@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "summary": {
+    "open_count": 1,
+    "high_priority_open_count": 1,
+    "today_booking_follow_up_count": 0,
+    "done_count": 2
+  },
+  "items": [
+    {
+      "priority": "high",
+      "channel": "wechat_manual",
+      "parent_name": "??",
+      "phone": "+853 6123 4567",
+      "child_name": "???",
+      "course_title_snapshot": "??????",
+      "booking_date": "2026-04-17",
+      "start_time": "15:30",
+      "intent_summary": "??? Python ????????????????"
+    }
+  ],
+  "digest_text": "?? TECM ???????? 1????? 1????????????"
+}

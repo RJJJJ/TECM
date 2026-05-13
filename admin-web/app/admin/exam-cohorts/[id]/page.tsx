@@ -37,12 +37,13 @@ type AttendanceRow = {
   } | null;
 };
 
-export default async function ExamCohortDetailPage({ params }: { params: { id: string } }) {
-  const supabase = createServerSupabaseClient();
+export default async function ExamCohortDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const supabase = await createServerSupabaseClient();
   const { data: cohortData, error: cohortError } = await supabase
     .from('exam_cohorts')
     .select('id,name,subject,level,exam_date,weekday_pattern,status,teacher_profiles(display_name)')
-    .eq('id', params.id)
+    .eq('id', id)
     .maybeSingle();
 
   if (cohortError) {
@@ -53,15 +54,15 @@ export default async function ExamCohortDetailPage({ params }: { params: { id: s
   const cohort = cohortData as unknown as Cohort;
 
   const [{ data: lessonData }, { data: studentData }, { data: attendanceData }, { data: makeupData }] = await Promise.all([
-    supabase.from('lesson_plans').select('id,sequence_no,title,teaching_content,makeup_guidance').eq('cohort_id', params.id).order('sequence_no'),
-    supabase.from('cohort_students').select('id,status,students(display_name,school_name)').eq('cohort_id', params.id).order('created_at'),
+    supabase.from('lesson_plans').select('id,sequence_no,title,teaching_content,makeup_guidance').eq('cohort_id', id).order('sequence_no'),
+    supabase.from('cohort_students').select('id,status,students(display_name,school_name)').eq('cohort_id', id).order('created_at'),
     supabase
       .from('attendance_records')
       .select('id,status,students(display_name),lesson_sessions!inner(starts_at,lesson_plans(sequence_no,title))')
-      .eq('lesson_sessions.cohort_id', params.id)
+      .eq('lesson_sessions.cohort_id', id)
       .order('recorded_at', { ascending: false })
       .limit(50),
-    supabase.from('makeup_tasks').select('id,status,priority').eq('cohort_id', params.id)
+    supabase.from('makeup_tasks').select('id,status,priority').eq('cohort_id', id)
   ]);
 
   const lessons = (lessonData ?? []) as unknown as LessonPlan[];

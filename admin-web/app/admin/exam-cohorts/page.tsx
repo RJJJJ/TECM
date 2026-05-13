@@ -28,12 +28,13 @@ function badgeClass(status: string) {
 export default async function ExamCohortListPage({
   searchParams
 }: {
-  searchParams?: SearchParams;
+  searchParams?: Promise<SearchParams>;
 }) {
-  const supabase = createServerSupabaseClient();
-  const selectedSubject = searchParams?.subject ?? 'all';
-  const selectedStatus = searchParams?.status ?? 'all';
-  const selectedLevel = (searchParams?.level ?? '').trim();
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
+  const supabase = await createServerSupabaseClient();
+  const selectedSubject = resolvedSearchParams?.subject ?? 'all';
+  const selectedStatus = resolvedSearchParams?.status ?? 'all';
+  const selectedLevel = (resolvedSearchParams?.level ?? '').trim();
 
   let query = supabase
     .from('exam_cohorts')

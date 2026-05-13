@@ -38,15 +38,16 @@ function formatDateTime(dateValue: string | null) {
 export default async function FaqItemDetailPage({
   params
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const supabase = createServerSupabaseClient();
+  const { id } = await params;
+  const supabase = await createServerSupabaseClient();
 
   const [{ data: itemData, error: itemError }, { data: topicData, error: topicError }] = await Promise.all([
     supabase
       .from('faq_items')
       .select('id, topic_id, question, answer, is_popular, is_active, sort_order, created_at, updated_at')
-      .eq('id', params.id)
+      .eq('id', id)
       .maybeSingle(),
     supabase.from('faq_topics').select('id, name').order('sort_order', { ascending: true }).order('created_at', { ascending: true })
   ]);

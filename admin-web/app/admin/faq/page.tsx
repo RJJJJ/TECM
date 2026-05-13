@@ -57,7 +57,7 @@ function boolBadge(value: boolean) {
 }
 
 export default async function AdminFaqPage() {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   const [{ data: topicData, error: topicError }, { data: itemData, error: itemError }] = await Promise.all([
     supabase

@@ -1,2 +1,4 @@
-TECM/Config/Secrets.xcconfig
+﻿TECM/Config/Secrets.xcconfig
 TECM.xcodeproj/xcuserdata/
+admin-web/.env.local
+admin-web/.env*.local

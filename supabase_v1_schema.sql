@@ -1,4 +1,4 @@
--- TECM v1 Supabase Data Layer
+﻿-- TECM v1 Supabase Data Layer
 -- Scope: schema + indexes + triggers/functions + RLS + policies + seed data + verification queries
 
 /* =========================================================
@@ -317,43 +317,53 @@ end;
 $$;
 
 -- 4.4 attach updated_at triggers
+drop trigger if exists trg_staff_roles_updated_at on public.staff_roles;
 create trigger trg_staff_roles_updated_at
 before update on public.staff_roles
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_parent_profiles_updated_at on public.parent_profiles;
 create trigger trg_parent_profiles_updated_at
 before update on public.parent_profiles
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_children_updated_at on public.children;
 create trigger trg_children_updated_at
 before update on public.children
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_campuses_updated_at on public.campuses;
 create trigger trg_campuses_updated_at
 before update on public.campuses
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_courses_updated_at on public.courses;
 create trigger trg_courses_updated_at
 before update on public.courses
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_news_items_updated_at on public.news_items;
 create trigger trg_news_items_updated_at
 before update on public.news_items
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_faq_items_updated_at on public.faq_items;
 create trigger trg_faq_items_updated_at
 before update on public.faq_items
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_bookings_updated_at on public.bookings;
 create trigger trg_bookings_updated_at
 before update on public.bookings
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_follow_up_tasks_updated_at on public.follow_up_tasks;
 create trigger trg_follow_up_tasks_updated_at
 before update on public.follow_up_tasks
 for each row execute function public.set_updated_at();
 
 -- 4.5 attach booking status trigger
+drop trigger if exists trg_bookings_status_log on public.bookings;
 create trigger trg_bookings_status_log
 after update on public.bookings
 for each row execute function public.log_booking_status_change();
@@ -382,48 +392,57 @@ alter table public.booking_parent_notifications enable row level security;
    ========================================================= */
 
 -- ---------- 6.1 public read ----------
+drop policy if exists campuses_public_read_active on public.campuses;
 create policy campuses_public_read_active
 on public.campuses
 for select
 using (is_active = true);
 
+drop policy if exists courses_public_read_active on public.courses;
 create policy courses_public_read_active
 on public.courses
 for select
 using (is_active = true);
 
+drop policy if exists course_tags_public_read on public.course_tags;
 create policy course_tags_public_read
 on public.course_tags
 for select
 using (true);
 
+drop policy if exists news_public_read_active on public.news_items;
 create policy news_public_read_active
 on public.news_items
 for select
 using (is_active = true);
 
+drop policy if exists faq_topics_public_read on public.faq_topics;
 create policy faq_topics_public_read
 on public.faq_topics
 for select
 using (true);
 
+drop policy if exists faq_items_public_read_active on public.faq_items;
 create policy faq_items_public_read_active
 on public.faq_items
 for select
 using (is_active = true);
 
 -- ---------- 6.2 parent self read/write ----------
+drop policy if exists parent_profiles_select_own on public.parent_profiles;
 create policy parent_profiles_select_own
 on public.parent_profiles
 for select
 using (user_id = auth.uid());
 
+drop policy if exists parent_profiles_update_own on public.parent_profiles;
 create policy parent_profiles_update_own
 on public.parent_profiles
 for update
 using (user_id = auth.uid())
 with check (user_id = auth.uid());
 
+drop policy if exists children_select_own on public.children;
 create policy children_select_own
 on public.children
 for select
@@ -435,6 +454,7 @@ using (
   )
 );
 
+drop policy if exists children_insert_own on public.children;
 create policy children_insert_own
 on public.children
 for insert
@@ -446,6 +466,7 @@ with check (
   )
 );
 
+drop policy if exists children_update_own on public.children;
 create policy children_update_own
 on public.children
 for update
@@ -464,6 +485,7 @@ with check (
   )
 );
 
+drop policy if exists bookings_select_own on public.bookings;
 create policy bookings_select_own
 on public.bookings
 for select
@@ -473,6 +495,7 @@ using (
   )
 );
 
+drop policy if exists bookings_insert_own_parent on public.bookings;
 create policy bookings_insert_own_parent
 on public.bookings
 for insert
@@ -482,6 +505,7 @@ with check (
   )
 );
 
+drop policy if exists notifications_select_own on public.notifications;
 create policy notifications_select_own
 on public.notifications
 for select
@@ -491,6 +515,7 @@ using (
   )
 );
 
+drop policy if exists notifications_update_own on public.notifications;
 create policy notifications_update_own
 on public.notifications
 for update
@@ -506,87 +531,102 @@ with check (
 );
 
 -- ---------- 6.3 staff/admin full management ----------
+drop policy if exists staff_roles_self_read on public.staff_roles;
 create policy staff_roles_self_read
 on public.staff_roles
 for select
 using (user_id = auth.uid() or public.is_staff_or_admin());
 
+drop policy if exists staff_roles_admin_manage on public.staff_roles;
 create policy staff_roles_admin_manage
 on public.staff_roles
 for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists parent_profiles_staff_read on public.parent_profiles;
 create policy parent_profiles_staff_read
 on public.parent_profiles
 for select
 using (public.is_staff_or_admin());
 
+drop policy if exists children_staff_read on public.children;
 create policy children_staff_read
 on public.children
 for select
 using (public.is_staff_or_admin());
 
+drop policy if exists campuses_staff_manage on public.campuses;
 create policy campuses_staff_manage
 on public.campuses
 for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists courses_staff_manage on public.courses;
 create policy courses_staff_manage
 on public.courses
 for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists course_tags_staff_manage on public.course_tags;
 create policy course_tags_staff_manage
 on public.course_tags
 for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists news_staff_manage on public.news_items;
 create policy news_staff_manage
 on public.news_items
 for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists faq_topics_staff_manage on public.faq_topics;
 create policy faq_topics_staff_manage
 on public.faq_topics
 for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists faq_items_staff_manage on public.faq_items;
 create policy faq_items_staff_manage
 on public.faq_items
 for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists bookings_staff_manage on public.bookings;
 create policy bookings_staff_manage
 on public.bookings
 for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists booking_logs_staff_manage on public.booking_status_logs;
 create policy booking_logs_staff_manage
 on public.booking_status_logs
 for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists follow_up_tasks_staff_manage on public.follow_up_tasks;
 create policy follow_up_tasks_staff_manage
 on public.follow_up_tasks
 for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists notifications_staff_manage on public.notifications;
 create policy notifications_staff_manage
 on public.notifications
 for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists booking_parent_notifications_staff_manage on public.booking_parent_notifications;
 create policy booking_parent_notifications_staff_manage
 on public.booking_parent_notifications
 for all
@@ -597,548 +637,61 @@ with check (public.is_staff_or_admin());
    7) SEED DATA
    ========================================================= */
 
--- NOTE:
--- 1) auth.users cannot be freely inserted here in normal Supabase projects.
--- 2) We create a parent profile with user_id = null for demo linkage.
--- 3) After you have a real auth user id, run the update block near the end.
+-- Production readiness note:
+-- This schema intentionally does not insert demo data. Seed/demo rows were removed
+-- so rerunning the file in a live Supabase project cannot overwrite or pollute
+-- production campuses, courses, FAQ/news content, bookings, notifications, or
+-- follow_up_tasks. Insert real operational data through the app/admin workflow.
 
--- 7.1 campuses
-insert into public.campuses (id, name, address, is_active)
-values
-  ('10000000-0000-0000-0000-000000000001', '澳門半島校區', '澳門半島新口岸宋玉生廣場教學中心 3F', true),
-  ('10000000-0000-0000-0000-000000000002', '氹仔校區', '氹仔南京街社區教學大樓 2F', true),
-  ('10000000-0000-0000-0000-000000000003', '路氹城校區', '路氹城教育路創科學習中心 5F', true)
-on conflict (id) do update set
-  name = excluded.name,
-  address = excluded.address,
-  is_active = excluded.is_active,
-  updated_at = now();
-
--- 7.2 courses
-insert into public.courses (
-  id, title, category, level, age_group, summary, schedule_text,
-  campus_id, recommended, is_active, sort_order
-)
-values
-  (
-    '20000000-0000-0000-0000-000000000001',
-    'Python 入門：計算思維與程式基礎',
-    '程式設計',
-    '入門',
-    '9-12 歲',
-    '以專題式任務建立變數、條件與迴圈概念，培養可遷移的邏輯拆解能力。課程強調「看得懂、改得動、說得清」的學習成果。',
-    '每週六 10:00-11:30（12 週）',
-    '10000000-0000-0000-0000-000000000001',
-    true,
-    true,
-    1
-  ),
-  (
-    '20000000-0000-0000-0000-000000000002',
-    'Python 核心：資料結構與問題解決',
-    '程式設計',
-    '核心',
-    '11-15 歲',
-    '延伸至函式、列表與字典，透過真實情境題建立演算法思維與除錯習慣，為進階專題與競賽打底。',
-    '每週日 14:00-16:00（10 週）',
-    '10000000-0000-0000-0000-000000000002',
-    true,
-    true,
-    2
-  ),
-  (
-    '20000000-0000-0000-0000-000000000003',
-    'Python 進階：專題開發與資料應用',
-    '程式設計',
-    '進階',
-    '13-17 歲',
-    '採用小組專題模式，整合 API、資料處理與展示流程，訓練需求分析、版本管理與成果發表能力。',
-    '每週六 14:30-16:30（10 週）',
-    '10000000-0000-0000-0000-000000000003',
-    false,
-    true,
-    3
-  ),
-  (
-    '20000000-0000-0000-0000-000000000004',
-    'Scratch 互動創作：故事、遊戲與邏輯',
-    '創意程式',
-    '入門-核心',
-    '7-11 歲',
-    '以互動故事與遊戲製作培養順序、事件與條件邏輯，兼顧表達、合作與作品展示，適合零基礎起步。',
-    '每週三 16:30-18:00（8 週）',
-    '10000000-0000-0000-0000-000000000001',
-    true,
-    true,
-    4
-  ),
-  (
-    '20000000-0000-0000-0000-000000000005',
-    'C++ 基礎：結構化程式與演算法啟蒙',
-    '競賽基礎',
-    '基礎',
-    '12-16 歲',
-    '建立型別、流程控制與函式拆解能力，導入基礎資料結構觀念，適合作為資訊競賽與進階 CS 的前置課程。',
-    '每週五 19:00-21:00（12 週）',
-    '10000000-0000-0000-0000-000000000002',
-    false,
-    true,
-    5
-  )
-on conflict (id) do update set
-  title = excluded.title,
-  category = excluded.category,
-  level = excluded.level,
-  age_group = excluded.age_group,
-  summary = excluded.summary,
-  schedule_text = excluded.schedule_text,
-  campus_id = excluded.campus_id,
-  recommended = excluded.recommended,
-  is_active = excluded.is_active,
-  sort_order = excluded.sort_order,
-  updated_at = now();
-
--- 7.3 course_tags
-insert into public.course_tags (id, course_id, tag)
-values
-  ('21000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', '邏輯思維'),
-  ('21000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', '專題任務'),
-  ('21000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', '零基礎友善'),
-
-  ('21000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000002', '資料結構'),
-  ('21000000-0000-0000-0000-000000000005', '20000000-0000-0000-0000-000000000002', '除錯訓練'),
-  ('21000000-0000-0000-0000-000000000006', '20000000-0000-0000-0000-000000000002', '問題解決'),
-
-  ('21000000-0000-0000-0000-000000000007', '20000000-0000-0000-0000-000000000003', 'API 應用'),
-  ('21000000-0000-0000-0000-000000000008', '20000000-0000-0000-0000-000000000003', '專題開發'),
-  ('21000000-0000-0000-0000-000000000009', '20000000-0000-0000-0000-000000000003', '成果發表'),
-
-  ('21000000-0000-0000-0000-000000000010', '20000000-0000-0000-0000-000000000004', '互動設計'),
-  ('21000000-0000-0000-0000-000000000011', '20000000-0000-0000-0000-000000000004', '創意敘事'),
-  ('21000000-0000-0000-0000-000000000012', '20000000-0000-0000-0000-000000000004', '運算思維'),
-
-  ('21000000-0000-0000-0000-000000000013', '20000000-0000-0000-0000-000000000005', '語法基礎'),
-  ('21000000-0000-0000-0000-000000000014', '20000000-0000-0000-0000-000000000005', '演算法入門'),
-  ('21000000-0000-0000-0000-000000000015', '20000000-0000-0000-0000-000000000005', '競賽準備')
-on conflict (id) do nothing;
-
--- 7.4 news_items
-insert into public.news_items (
-  id, category, title, summary, content, image_url,
-  is_featured, is_active, published_at, sort_order
-)
-values
-  (
-    '30000000-0000-0000-0000-000000000001',
-    '活動',
-    'TECM 開放日：程式學習體驗週正式開放報名',
-    '為 7-15 歲學生提供分齡試學與家長諮詢時段。',
-    '本次開放日採小班導覽，包含課程體驗、學習路徑說明與個別 Q&A。建議家長預先提交孩子學習背景，以便顧問提供更精準建議。',
-    'https://images.example.com/tecm/open-day.jpg',
-    true,
-    true,
-    now() - interval '10 day',
-    1
-  ),
-  (
-    '30000000-0000-0000-0000-000000000002',
-    '家長講座',
-    '家長講座：如何陪伴孩子建立長期程式學習習慣',
-    '聚焦學習節奏、挫折管理與家庭支持策略。',
-    '講座由教學總監主講，將分享不同年齡層常見學習盲點與可執行的家庭支持方法，並提供課後追蹤建議。',
-    'https://images.example.com/tecm/parent-talk.jpg',
-    false,
-    true,
-    now() - interval '7 day',
-    2
-  ),
-  (
-    '30000000-0000-0000-0000-000000000003',
-    '新課程',
-    'Python 核心班新增平日夜間時段',
-    '回應家長需求，新增平日夜間班以提升排課彈性。',
-    '新時段將延續既有核心課程架構，重點放在資料結構、實作演練與除錯流程。適合已完成入門班或具基礎經驗學生。',
-    'https://images.example.com/tecm/python-core-evening.jpg',
-    false,
-    true,
-    now() - interval '4 day',
-    3
-  ),
-  (
-    '30000000-0000-0000-0000-000000000004',
-    '學生成果',
-    '學生專題成果展：從想法到可互動作品',
-    '展示跨班級專題，包含互動遊戲、資料視覺化與小型工具。',
-    '成果展重視學習過程與反思，學生將於現場說明需求拆解、技術選擇與版本迭代，展現完整問題解決能力。',
-    'https://images.example.com/tecm/student-showcase.jpg',
-    true,
-    true,
-    now() - interval '1 day',
-    4
-  )
-on conflict (id) do update set
-  category = excluded.category,
-  title = excluded.title,
-  summary = excluded.summary,
-  content = excluded.content,
-  image_url = excluded.image_url,
-  is_featured = excluded.is_featured,
-  is_active = excluded.is_active,
-  published_at = excluded.published_at,
-  sort_order = excluded.sort_order,
-  updated_at = now();
-
--- 7.5 faq_topics
-insert into public.faq_topics (id, name, sort_order)
-values
-  ('40000000-0000-0000-0000-000000000001', '選課策略', 1),
-  ('40000000-0000-0000-0000-000000000002', '課程內容', 2),
-  ('40000000-0000-0000-0000-000000000003', '預約流程', 3)
-on conflict (id) do update set
-  name = excluded.name,
-  sort_order = excluded.sort_order;
-
--- 7.6 faq_items
-insert into public.faq_items (
-  id, topic_id, question, answer, is_popular, is_active, sort_order
-)
-values
-  (
-    '41000000-0000-0000-0000-000000000001',
-    '40000000-0000-0000-0000-000000000001',
-    '孩子幾歲開始接觸程式學習最合適？',
-    '一般建議從 7 歲起可透過 Scratch 建立運算思維；9 歲以上可逐步銜接 Python 入門。實際仍以孩子的專注度、表達能力與學習動機做評估。',
-    true,
-    true,
-    1
-  ),
-  (
-    '41000000-0000-0000-0000-000000000002',
-    '40000000-0000-0000-0000-000000000001',
-    '零基礎應該先選哪一門課？',
-    '若孩子偏好視覺與創作，可先從 Scratch 互動創作開始；若已具備一定閱讀與邏輯能力，可直接進入 Python 入門班。顧問可依試學觀察提供分班建議。',
-    true,
-    true,
-    2
-  ),
-  (
-    '41000000-0000-0000-0000-000000000003',
-    '40000000-0000-0000-0000-000000000002',
-    'Python、Scratch、C++ 的學習差異是什麼？',
-    'Scratch 重在邏輯啟蒙與創意表達；Python 著重通用程式能力與實作應用；C++ 則更強調語法精確度與演算法訓練，常作為競賽與進階 CS 的基礎。',
-    true,
-    true,
-    1
-  ),
-  (
-    '41000000-0000-0000-0000-000000000004',
-    '40000000-0000-0000-0000-000000000003',
-    '如何預約體驗課程？',
-    '登入家長帳號後，於預約頁選擇校區、課程與可配合時段送出即可。送出後可在家長中心查看狀態，中心會於工作時間內確認。',
-    true,
-    true,
-    1
-  ),
-  (
-    '41000000-0000-0000-0000-000000000005',
-    '40000000-0000-0000-0000-000000000003',
-    '正式分班前是否會先做學習評估？',
-    '會。TECM 採用短時任務與口頭回饋進行初步診斷，涵蓋邏輯、表達與學習節奏，避免孩子進入不匹配的班級。',
-    false,
-    true,
-    2
-  ),
-  (
-    '41000000-0000-0000-0000-000000000006',
-    '40000000-0000-0000-0000-000000000002',
-    '完成入門後，如何銜接進階學習？',
-    '建議依「入門 → 核心 → 專題/進階」節奏銜接，每階段搭配作品與能力指標檢核。顧問會根據學習紀錄建議下一門最合適課程。',
-    false,
-    true,
-    2
-  )
-on conflict (id) do update set
-  topic_id = excluded.topic_id,
-  question = excluded.question,
-  answer = excluded.answer,
-  is_popular = excluded.is_popular,
-  is_active = excluded.is_active,
-  sort_order = excluded.sort_order,
-  updated_at = now();
-
--- 7.7 test parent / child / bookings / notifications
-insert into public.parent_profiles (id, user_id, full_name, phone)
-values
-  (
-    '50000000-0000-0000-0000-000000000001',
-    null,
-    '陳家怡',
-    '+853 6123 4567'
-  )
-on conflict (id) do update set
-  full_name = excluded.full_name,
-  phone = excluded.phone,
-  updated_at = now();
-
-insert into public.children (id, parent_id, child_name, age, school_name, notes)
-values
-  (
-    '51000000-0000-0000-0000-000000000001',
-    '50000000-0000-0000-0000-000000000001',
-    '陳朗希',
-    10,
-    '聖若瑟教區中學（小學部）',
-    '對遊戲設計有高度興趣，喜歡以專題方式學習。'
-  )
-on conflict (id) do update set
-  child_name = excluded.child_name,
-  age = excluded.age,
-  school_name = excluded.school_name,
-  notes = excluded.notes,
-  updated_at = now();
-
-insert into public.bookings (
-  id, parent_id, child_id,
-  parent_name, phone, child_name, child_age, school_name,
-  course_id, course_title_snapshot, campus_id,
-  booking_date, start_time, end_time, note, status
-)
-values
-  (
-    '52000000-0000-0000-0000-000000000001',
-    '50000000-0000-0000-0000-000000000001',
-    '51000000-0000-0000-0000-000000000001',
-    '陳家怡',
-    '+853 6123 4567',
-    '陳朗希',
-    10,
-    '聖若瑟教區中學（小學部）',
-    '20000000-0000-0000-0000-000000000001',
-    'Python 入門：計算思維與程式基礎',
-    '10000000-0000-0000-0000-000000000001',
-    current_date + 3,
-    '10:00',
-    '11:30',
-    '希望安排英文輔助說明。',
-    'pending'
-  ),
-  (
-    '52000000-0000-0000-0000-000000000002',
-    '50000000-0000-0000-0000-000000000001',
-    '51000000-0000-0000-0000-000000000001',
-    '陳家怡',
-    '+853 6123 4567',
-    '陳朗希',
-    10,
-    '聖若瑟教區中學（小學部）',
-    '20000000-0000-0000-0000-000000000004',
-    'Scratch 互動創作：故事、遊戲與邏輯',
-    '10000000-0000-0000-0000-000000000001',
-    current_date + 10,
-    '16:30',
-    '18:00',
-    '孩子偏好互動遊戲主題。',
-    'confirmed'
-  ),
-  (
-    '52000000-0000-0000-0000-000000000003',
-    '50000000-0000-0000-0000-000000000001',
-    '51000000-0000-0000-0000-000000000001',
-    '陳家怡',
-    '+853 6123 4567',
-    '陳朗希',
-    10,
-    '聖若瑟教區中學（小學部）',
-    '20000000-0000-0000-0000-000000000002',
-    'Python 核心：資料結構與問題解決',
-    '10000000-0000-0000-0000-000000000002',
-    current_date - 20,
-    '14:00',
-    '16:00',
-    '已完成體驗，評估可銜接核心班。',
-    'completed'
-  )
-on conflict (id) do update set
-  parent_id = excluded.parent_id,
-  child_id = excluded.child_id,
-  parent_name = excluded.parent_name,
-  phone = excluded.phone,
-  child_name = excluded.child_name,
-  child_age = excluded.child_age,
-  school_name = excluded.school_name,
-  course_id = excluded.course_id,
-  course_title_snapshot = excluded.course_title_snapshot,
-  campus_id = excluded.campus_id,
-  booking_date = excluded.booking_date,
-  start_time = excluded.start_time,
-  end_time = excluded.end_time,
-  note = excluded.note,
-  status = excluded.status,
-  updated_at = now();
-
-insert into public.notifications (id, parent_id, title, detail, is_read)
-values
-  (
-    '53000000-0000-0000-0000-000000000001',
-    '50000000-0000-0000-0000-000000000001',
-    '預約已受理',
-    '您提交的 Python 入門體驗預約已建立，中心將於一個工作日內完成確認。',
-    false
-  ),
-  (
-    '53000000-0000-0000-0000-000000000002',
-    '50000000-0000-0000-0000-000000000001',
-    '體驗課後建議已更新',
-    '顧問已提供學習銜接建議，建議先修 Python 核心班再進入專題課程。',
-    false
-  )
-on conflict (id) do update set
-  title = excluded.title,
-  detail = excluded.detail,
-  is_read = excluded.is_read;
-
-insert into public.follow_up_tasks (
-  id,
-  booking_id,
-  parent_name,
-  phone,
-  child_name,
-  course_title_snapshot,
-  campus_name,
-  booking_date,
-  start_time,
-  end_time,
-  channel,
-  priority,
-  intent_summary,
-  suggested_message,
-  suggested_next_steps,
-  internal_note,
-  source,
-  status
-)
-select
-  '54000000-0000-0000-0000-000000000001',
-  b.id,
-  b.parent_name,
-  b.phone,
-  b.child_name,
-  b.course_title_snapshot,
-  c.name,
-  b.booking_date,
-  b.start_time,
-  b.end_time,
-  'wechat_manual',
-  'high',
-  '家長已提交 Python 入門體驗課預約，建議優先確認孩子是否有 Scratch 或其他編程基礎。',
-  '您好，這裡是 TECM 澳門教育中心。已收到您為孩子預約 Python 入門體驗課的資料。想先跟您確認孩子是否曾學習 Scratch 或其他編程課程？我們可按程度安排最合適的體驗內容。',
-  array['確認孩子過往編程經驗', '確認體驗課日期及時段', '如家長回覆積極，可安排程度評估'],
-  'Demo seed：內部 staff 跟進建議，不會自動發送給家長。',
-  'manual_seed',
-  'open'
-from public.bookings b
-left join public.campuses c on c.id = b.campus_id
-where b.id = '52000000-0000-0000-0000-000000000001'
-on conflict (id) do update set
-  parent_name = excluded.parent_name,
-  phone = excluded.phone,
-  child_name = excluded.child_name,
-  course_title_snapshot = excluded.course_title_snapshot,
-  campus_name = excluded.campus_name,
-  booking_date = excluded.booking_date,
-  start_time = excluded.start_time,
-  end_time = excluded.end_time,
-  priority = excluded.priority,
-  intent_summary = excluded.intent_summary,
-  suggested_message = excluded.suggested_message,
-  suggested_next_steps = excluded.suggested_next_steps,
-  internal_note = excluded.internal_note,
-  updated_at = now();
-
--- 7.9 optional staff role sample
--- Replace the placeholder UUID with a real auth.users.id before execution.
+-- Optional staff role sample (run manually only after replacing the UUID).
 -- insert into public.staff_roles (user_id, role, is_active)
 -- values ('<REAL_AUTH_USER_UUID>', 'admin', true)
 -- on conflict (user_id) do update set role = excluded.role, is_active = excluded.is_active, updated_at = now();
 
--- 7.10 bind real parent auth user id (run after parent signs up)
--- Replace the placeholder UUID with the actual auth.users.id.
--- update public.parent_profiles
--- set user_id = '<REAL_PARENT_AUTH_USER_UUID>', updated_at = now()
--- where id = '50000000-0000-0000-0000-000000000001';
-
 /* =========================================================
-   8) TEST QUERIES SQL
+   8) VERIFICATION QUERIES (manual; keep commented during migration)
    ========================================================= */
 
--- 8.1 verify tables exist
-select table_name
-from information_schema.tables
-where table_schema = 'public'
-  and table_name in (
-    'staff_roles', 'parent_profiles', 'children', 'campuses', 'courses', 'course_tags',
-    'news_items', 'faq_topics', 'faq_items', 'bookings', 'booking_status_logs', 'follow_up_tasks', 'notifications', 'booking_parent_notifications'
-  )
-order by table_name;
+-- Verify tables exist:
+-- select table_name
+-- from information_schema.tables
+-- where table_schema = 'public'
+--   and table_name in (
+--     'staff_roles', 'parent_profiles', 'children', 'campuses', 'courses', 'course_tags',
+--     'news_items', 'faq_topics', 'faq_items', 'bookings', 'booking_status_logs',
+--     'follow_up_tasks', 'notifications', 'booking_parent_notifications'
+--   )
+-- order by table_name;
 
--- 8.2 verify public content
-select id, name from public.campuses where is_active = true order by name;
-select id, title, category, level from public.courses where is_active = true order by sort_order;
-select id, title, category from public.news_items where is_active = true order by published_at desc;
-select t.name as topic, i.question
-from public.faq_items i
-join public.faq_topics t on t.id = i.topic_id
-where i.is_active = true
-order by t.sort_order, i.sort_order;
+-- Verify follow_up_tasks:
+-- select id, booking_id, priority, channel, status, created_at
+-- from public.follow_up_tasks
+-- order by created_at desc
+-- limit 20;
 
--- 8.3 verify booking status trigger
--- Run once to change status and then inspect booking_status_logs.
--- update public.bookings
--- set status = 'cancelled', note = '家長行程調整'
--- where id = '52000000-0000-0000-0000-000000000001';
--- select booking_id, old_status, new_status, changed_by, created_at
--- from public.booking_status_logs
--- where booking_id = '52000000-0000-0000-0000-000000000001'
--- order by created_at desc;
+-- Verify pending bookings without open follow-up task:
+-- select b.id, b.parent_name, b.child_name, b.created_at
+-- from public.bookings b
+-- where b.status = 'pending'
+--   and not exists (
+--     select 1 from public.follow_up_tasks f
+--     where f.booking_id = b.id and f.status = 'open'
+--   )
+-- order by b.created_at desc;
 
--- 8.4 verify follow-up automation tasks
-select id, booking_id, priority, channel, status, created_at
-from public.follow_up_tasks
-order by created_at desc
-limit 20;
+-- Verify booking_parent_notifications bridge:
+-- select bpn.id, bpn.booking_id, bpn.notification_id, bpn.type, bpn.created_at
+-- from public.booking_parent_notifications bpn
+-- order by bpn.created_at desc
+-- limit 20;
 
-select
-  b.id as booking_id,
-  b.parent_name,
-  b.child_name,
-  b.status as booking_status,
-  f.priority,
-  f.channel,
-  f.status as follow_up_status,
-  f.created_at as follow_up_created_at
-from public.bookings b
-join public.follow_up_tasks f on f.booking_id = b.id
-order by f.created_at desc;
+-- Verify RLS is enabled:
+-- select schemaname, tablename, rowsecurity
+-- from pg_tables
+-- where schemaname = 'public'
+--   and tablename in ('follow_up_tasks', 'notifications', 'booking_parent_notifications')
+-- order by tablename;
 
-select b.id, b.parent_name, b.child_name, b.created_at
-from public.bookings b
-where b.status = 'pending'
-  and not exists (
-    select 1
-    from public.follow_up_tasks f
-    where f.booking_id = b.id
-      and f.status = 'open'
-  )
-order by b.created_at desc;
-
--- 8.5 verify RLS is enabled
-select schemaname, tablename, rowsecurity
-from pg_tables
-where schemaname = 'public'
-  and tablename in (
-    'staff_roles', 'parent_profiles', 'children', 'campuses', 'courses', 'course_tags',
-    'news_items', 'faq_topics', 'faq_items', 'bookings', 'booking_status_logs', 'follow_up_tasks', 'notifications', 'booking_parent_notifications'
-  )
 order by tablename;
 
 /* =========================================================
@@ -1302,34 +855,42 @@ create index if not exists idx_attendance_session on public.attendance_records(s
 create index if not exists idx_makeup_tasks_status_priority on public.makeup_tasks(status, priority, created_at);
 create index if not exists idx_makeup_sessions_task on public.makeup_sessions(makeup_task_id);
 
+drop trigger if exists trg_students_updated_at on public.students;
 create trigger trg_students_updated_at
 before update on public.students
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_teacher_profiles_updated_at on public.teacher_profiles;
 create trigger trg_teacher_profiles_updated_at
 before update on public.teacher_profiles
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_exam_cohorts_updated_at on public.exam_cohorts;
 create trigger trg_exam_cohorts_updated_at
 before update on public.exam_cohorts
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_lesson_plans_updated_at on public.lesson_plans;
 create trigger trg_lesson_plans_updated_at
 before update on public.lesson_plans
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_lesson_sessions_updated_at on public.lesson_sessions;
 create trigger trg_lesson_sessions_updated_at
 before update on public.lesson_sessions
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_attendance_records_updated_at on public.attendance_records;
 create trigger trg_attendance_records_updated_at
 before update on public.attendance_records
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_makeup_tasks_updated_at on public.makeup_tasks;
 create trigger trg_makeup_tasks_updated_at
 before update on public.makeup_tasks
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_makeup_sessions_updated_at on public.makeup_sessions;
 create trigger trg_makeup_sessions_updated_at
 before update on public.makeup_sessions
 for each row execute function public.set_updated_at();
@@ -1465,7 +1026,7 @@ begin
       new.id,
       new.status,
       'pending',
-      '待補課 1 節'
+      'Makeup required: 1 lesson'
     )
     on conflict (attendance_record_id) do update set
       missed_status = excluded.missed_status,
@@ -1501,6 +1062,7 @@ alter table public.makeup_tasks enable row level security;
 alter table public.makeup_sessions enable row level security;
 alter table public.makeup_recommendations enable row level security;
 
+drop policy if exists students_parent_summary_read on public.students;
 create policy students_parent_summary_read
 on public.students for select
 using (public.is_parent_of_student(id) or public.is_staff_or_admin() or exists (
@@ -1508,79 +1070,96 @@ using (public.is_parent_of_student(id) or public.is_staff_or_admin() or exists (
   where cs.student_id = students.id and public.is_teacher_for_cohort(cs.cohort_id)
 ));
 
+drop policy if exists students_staff_manage on public.students;
 create policy students_staff_manage
 on public.students for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists parent_student_links_parent_read on public.parent_student_links;
 create policy parent_student_links_parent_read
 on public.parent_student_links for select
 using (parent_user_id = auth.uid() or public.is_staff_or_admin());
 
+drop policy if exists parent_student_links_staff_manage on public.parent_student_links;
 create policy parent_student_links_staff_manage
 on public.parent_student_links for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists teacher_profiles_self_read on public.teacher_profiles;
 create policy teacher_profiles_self_read
 on public.teacher_profiles for select
 using (user_id = auth.uid() or public.is_staff_or_admin());
 
+drop policy if exists teacher_profiles_staff_manage on public.teacher_profiles;
 create policy teacher_profiles_staff_manage
 on public.teacher_profiles for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists exam_cohorts_teacher_read on public.exam_cohorts;
 create policy exam_cohorts_teacher_read
 on public.exam_cohorts for select
 using (public.is_teacher_for_cohort(id) or public.is_staff_or_admin());
 
+drop policy if exists exam_cohorts_staff_manage on public.exam_cohorts;
 create policy exam_cohorts_staff_manage
 on public.exam_cohorts for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists cohort_students_teacher_read on public.cohort_students;
 create policy cohort_students_teacher_read
 on public.cohort_students for select
 using (public.is_teacher_for_cohort(cohort_id) or public.is_staff_or_admin());
 
+drop policy if exists cohort_students_staff_manage on public.cohort_students;
 create policy cohort_students_staff_manage
 on public.cohort_students for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists lesson_plans_teacher_read on public.lesson_plans;
 create policy lesson_plans_teacher_read
 on public.lesson_plans for select
 using (public.is_teacher_for_cohort(cohort_id) or public.is_staff_or_admin());
 
+drop policy if exists lesson_plans_staff_manage on public.lesson_plans;
 create policy lesson_plans_staff_manage
 on public.lesson_plans for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists lesson_sessions_teacher_read on public.lesson_sessions;
 create policy lesson_sessions_teacher_read
 on public.lesson_sessions for select
 using (public.is_teacher_for_session(id) or public.is_staff_or_admin());
 
+drop policy if exists lesson_sessions_staff_manage on public.lesson_sessions;
 create policy lesson_sessions_staff_manage
 on public.lesson_sessions for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists attendance_teacher_write_own_session on public.attendance_records;
 create policy attendance_teacher_write_own_session
 on public.attendance_records for all
 using (public.is_teacher_for_session(session_id) or public.is_staff_or_admin())
 with check (public.is_teacher_for_session(session_id) or public.is_staff_or_admin());
 
+drop policy if exists makeup_tasks_teacher_read on public.makeup_tasks;
 create policy makeup_tasks_teacher_read
 on public.makeup_tasks for select
 using (public.is_teacher_for_cohort(cohort_id) or public.is_staff_or_admin());
 
+drop policy if exists makeup_tasks_staff_manage on public.makeup_tasks;
 create policy makeup_tasks_staff_manage
 on public.makeup_tasks for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists makeup_sessions_teacher_read on public.makeup_sessions;
 create policy makeup_sessions_teacher_read
 on public.makeup_sessions for select
 using (
@@ -1592,11 +1171,13 @@ using (
   )
 );
 
+drop policy if exists makeup_sessions_staff_manage on public.makeup_sessions;
 create policy makeup_sessions_staff_manage
 on public.makeup_sessions for all
 using (public.is_staff_or_admin())
 with check (public.is_staff_or_admin());
 
+drop policy if exists makeup_recommendations_staff_manage on public.makeup_recommendations;
 create policy makeup_recommendations_staff_manage
 on public.makeup_recommendations for all
 using (public.is_staff_or_admin())
@@ -1616,8 +1197,8 @@ select
   count(mt.id) filter (where mt.status in ('pending', 'recommended')) as pending_makeup_count,
   count(mt.id) filter (where mt.status = 'scheduled') as scheduled_makeup_count,
   case
-    when count(mt.id) filter (where mt.status in ('pending', 'recommended')) = 0 then '暫無待補課'
-    else '待補課 ' || count(mt.id) filter (where mt.status in ('pending', 'recommended')) || ' 節'
+    when count(mt.id) filter (where mt.status in ('pending', 'recommended')) = 0 then 'No pending makeup'
+    else 'Pending makeup: ' || count(mt.id) filter (where mt.status in ('pending', 'recommended')) || ' lesson(s)'
   end as display_text
 from public.parent_student_links psl
 join public.students s on s.id = psl.student_id

@@ -28,14 +28,15 @@ function formatDateTime(dateValue: string | null) {
 export default async function FaqTopicDetailPage({
   params
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const supabase = createServerSupabaseClient();
+  const { id } = await params;
+  const supabase = await createServerSupabaseClient();
 
   const { data, error } = await supabase
     .from('faq_topics')
     .select('id, name, sort_order, created_at')
-    .eq('id', params.id)
+    .eq('id', id)
     .maybeSingle();
 
   if (error) {

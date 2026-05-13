@@ -2,8 +2,8 @@
   "version": 1,
   "worktreeRoot": "C:\\Users\\RJ\\Desktop\\TECM",
   "gitDir": "C:\\Users\\RJ\\Desktop\\TECM\\.git",
-  "indexMtimeMs": 1776184331354.3333,
-  "indexSize": 13989,
-  "map": "  admin-web/: actions, actions, booking-update-form, loading, not-found, page, loading, page, actions, course-edit-form",
-  "createdAt": "2026-05-12T12:24:29.931Z"
+  "indexMtimeMs": 1778679683777.7773,
+  "indexSize": 20240,
+  "map": "  admin-web/: actions, actions, booking-update-form, follow-up-actions, loading, not-found, page, loading, page, actions",
+  "createdAt": "2026-05-13T14:25:12.642Z"
 }

@@ -18,11 +18,12 @@ type MakeupTaskRow = {
   teacher_profiles?: { display_name: string | null } | null;
 };
 
-export default async function MakeupStudentListPage({ searchParams }: { searchParams?: SearchParams }) {
-  const supabase = createServerSupabaseClient();
-  const selectedStatus = searchParams?.status ?? 'open';
-  const selectedSubject = searchParams?.subject ?? 'all';
-  const selectedPriority = searchParams?.priority ?? 'all';
+export default async function MakeupStudentListPage({ searchParams }: { searchParams?: Promise<SearchParams> }) {
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
+  const supabase = await createServerSupabaseClient();
+  const selectedStatus = resolvedSearchParams?.status ?? 'open';
+  const selectedSubject = resolvedSearchParams?.subject ?? 'all';
+  const selectedPriority = resolvedSearchParams?.priority ?? 'all';
 
   let query = supabase
     .from('makeup_tasks')

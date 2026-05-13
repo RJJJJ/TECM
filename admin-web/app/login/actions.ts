@@ -21,7 +21,7 @@ export async function loginAction(
     return { error: '請輸入 Email 與密碼。' };
   }
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   const { error } = await supabase.auth.signInWithPassword({
     email,

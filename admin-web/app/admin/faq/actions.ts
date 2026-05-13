@@ -36,7 +36,7 @@ export async function createFaqTopicAction(
     return { status: 'error', message: 'Sort order 必須是數字。' };
   }
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const access = await verifyActiveStaffAccess(supabase);
 
   if (!access.allowed) {
@@ -106,7 +106,7 @@ export async function createFaqItemAction(
     return { status: 'error', message: 'Sort order 必須是數字。' };
   }
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const access = await verifyActiveStaffAccess(supabase);
 
   if (!access.allowed) {

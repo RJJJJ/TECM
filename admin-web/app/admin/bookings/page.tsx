@@ -139,14 +139,15 @@ function buildListStateQuery(params: {
 export default async function AdminBookingsPage({
   searchParams
 }: {
-  searchParams?: SearchParams;
+  searchParams?: Promise<SearchParams>;
 }) {
-  const supabase = createServerSupabaseClient();
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
+  const supabase = await createServerSupabaseClient();
 
-  const selectedStatus = pickSingle(searchParams?.status) ?? 'all';
-  const selectedCampusId = pickSingle(searchParams?.campus) ?? 'all';
-  const selectedDate = pickSingle(searchParams?.date) ?? '';
-  const selectedKeyword = (pickSingle(searchParams?.keyword) ?? '').trim();
+  const selectedStatus = pickSingle(resolvedSearchParams?.status) ?? 'all';
+  const selectedCampusId = pickSingle(resolvedSearchParams?.campus) ?? 'all';
+  const selectedDate = pickSingle(resolvedSearchParams?.date) ?? '';
+  const selectedKeyword = (pickSingle(resolvedSearchParams?.keyword) ?? '').trim();
 
   const { data: campusData } = await supabase
     .from('campuses')

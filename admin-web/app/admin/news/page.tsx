@@ -47,7 +47,7 @@ function featuredBadge(isFeatured: boolean) {
 }
 
 export default async function AdminNewsPage() {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   const { data, error } = await supabase
     .from('news_items')

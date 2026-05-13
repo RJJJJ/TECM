@@ -9,7 +9,7 @@ type Teacher = {
 };
 
 export default async function TeachersPage() {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase
     .from('teacher_profiles')
     .select('id,user_id,display_name,phone,is_active')
