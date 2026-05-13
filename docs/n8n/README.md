@@ -44,3 +44,9 @@ TECM v1 keeps humans in the loop. The workflows generate `suggested_message` or 
 
 - [`examples/manual-follow-up-ai-output.example.json`](examples/manual-follow-up-ai-output.example.json)
 - [`examples/daily-digest-response.example.json`](examples/daily-digest-response.example.json)
+
+## Demo and UAT package
+
+- [TECM AI Operations Demo Package](../demo/README.md)
+- [UAT checklist](../demo/uat-checklist.md)
+- [Local runbook](../demo/local-runbook.md)

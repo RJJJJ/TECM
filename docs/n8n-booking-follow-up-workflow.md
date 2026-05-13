@@ -1,4 +1,4 @@
-﻿# TECM n8n Booking Follow-up Workflow
+# TECM n8n Booking Follow-up Workflow
 
 ## 1. Why n8n is used
 
@@ -409,6 +409,10 @@ Do **not** use direct WeChat auto-send in v1. The supported production workflow 
 4. staff sends it through WeChat / WhatsApp / phone using the normal human workflow;
 5. staff marks the task done or dismissed in Admin Web.
 
+
+## Demo and UAT Package
+
+A complete demo, UAT, local runbook, architecture overview, and portfolio writeup are available at [`docs/demo/README.md`](demo/README.md).
 
 ## n8n v1 Workflow Templates
 
