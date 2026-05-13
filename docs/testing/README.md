@@ -24,3 +24,9 @@ This script uses a caller-provided base URL, automation secret, and booking ID. 
 - [Supabase test plan](supabase-test-plan.md)
 - [n8n test plan](n8n-test-plan.md)
 - [CI plan](ci-plan.md)
+## New test support
+
+- [Automation API smoke test runbook](automation-api-smoke-test-runbook.md)
+- [Playwright future plan](playwright-future-plan.md)
+
+The smoke test script is available, but full automated coverage and Playwright are not enabled yet.

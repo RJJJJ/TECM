@@ -44,3 +44,9 @@
 2. Then check Admin Web.
 3. Then check iOS logs.
 4. Then check network/config.
+## Supabase `.xcconfig` runtime fixes
+
+- If the app reports missing `SUPABASE_URL` at runtime, confirm Target Info custom properties include `SUPABASE_URL` and `SUPABASE_ANON_KEY`.
+- If `SUPABASE_URL` appears as `https:`, remember `.xcconfig` treats `//` as a comment. Use `SUPABASE_URL = https:/$()/<project-ref>.supabase.co`.
+- If the Swift client rejects `SUPABASE_PUBLISHABLE_KEY`, use `SUPABASE_ANON_KEY` for the current client configuration.
+- Never commit `Secrets.xcconfig`, actual Supabase keys, or the real project ref in evidence screenshots.

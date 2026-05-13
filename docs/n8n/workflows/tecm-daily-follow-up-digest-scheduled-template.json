@@ -1,0 +1,173 @@
+{
+  "name": "TECM - Scheduled Daily Follow-up Digest Template",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "20000000-0000-4000-8000-000000000001",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "Schedule: daily 09:00 Asia/Macau. Confirm workflow timezone in n8n instance settings before activation. This workflow only outputs digest_text for staff manual copy; it does not auto-send.",
+        "height": 180,
+        "width": 320
+      },
+      "id": "20000000-0000-4000-8000-000000000002",
+      "name": "Schedule Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "base",
+              "name": "base_url",
+              "value": "REPLACE_WITH_DEPLOYED_ADMIN_WEB_URL",
+              "type": "string"
+            },
+            {
+              "id": "secret",
+              "name": "automation_secret",
+              "value": "REPLACE_WITH_TECM_AUTOMATION_SECRET",
+              "type": "string"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "value": "open",
+              "type": "string"
+            },
+            {
+              "id": "limit",
+              "name": "limit",
+              "value": 20,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "20000000-0000-4000-8000-000000000003",
+      "name": "Set Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.base_url}}/api/automation/follow-up-digest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-tecm-automation-secret",
+              "value": "={{$json.automation_secret}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"open\",\n  \"limit\": 20\n}",
+        "options": {}
+      },
+      "id": "20000000-0000-4000-8000-000000000004",
+      "name": "Follow-up Digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        0
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.error) {\n  return [{ json: {\n    ok: false,\n    error_summary: 'Digest endpoint failed. Staff should open /admin/follow-ups manually.',\n    digest_text: '',\n    admin_follow_ups_url: $node['Set Config'].json.base_url + '/admin/follow-ups',\n    instruction: '請 staff 直接打開 Admin Follow-ups Dashboard。本 workflow 不會自動發送訊息。'\n  }}];\n}\nreturn [{ json: {\n  ok: $json.ok,\n  summary: $json.summary,\n  digest_text: $json.digest_text,\n  items: $json.items,\n  admin_follow_ups_url: $node['Set Config'].json.base_url + '/admin/follow-ups',\n  instruction: '請 staff 手動複製 digest_text 到 WeChat / WhatsApp 工作群。本 workflow 不會自動發送訊息。'\n}}];"
+      },
+      "id": "20000000-0000-4000-8000-000000000005",
+      "name": "Format Staff Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Config": {
+      "main": [
+        [
+          {
+            "node": "Follow-up Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Follow-up Digest": {
+      "main": [
+        [
+          {
+            "node": "Format Staff Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Macau"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

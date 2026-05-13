@@ -16,16 +16,17 @@ Status: local RC completed before v1.1 preparation, pending final documentation 
 ## Gate 2: iOS RC
 
 Pass criteria:
-- [ ] Xcode build succeeds in VM
-- [ ] iOS app launches on simulator
+- [x] Xcode build succeeds in VM
+- [x] iOS app launches on simulator
 - [ ] Supabase data loads
-- [ ] booking submit creates `public.bookings` row
-- [ ] Admin Web sees iOS booking
+- [x] booking submit creates `public.bookings` row
+- [x] Admin Web sees iOS booking
 - [ ] parent center reads booking
+- [x] Admin confirmed notification bridge creates `public.notifications` and `public.booking_parent_notifications` rows
 - [ ] confirmed booking notification visible in iOS when parent linkage supports it
 - [ ] final iOS regression report completed
 
-Status: pending execution.
+Status: core iOS RC checks passed for build, launch, booking submit, Supabase/Admin visibility, and Admin notification bridge. iOS visual notification display remains pending unless verified in the iOS UI.
 
 ## Gate 3: Staging RC
 

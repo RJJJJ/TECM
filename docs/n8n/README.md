@@ -59,3 +59,10 @@ TECM v1 keeps humans in the loop. The workflows generate `suggested_message` or 
 - [n8n test plan](../testing/n8n-test-plan.md)
 
 Status: these are preparation documents. The production scheduler and real AI provider are not active.
+## v1.1 workflow templates
+
+- [Real AI follow-up template](workflows/tecm-booking-follow-up-real-ai-template.json) — provider-neutral template; not active until configured with n8n credentials.
+- [Scheduled daily digest template](workflows/tecm-daily-follow-up-digest-scheduled-template.json) — schedule template; not active until imported and enabled.
+- [Future pending booking polling template](workflows/tecm-pending-booking-polling-future-template.json) — disabled future placeholder; backend endpoint is not implemented yet.
+
+All v1.1 templates preserve human-in-the-loop review and do not send WeChat / WhatsApp automatically.

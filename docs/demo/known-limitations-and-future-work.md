@@ -2,7 +2,7 @@
 
 ## Current limitations
 
-- iOS VM/Xcode final regression pending; checklist package prepared in `docs/ios-final-regression/`
+- iOS visual notification display pending unless verified in the iOS UI; core iOS build/launch/booking regression passed
 - n8n workflow v1 manual only
 - AI output currently simulated in workflow template
 - no production scheduler
@@ -29,3 +29,9 @@
 - [Production automation package](../production-automation/README.md)
 - [Real AI provider package](../real-ai-provider/README.md)
 - [Testing package](../testing/README.md)
+## v1.1 practical update
+
+- real AI workflow template prepared, but provider credentials/configuration are not active
+- scheduled digest workflow template prepared, but production scheduler is not active
+- future pending booking polling workflow documented as placeholder only
+- automation API smoke test script prepared for local/staging checks

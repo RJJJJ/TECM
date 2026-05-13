@@ -18,3 +18,10 @@ Staging is not production. It is used to validate deployed Admin Web + staging S
 - [n8n staging configuration](n8n-staging-configuration.md)
 - [Staging smoke test](staging-smoke-test.md)
 - [Rollback plan](rollback-plan.md)
+## Fillable staging helpers
+
+- [Staging env example](staging-env.example)
+- [Deployment checklist fillable](deployment-checklist-fillable.md)
+- [Staging validation results template](staging-validation-results-template.md)
+
+These files are templates only. Staging is not deployed until the validation report is filled and approved.

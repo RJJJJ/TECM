@@ -40,7 +40,7 @@ This is a local release candidate, not a production release.
 
 ## 4. Remaining blockers before production
 
-- iOS VM/Xcode final regression remains pending; execute `docs/ios-final-regression/` before production.
+- Core iOS VM/Xcode regression has passed for build, launch, booking submit, Supabase/Admin visibility, and Admin notification bridge. iOS visual notification display remains pending unless verified in the iOS UI.
 - Staging deployment remains pending.
 - Real AI provider node remains pending.
 - Production scheduler remains pending.
@@ -65,3 +65,12 @@ This is a local release candidate, not a production release.
 - [Testing package](../testing/README.md)
 
 These packages prepare next steps only; they do not mean iOS regression, staging deployment, production scheduler, real AI provider integration, or full automated tests have passed.
+## v1.1 practical templates
+
+- [Real AI workflow template](../n8n/workflows/tecm-booking-follow-up-real-ai-template.json)
+- [Scheduled daily digest workflow template](../n8n/workflows/tecm-daily-follow-up-digest-scheduled-template.json)
+- [Future pending booking polling template](../n8n/workflows/tecm-pending-booking-polling-future-template.json)
+- [Automation API smoke test runbook](../testing/automation-api-smoke-test-runbook.md)
+- [Staging env example](../staging-deployment/staging-env.example)
+
+These are templates/support files. Staging is not deployed, real AI provider is not active, production scheduler is not active, and direct WeChat auto-send remains excluded.

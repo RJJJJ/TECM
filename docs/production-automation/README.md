@@ -16,3 +16,9 @@ No direct WeChat auto-send is included or recommended for v1.1. Staff must remai
 - [Daily digest schedule design](daily-digest-schedule-design.md)
 - [Booking follow-up polling design](booking-follow-up-polling-design.md)
 - [Human-in-the-loop policy](human-in-the-loop-policy.md)
+## Related workflow templates
+
+- [Scheduled daily digest workflow template](../n8n/workflows/tecm-daily-follow-up-digest-scheduled-template.json)
+- [Future pending booking polling workflow template](../n8n/workflows/tecm-pending-booking-polling-future-template.json)
+
+These are templates only. The production scheduler is not active.

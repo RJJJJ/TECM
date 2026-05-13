@@ -62,3 +62,28 @@
 - real AI provider node
 - production scheduler
 - automated test suite
+## iOS regression update
+
+Passed locally:
+
+- Xcode build passed
+- iOS App run passed
+- App launch passed
+- Supabase config fixed
+- iOS booking submit passed
+- iOS-created booking appeared in Supabase `public.bookings`
+- iOS-created booking appeared in Admin Web `/admin/bookings`
+- Admin Web booking detail opened
+- Admin pending to confirmed passed
+- `public.notifications` row created
+- `public.booking_parent_notifications` row created
+
+Pending:
+
+- iOS visual notification display remains pending unless explicitly verified in the iOS UI.
+
+Config fixes recorded without committing secrets:
+
+- Inject `SUPABASE_URL` and `SUPABASE_ANON_KEY` into Target Info custom properties.
+- In `.xcconfig`, write Supabase URL as `https:/$()/<project-ref>.supabase.co` because `//` is treated as a comment.
+- Use `SUPABASE_ANON_KEY` for the current Swift Supabase client configuration.

@@ -1,14 +1,14 @@
 # Final iOS Regression Report
 
-Default status: Pending execution
+Status: Local full-stack RC passed, with iOS visual notification display still pending unless separately verified in the iOS UI.
 
 ## 1. Regression date
 
-- [ ] `<YYYY-MM-DD>`
+- [x] 2026-05-14
 
 ## 2. Operator
 
-- [ ] `<OPERATOR_NAME>`
+- [x] RJ
 
 ## 3. Commit SHA
 
@@ -16,7 +16,7 @@ Default status: Pending execution
 
 ## 4. VM / Xcode version
 
-- [ ] VM: `<VM_DETAILS>`
+- [x] VM: local VM used for Xcode regression
 - [ ] Xcode: `<XCODE_VERSION>`
 
 ## 5. Simulator model / iOS version
@@ -26,21 +26,21 @@ Default status: Pending execution
 
 ## 6. Build result
 
-- [ ] Passed
+- [x] Passed
 - [ ] Failed
-- Notes: `<BUILD_NOTES>`
+- Notes: Xcode build passed in VM.
 
 ## 7. Supabase connectivity result
 
-- [ ] Passed
+- [x] Passed
 - [ ] Failed
-- Notes: `<SUPABASE_CONNECTIVITY_NOTES>`
+- Notes: Supabase config was fixed and app runtime connectivity passed.
 
 ## 8. Booking submit result
 
-- [ ] Passed
+- [x] Passed
 - [ ] Failed
-- Notes: `<BOOKING_SUBMIT_NOTES>`
+- Notes: iOS booking submit passed; iOS-created booking appeared in Supabase `public.bookings` and Admin Web `/admin/bookings`.
 
 ## 9. Parent center result
 
@@ -52,20 +52,24 @@ Default status: Pending execution
 
 - [ ] Passed
 - [ ] Failed
-- Notes: `<NOTIFICATION_NOTES>`
+- Notes: Admin pending to confirmed passed; `public.notifications` row and `public.booking_parent_notifications` row were created. iOS visual notification display remains pending unless separately verified in the iOS UI.
 
 ## 11. Issues found
 
-- `<ISSUE_LIST>`
+1. Missing `SUPABASE_URL` at runtime.
+2. `SUPABASE_URL` parsed as `https:`.
+3. `SUPABASE_PUBLISHABLE_KEY` mismatch with current Swift client configuration.
 
 ## 12. Fixes applied
 
-- `<FIX_LIST>`
+1. Added `SUPABASE_URL` and `SUPABASE_ANON_KEY` to Target Info custom properties so runtime Info values are injected. Do not commit actual keys.
+2. In `.xcconfig`, use `SUPABASE_URL = https:/$()/<project-ref>.supabase.co` because `//` is parsed as a comment. Do not write the real project ref in committed docs.
+3. Use `SUPABASE_ANON_KEY` for the current Supabase Swift client configuration. Do not commit `Secrets.xcconfig`.
 
 ## 13. Final decision
 
 - [ ] Pending execution
-- [ ] Passed for local iOS regression
+- [x] Passed for local full-stack RC, excluding explicitly pending iOS visual notification display
 - [ ] Failed; requires fixes before release candidate
 
-Do not mark this report as passed until the VM / Xcode regression is actually executed.
+Do not mark iOS notification display as passed until it is actually verified in the iOS UI.

@@ -36,3 +36,9 @@ Do not commit real keys.
 - RLS policy issue: verify anon key permissions for the queried tables.
 - Anon key mismatch: confirm the key belongs to the same Supabase project URL.
 - Network unavailable: test simulator network access and Supabase project reachability.
+## VM/Xcode config notes from local regression
+
+- Inject `SUPABASE_URL` and `SUPABASE_ANON_KEY` into Target Info custom properties so they exist at runtime.
+- In `.xcconfig`, do not write `https://` directly because `//` is treated as a comment. Use `SUPABASE_URL = https:/$()/<project-ref>.supabase.co`.
+- Use `SUPABASE_ANON_KEY` for the current Supabase Swift client configuration.
+- Do not commit `Secrets.xcconfig` or real project refs/keys.

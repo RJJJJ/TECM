@@ -25,3 +25,13 @@ Local RC evidence exists for Supabase schema, Admin Web operations, automation e
 - [Risk register](risk-register.md)
 - [Release gate checklist](release-gate-checklist.md)
 - [Manual commands](manual-commands.md)
+## v1.1 practical support files
+
+- [Real AI workflow template](../n8n/workflows/tecm-booking-follow-up-real-ai-template.json)
+- [Scheduled daily digest workflow template](../n8n/workflows/tecm-daily-follow-up-digest-scheduled-template.json)
+- [Future pending booking polling workflow template](../n8n/workflows/tecm-pending-booking-polling-future-template.json)
+- [Automation API smoke test runbook](../testing/automation-api-smoke-test-runbook.md)
+- [Staging env example](../staging-deployment/staging-env.example)
+- [Playwright future plan](../testing/playwright-future-plan.md)
+
+These are preparation/support assets. Staging is not deployed, real AI provider is not active, and production scheduler is not active.

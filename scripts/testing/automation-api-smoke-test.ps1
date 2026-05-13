@@ -1,7 +1,8 @@
-﻿param(
+param(
   [string]$BaseUrl = "http://localhost:3000",
   [string]$AutomationSecret,
-  [string]$BookingId
+  [string]$BookingId,
+  [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,6 +53,20 @@ Write-Host "TECM automation API smoke test"
 Write-Host "BaseUrl: $BaseUrl"
 Write-Host "AutomationSecret: <redacted length=$($AutomationSecret.Length)>"
 Write-Host "BookingId: $BookingId"
+if ($DryRun) {
+  Write-Host "DryRun: enabled; requests will not be sent."
+  Write-Host "[PASS] Parameters accepted"
+  exit 0
+}
+
+try {
+  Invoke-JsonPost -Url "$BaseUrl/api/automation/follow-up-digest" -Headers @{} -Body @{ status = "open"; limit = 1 } | Out-Null
+  Add-Result "Missing secret rejected" $false "Request unexpectedly succeeded"
+} catch {
+  $statusCode = $null
+  if ($_.Exception.Response) { $statusCode = [int]$_.Exception.Response.StatusCode }
+  Add-Result "Missing secret rejected" ($statusCode -eq 401) "Expected 401, got $statusCode"
+}
 
 try {
   Invoke-JsonPost -Url "$BaseUrl/api/automation/follow-up-digest" -Headers $invalidHeaders -Body @{ status = "open"; limit = 1 } | Out-Null
@@ -72,8 +87,8 @@ try {
 try {
   $previewNote = Convert-UnicodeEscapes "\u5bb6\u9577\u60f3\u4e86\u89e3 Python \u8ab2\u7a0b"
   $preview = Invoke-JsonPost -Url "$BaseUrl/api/automation/follow-up-preview" -Headers $validHeaders -Body @{ booking_id = $BookingId; note = $previewNote }
-  $passed = ($null -ne $preview.booking) -or ($null -ne $preview.recommended_prompt)
-  Add-Result "Preview endpoint ok" $passed "Expected booking or recommended_prompt in response"
+  $passed = ($null -ne $preview.booking) -and ($null -ne $preview.recommended_prompt)
+  Add-Result "Preview endpoint ok" $passed "Expected booking and recommended_prompt in response"
 } catch {
   Add-Result "Preview endpoint ok" $false $_.Exception.Message
 }
