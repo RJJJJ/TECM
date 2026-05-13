@@ -1,5 +1,10 @@
 import Link from 'next/link';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
+import {
+  type FollowUpPriority,
+  followUpPriorityBadgeClass,
+  followUpPriorityLabel
+} from '@/lib/types/follow-up';
 
 type BookingStatus = 'pending' | 'confirmed' | 'completed' | 'cancelled';
 
@@ -23,6 +28,11 @@ type BookingRow = {
 type CampusOption = {
   id: string;
   name: string;
+};
+
+type OpenFollowUpTaskSummary = {
+  booking_id: string;
+  priority: FollowUpPriority;
 };
 
 type SearchParams = {
@@ -187,6 +197,23 @@ export default async function AdminBookingsPage({
   const { data, error } = await bookingsQuery;
 
   const bookings = (data ?? []) as unknown as BookingRow[];
+  const bookingIds = bookings.map((booking) => booking.id);
+  const { data: openFollowUpTasksData } = bookingIds.length > 0
+    ? await supabase
+        .from('follow_up_tasks')
+        .select('booking_id, priority')
+        .eq('status', 'open')
+        .in('booking_id', bookingIds)
+    : { data: [] };
+
+  const priorityRank: Record<FollowUpPriority, number> = { high: 3, medium: 2, low: 1 };
+  const openFollowUpByBooking = new Map<string, FollowUpPriority>();
+  ((openFollowUpTasksData ?? []) as OpenFollowUpTaskSummary[]).forEach((task) => {
+    const current = openFollowUpByBooking.get(task.booking_id);
+    if (!current || priorityRank[task.priority] > priorityRank[current]) {
+      openFollowUpByBooking.set(task.booking_id, task.priority);
+    }
+  });
   const listStateQuery = buildListStateQuery({
     status: selectedStatus,
     campus: selectedCampusId,
@@ -334,7 +361,14 @@ export default async function AdminBookingsPage({
                     </p>
                   </td>
                   <td className="px-4 py-3">
-                    <span className={statusBadgeClass(booking.status)}>{statusLabel(booking.status)}</span>
+                    <div className="flex flex-col items-start gap-2">
+                      <span className={statusBadgeClass(booking.status)}>{statusLabel(booking.status)}</span>
+                      {openFollowUpByBooking.has(booking.id) ? (
+                        <span className={followUpPriorityBadgeClass(openFollowUpByBooking.get(booking.id) ?? null)}>
+                          待跟進 / {followUpPriorityLabel(openFollowUpByBooking.get(booking.id) ?? null)}
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-600">
                     <p>Created: {formatDateTime(booking.created_at)}</p>

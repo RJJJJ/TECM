@@ -2,6 +2,16 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import BookingUpdateForm from './booking-update-form';
+import FollowUpCopyButton from './follow-up-copy-button';
+import { dismissFollowUpTaskAction, markFollowUpTaskDoneAction } from './actions';
+import {
+  type FollowUpTask,
+  followUpChannelLabel,
+  followUpPriorityBadgeClass,
+  followUpPriorityLabel,
+  followUpStatusBadgeClass,
+  followUpStatusLabel
+} from '@/lib/types/follow-up';
 
 type BookingDetail = {
   id: string;
@@ -168,6 +178,37 @@ export default async function BookingDetailPage({
     .eq('booking_id', params.id)
     .order('created_at', { ascending: false });
 
+  const { data: followUpTasksData, error: followUpTasksError } = await supabase
+    .from('follow_up_tasks')
+    .select(
+      `
+      id,
+      booking_id,
+      parent_name,
+      phone,
+      child_name,
+      course_title_snapshot,
+      campus_name,
+      booking_date,
+      start_time,
+      end_time,
+      channel,
+      priority,
+      intent_summary,
+      suggested_message,
+      suggested_next_steps,
+      internal_note,
+      source,
+      status,
+      completed_at,
+      dismissed_at,
+      created_at,
+      updated_at
+    `
+    )
+    .eq('booking_id', params.id)
+    .order('created_at', { ascending: false });
+
   if (error) {
     return (
       <section className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700">
@@ -182,6 +223,7 @@ export default async function BookingDetailPage({
 
   const booking = data as unknown as BookingDetail;
   const bookingStatusLogs = (statusLogs ?? []) as BookingStatusLog[];
+  const followUpTasks = (followUpTasksData ?? []) as FollowUpTask[];
 
   return (
     <div className="space-y-5">
@@ -292,6 +334,99 @@ export default async function BookingDetailPage({
           end_time: booking.end_time
         }}
       />
+
+
+
+      <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div>
+          <h3 className="text-lg font-semibold text-slate-900">AI 跟進建議</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            供 staff 複製 WeChat / WhatsApp 話術後人工聯絡家長，不會自動發送。
+          </p>
+        </div>
+
+        {followUpTasksError ? (
+          <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            讀取 AI 跟進建議失敗：{followUpTasksError.message}
+          </div>
+        ) : followUpTasks.length === 0 ? (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-600">
+            目前未有 AI 跟進建議。之後可由 n8n / automation 在新 booking 建立後自動生成。
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {followUpTasks.map((task) => (
+              <article key={task.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={followUpPriorityBadgeClass(task.priority)}>
+                    優先：{followUpPriorityLabel(task.priority)}
+                  </span>
+                  <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">
+                    {followUpChannelLabel(task.channel)}
+                  </span>
+                  <span className={followUpStatusBadgeClass(task.status)}>{followUpStatusLabel(task.status)}</span>
+                </div>
+
+                {task.intent_summary ? (
+                  <p className="mt-3 text-sm text-slate-700">{task.intent_summary}</p>
+                ) : null}
+
+                <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">建議話術</p>
+                    <FollowUpCopyButton message={task.suggested_message} />
+                  </div>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{task.suggested_message}</p>
+                </div>
+
+                {task.suggested_next_steps.length > 0 ? (
+                  <div className="mt-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">建議下一步</p>
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                      {task.suggested_next_steps.map((step) => (
+                        <li key={step}>{step}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {task.internal_note ? (
+                  <div className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    <span className="font-medium">內部備註：</span>{task.internal_note}
+                  </div>
+                ) : null}
+
+                <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-slate-500 md:grid-cols-3">
+                  <p>建立：{formatDateTime(task.created_at)}</p>
+                  <p>完成：{formatDateTime(task.completed_at)}</p>
+                  <p>忽略：{formatDateTime(task.dismissed_at)}</p>
+                </div>
+
+                {task.status === 'open' ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <form action={markFollowUpTaskDoneAction.bind(null, task.id, booking.id)}>
+                      <button
+                        type="submit"
+                        className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700"
+                      >
+                        標記已完成
+                      </button>
+                    </form>
+                    <form action={dismissFollowUpTaskAction.bind(null, task.id, booking.id)}>
+                      <button
+                        type="submit"
+                        className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+                      >
+                        忽略
+                      </button>
+                    </form>
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
 
       <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div>

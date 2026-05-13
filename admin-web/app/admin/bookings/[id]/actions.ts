@@ -84,3 +84,43 @@ export async function updateBookingAction(
     message: 'Booking 已更新，列表與詳情資料已同步。'
   };
 }
+
+
+async function updateFollowUpTaskStatus(
+  taskId: string,
+  bookingId: string,
+  status: 'done' | 'dismissed'
+) {
+  const supabase = createServerSupabaseClient();
+  const access = await verifyActiveStaffAccess(supabase);
+
+  if (!access.allowed) {
+    await supabase.auth.signOut();
+    throw new Error('Not allowed to update follow-up tasks');
+  }
+
+  const timestampField = status === 'done' ? 'completed_at' : 'dismissed_at';
+  const { error } = await supabase
+    .from('follow_up_tasks')
+    .update({
+      status,
+      [timestampField]: new Date().toISOString()
+    })
+    .eq('id', taskId)
+    .eq('booking_id', bookingId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  revalidatePath('/admin/bookings');
+  revalidatePath(`/admin/bookings/${bookingId}`);
+}
+
+export async function markFollowUpTaskDoneAction(taskId: string, bookingId: string) {
+  await updateFollowUpTaskStatus(taskId, bookingId, 'done');
+}
+
+export async function dismissFollowUpTaskAction(taskId: string, bookingId: string) {
+  await updateFollowUpTaskStatus(taskId, bookingId, 'dismissed');
+}
