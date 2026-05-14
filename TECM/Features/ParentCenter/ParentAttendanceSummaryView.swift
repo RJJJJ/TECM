@@ -7,12 +7,12 @@ struct ParentAttendanceSummaryView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             PremiumSectionHeader(
                 eyebrow: "ParentAttendanceSummaryView",
-                title: "考級班出席摘要",
-                subtitle: "只顯示重點摘要，詳細後台記錄由老師與管理員處理。"
+                title: "考試班出席摘要",
+                subtitle: "查看孩子在考試預備班的出席情況和需要補課的數量。"
             )
 
             if summaries.isEmpty {
-                EmptyStateView(title: "暫無考級班出席資料", message: "當孩子加入考級班後，這裡會顯示出席與補課摘要。")
+                EmptyStateView(title: "暫無出席紀錄", message: "目前未有考試班出席資料。")
             } else {
                 ForEach(summaries) { summary in
                     ElevatedCard {
@@ -35,8 +35,8 @@ struct ParentAttendanceSummaryView: View {
 
                             HStack {
                                 SummaryPill(title: "出席率", value: summary.attendanceRateText)
-                                SummaryPill(title: "已完成", value: "\(summary.completedLessons) 節")
-                                SummaryPill(title: "已安排", value: "\(summary.scheduledMakeupCount) 節")
+                                SummaryPill(title: "已完成", value: "\(summary.completedLessons) 堂")
+                                SummaryPill(title: "已安排補課", value: "\(summary.scheduledMakeupCount) 堂")
                             }
                         }
                     }

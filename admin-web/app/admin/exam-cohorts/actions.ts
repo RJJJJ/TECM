@@ -28,6 +28,13 @@ function nullableText(formData: FormData, key: string) {
   return value || null;
 }
 
+function macauDateTimeLocalToIso(value: string) {
+  if (!value) return null;
+  const normalized = value.length === 16 ? `${value}:00+08:00` : value;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : normalized;
+}
+
 export async function createExamCohortAction(
   _prevState: ExamCohortFormState,
   formData: FormData
@@ -120,5 +127,68 @@ export async function saveLessonPlanAction(
     return { status: 'success', message: 'Lesson plans saved.' };
   } catch (error) {
     return { status: 'error', message: error instanceof Error ? error.message : 'Save failed.' };
+  }
+}
+
+export async function createLessonSessionAction(
+  cohortId: string,
+  _prevState: ExamCohortFormState,
+  formData: FormData
+): Promise<ExamCohortFormState> {
+  const lessonPlanId = text(formData, 'lesson_plan_id');
+  const teacherId = text(formData, 'teacher_id');
+  const startsAt = macauDateTimeLocalToIso(text(formData, 'starts_at'));
+  const endsAt = macauDateTimeLocalToIso(text(formData, 'ends_at'));
+  const status = text(formData, 'status') || 'scheduled';
+
+  if (!lessonPlanId || !teacherId || !startsAt || !endsAt) {
+    return { status: 'error', message: 'Lesson, teacher, start time and end time are required.' };
+  }
+
+  if (!['scheduled', 'completed', 'cancelled'].includes(status)) {
+    return { status: 'error', message: 'Invalid lesson session status.' };
+  }
+
+  if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
+    return { status: 'error', message: 'End time must be after start time.' };
+  }
+
+  try {
+    const supabase = await requireStaff();
+
+    const [{ data: lessonPlan }, { data: teacher }] = await Promise.all([
+      supabase.from('lesson_plans').select('id').eq('id', lessonPlanId).eq('cohort_id', cohortId).maybeSingle(),
+      supabase.from('teacher_profiles').select('id').eq('id', teacherId).eq('is_active', true).maybeSingle()
+    ]);
+
+    if (!lessonPlan) return { status: 'error', message: 'Selected lesson does not belong to this cohort.' };
+    if (!teacher) return { status: 'error', message: 'Selected teacher is not active.' };
+
+    const { data: duplicate } = await supabase
+      .from('lesson_sessions')
+      .select('id')
+      .eq('cohort_id', cohortId)
+      .eq('lesson_plan_id', lessonPlanId)
+      .eq('starts_at', startsAt)
+      .maybeSingle();
+
+    if (duplicate) return { status: 'error', message: 'A session for this lesson and start time already exists.' };
+
+    const { error } = await supabase.from('lesson_sessions').insert({
+      cohort_id: cohortId,
+      lesson_plan_id: lessonPlanId,
+      teacher_id: teacherId,
+      starts_at: startsAt,
+      ends_at: endsAt,
+      status
+    });
+
+    if (error) return { status: 'error', message: error.message };
+
+    revalidatePath(`/admin/exam-cohorts/${cohortId}`);
+    revalidatePath(`/admin/exam-cohorts/${cohortId}/lesson-sessions`);
+    return { status: 'success', message: 'Lesson session created.' };
+  } catch (error) {
+    return { status: 'error', message: error instanceof Error ? error.message : 'Create session failed.' };
   }
 }

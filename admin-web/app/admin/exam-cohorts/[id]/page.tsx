@@ -87,6 +87,9 @@ export default async function ExamCohortDetailPage({ params }: { params: Promise
             <Link className="rounded-lg border px-3 py-2 text-sm" href={`/admin/exam-cohorts/${cohort.id}/lesson-plans`}>
               LessonPlanEditor
             </Link>
+            <Link className="rounded-lg border px-3 py-2 text-sm" href={`/admin/exam-cohorts/${cohort.id}/lesson-sessions`}>
+              LessonSessionsPage
+            </Link>
             <Link className="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white" href="/admin/makeup">
               MakeupStudentListPage
             </Link>

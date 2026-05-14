@@ -1026,7 +1026,7 @@ begin
       new.id,
       new.status,
       'pending',
-      'Makeup required: 1 lesson'
+      '需要補課：1 堂'
     )
     on conflict (attendance_record_id) do update set
       missed_status = excluded.missed_status,
@@ -1039,6 +1039,11 @@ begin
     update public.makeup_tasks
     set status = 'completed', updated_at = now()
     where attendance_record_id = new.id;
+  elsif new.status = 'present' then
+    update public.makeup_tasks
+    set status = 'cancelled', updated_at = now()
+    where attendance_record_id = new.id
+      and status in ('pending', 'recommended', 'scheduled');
   end if;
 
   return new;
@@ -1186,28 +1191,62 @@ with check (public.is_staff_or_admin());
 create or replace view public.parent_exam_attendance_summary
 with (security_invoker = true)
 as
+with base as (
+  select
+    psl.parent_user_id,
+    s.id as student_id,
+    s.display_name as student_name,
+    ec.id as cohort_id,
+    ec.name as cohort_name
+  from public.parent_student_links psl
+  join public.students s on s.id = psl.student_id
+  join public.cohort_students cs on cs.student_id = s.id and cs.status = 'active'
+  join public.exam_cohorts ec on ec.id = cs.cohort_id
+), attendance_counts as (
+  select
+    b.parent_user_id,
+    b.student_id,
+    b.cohort_id,
+    count(distinct ar.id) filter (where ar.status in ('present', 'makeup_completed')) as completed_lessons,
+    count(distinct ar.id) filter (where ar.status in ('present', 'excused', 'absent', 'makeup_completed')) as recorded_lessons
+  from base b
+  left join public.lesson_sessions ls on ls.cohort_id = b.cohort_id
+  left join public.attendance_records ar on ar.session_id = ls.id and ar.student_id = b.student_id
+  group by b.parent_user_id, b.student_id, b.cohort_id
+), makeup_counts as (
+  select
+    b.parent_user_id,
+    b.student_id,
+    b.cohort_id,
+    count(distinct mt.id) filter (where mt.status in ('pending', 'recommended')) as pending_makeup_count,
+    count(distinct mt.id) filter (where mt.status = 'scheduled') as scheduled_makeup_count
+  from base b
+  left join public.makeup_tasks mt on mt.student_id = b.student_id and mt.cohort_id = b.cohort_id
+  group by b.parent_user_id, b.student_id, b.cohort_id
+)
 select
-  psl.parent_user_id,
-  s.id as student_id,
-  s.display_name as student_name,
-  ec.id as cohort_id,
-  ec.name as cohort_name,
-  count(ar.id) filter (where ar.status in ('present', 'makeup_completed')) as completed_lessons,
-  count(ar.id) filter (where ar.status in ('present', 'excused', 'absent', 'makeup_completed')) as recorded_lessons,
-  count(mt.id) filter (where mt.status in ('pending', 'recommended')) as pending_makeup_count,
-  count(mt.id) filter (where mt.status = 'scheduled') as scheduled_makeup_count,
+  b.parent_user_id,
+  b.student_id,
+  b.student_name,
+  b.cohort_id,
+  b.cohort_name,
+  coalesce(ac.completed_lessons, 0) as completed_lessons,
+  coalesce(ac.recorded_lessons, 0) as recorded_lessons,
+  coalesce(mc.pending_makeup_count, 0) as pending_makeup_count,
+  coalesce(mc.scheduled_makeup_count, 0) as scheduled_makeup_count,
   case
-    when count(mt.id) filter (where mt.status in ('pending', 'recommended')) = 0 then 'No pending makeup'
-    else 'Pending makeup: ' || count(mt.id) filter (where mt.status in ('pending', 'recommended')) || ' lesson(s)'
+    when coalesce(mc.pending_makeup_count, 0) = 0 then '暫無待補課'
+    else '待補課：' || coalesce(mc.pending_makeup_count, 0) || ' 堂'
   end as display_text
-from public.parent_student_links psl
-join public.students s on s.id = psl.student_id
-join public.cohort_students cs on cs.student_id = s.id and cs.status = 'active'
-join public.exam_cohorts ec on ec.id = cs.cohort_id
-left join public.lesson_sessions ls on ls.cohort_id = ec.id
-left join public.attendance_records ar on ar.session_id = ls.id and ar.student_id = s.id
-left join public.makeup_tasks mt on mt.student_id = s.id and mt.cohort_id = ec.id
-group by psl.parent_user_id, s.id, s.display_name, ec.id, ec.name;
+from base b
+left join attendance_counts ac
+  on ac.parent_user_id = b.parent_user_id
+ and ac.student_id = b.student_id
+ and ac.cohort_id = b.cohort_id
+left join makeup_counts mc
+  on mc.parent_user_id = b.parent_user_id
+ and mc.student_id = b.student_id
+ and mc.cohort_id = b.cohort_id;
 
 create or replace function public.get_parent_attendance_summary()
 returns table (
@@ -1261,6 +1300,11 @@ stable
 security definer
 set search_path = public
 as $$
+  with macau_day as (
+    select
+      ((now() at time zone 'Asia/Macau')::date::timestamp at time zone 'Asia/Macau') as day_start,
+      (((now() at time zone 'Asia/Macau')::date + 1)::timestamp at time zone 'Asia/Macau') as day_end
+  )
   select
     ls.id,
     ec.id,
@@ -1276,6 +1320,7 @@ as $$
     count(distinct ar.id),
     count(distinct cs.student_id)
   from public.lesson_sessions ls
+  cross join macau_day md
   join public.teacher_profiles tp on tp.id = ls.teacher_id
   join public.exam_cohorts ec on ec.id = ls.cohort_id
   join public.lesson_plans lp on lp.id = ls.lesson_plan_id
@@ -1283,7 +1328,8 @@ as $$
   left join public.attendance_records ar on ar.session_id = ls.id
   where tp.user_id = auth.uid()
     and tp.is_active = true
-    and ls.starts_at::date = current_date
+    and ls.starts_at >= md.day_start
+    and ls.starts_at < md.day_end
   group by ls.id, ec.id, ec.name, ec.subject, ec.level, lp.id, lp.sequence_no, lp.title, lp.teaching_content, ls.starts_at, ls.ends_at
   order by ls.starts_at;
 $$;
@@ -1296,13 +1342,39 @@ set search_path = public
 as $$
 declare
   item jsonb;
+  session_cohort_id uuid;
+  submitted_student_id uuid;
 begin
+  select cohort_id into session_cohort_id
+  from public.lesson_sessions
+  where id = target_session_id;
+
+  if session_cohort_id is null then
+    raise exception 'lesson session not found';
+  end if;
+
   if not (public.is_teacher_for_session(target_session_id) or public.is_staff_or_admin()) then
     raise exception 'not allowed to submit attendance for this session';
   end if;
 
+  if records is null or jsonb_typeof(records) <> 'array' then
+    raise exception 'attendance records must be a JSON array';
+  end if;
+
   for item in select * from jsonb_array_elements(records)
   loop
+    submitted_student_id := (item->>'student_id')::uuid;
+
+    if not exists (
+      select 1
+      from public.cohort_students cs
+      where cs.cohort_id = session_cohort_id
+        and cs.student_id = submitted_student_id
+        and cs.status = 'active'
+    ) then
+      raise exception 'student % is not active in this session cohort', submitted_student_id;
+    end if;
+
     insert into public.attendance_records (
       session_id,
       student_id,
@@ -1313,7 +1385,7 @@ begin
     )
     values (
       target_session_id,
-      (item->>'student_id')::uuid,
+      submitted_student_id,
       item->>'status',
       auth.uid(),
       now(),

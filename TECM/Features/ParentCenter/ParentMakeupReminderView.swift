@@ -8,13 +8,13 @@ struct ParentMakeupReminderView: View {
             PremiumSectionHeader(
                 eyebrow: "ParentMakeupReminderView",
                 title: "補課提醒",
-                subtitle: "用簡潔方式顯示待安排或已安排補課，不顯示老師內部備註。"
+                subtitle: "如孩子缺席考試班課堂，中心會整理補課建議，由 staff 與家長確認安排。"
             )
 
             let reminders = summaries.filter { $0.pendingMakeupCount > 0 || $0.scheduledMakeupCount > 0 }
 
             if reminders.isEmpty {
-                EmptyStateView(title: "暫無待補課", message: "目前沒有需要特別跟進的補課提醒。")
+                EmptyStateView(title: "暫無補課提醒", message: "目前沒有待處理的考試班補課。")
             } else {
                 ForEach(reminders) { summary in
                     ElevatedCard {
@@ -26,7 +26,7 @@ struct ParentMakeupReminderView: View {
                                     .font(Theme.Typography.body.weight(.semibold))
                                 Text(summary.displayText)
                                     .font(Theme.Typography.body)
-                                Text("已安排補課 \(summary.scheduledMakeupCount) 節")
+                                Text("已安排補課：\(summary.scheduledMakeupCount) 堂")
                                     .font(Theme.Typography.caption)
                                     .foregroundStyle(Theme.Colors.textSecondary)
                             }

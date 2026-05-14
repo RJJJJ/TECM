@@ -256,7 +256,7 @@ struct ParentExamAttendanceSummary: Identifiable {
     let displayText: String
 
     var attendanceRateText: String {
-        guard recordedLessons > 0 else { return "暫未開始" }
+        guard recordedLessons > 0 else { return "未有紀錄" }
         let value = Double(completedLessons) / Double(recordedLessons)
         return value.formatted(.percent.precision(.fractionLength(0)))
     }
