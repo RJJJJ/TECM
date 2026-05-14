@@ -15,7 +15,7 @@ enum AppTab: Int, CaseIterable {
         case .courses: return "課程"
         case .booking: return "預約"
         case .agent: return "TECM AGENT"
-        case .teacher: return "Teacher"
+        case .teacher: return "教師"
         case .parentCenter: return "家長中心"
         }
     }

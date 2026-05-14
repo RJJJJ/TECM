@@ -5,24 +5,24 @@ struct TeacherTodayClassView: View {
     @EnvironmentObject private var authViewModel: AuthViewModel
 
     var body: some View {
-        ScreenContainer(title: "Teacher Classes") {
+        ScreenContainer(title: "今日課堂") {
             PremiumSectionHeader(
                 eyebrow: "TeacherTodayClassView",
-                title: "Today's exam classes",
-                subtitle: "Only sessions assigned to the signed-in teacher are shown."
+                title: "今日課堂",
+                subtitle: "只顯示已指派給目前登入教師的考試班課堂。"
             )
 
             if authViewModel.currentRole != .teacher && authViewModel.currentRole != .admin {
-                EmptyStateView(title: "Teacher access required", message: "Sign in with a teacher account to take attendance.")
+                EmptyStateView(title: "需要教師權限", message: "請使用已建立 teacher_profile 的教師帳號登入後點名。")
             } else if viewModel.isLoading {
                 VStack(spacing: Theme.Spacing.md) {
                     SkeletonCard()
                     SkeletonCard()
                 }
             } else if let errorMessage = viewModel.errorMessage {
-                EmptyStateView(title: "Unable to load classes", message: errorMessage)
+                EmptyStateView(title: "無法載入今日課堂", message: errorMessage)
             } else if viewModel.sessions.isEmpty {
-                EmptyStateView(title: "No class today", message: "Assigned exam cohort sessions will appear here.")
+                EmptyStateView(title: "今日暫無課堂", message: "已指派的考試班課堂會顯示在這裡。")
             } else {
                 ForEach(viewModel.sessions) { session in
                     NavigationLink {
@@ -35,11 +35,16 @@ struct TeacherTodayClassView: View {
             }
         }
         .task {
-            await viewModel.load()
+            await loadIfTeacher()
         }
         .refreshable {
-            await viewModel.load()
+            await loadIfTeacher()
         }
+    }
+
+    private func loadIfTeacher() async {
+        guard authViewModel.currentRole == .teacher || authViewModel.currentRole == .admin else { return }
+        await viewModel.load()
     }
 }
 
@@ -52,7 +57,7 @@ private struct TeacherSessionCard: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                     Text(session.cohortName)
                         .font(Theme.Typography.cardTitle)
-                    Text("\(session.subject) / \(session.level) · Lesson \(session.sequenceNo)")
+                    Text("\(session.subject) / \(session.level) · 第 \(session.sequenceNo) 堂")
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textSecondary)
                     Text(session.lessonTitle)
@@ -65,7 +70,7 @@ private struct TeacherSessionCard: View {
                 VStack(alignment: .trailing, spacing: Theme.Spacing.xs) {
                     Text("\(session.attendanceCount)/\(session.studentCount)")
                         .font(Theme.Typography.cardTitle)
-                    Text("recorded")
+                    Text("已記錄")
                         .font(Theme.Typography.chip)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }

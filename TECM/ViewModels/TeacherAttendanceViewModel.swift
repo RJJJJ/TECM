@@ -67,7 +67,7 @@ final class TeacherAttendanceViewModel: ObservableObject {
 
         do {
             try await attendanceService.submitAttendance(sessionID: sessionID, students: students)
-            successMessage = "Attendance submitted. Missed lessons will generate makeup tasks."
+            successMessage = "已提交，缺席學生會自動產生補課任務。"
         } catch {
             errorMessage = error.localizedDescription
         }

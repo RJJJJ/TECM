@@ -4,17 +4,17 @@ struct TeacherLessonSessionDetailView: View {
     let session: TeacherTodaySession
 
     var body: some View {
-        ScreenContainer(title: "Lesson Detail") {
+        ScreenContainer(title: "課堂詳情") {
             PremiumSectionHeader(
                 eyebrow: "TeacherLessonSessionDetailView",
-                title: "Lesson \(session.sequenceNo): \(session.lessonTitle)",
+                title: "第 \(session.sequenceNo) 堂：\(session.lessonTitle)",
                 subtitle: "\(session.cohortName) · \(session.timeRangeText)"
             )
 
             ElevatedCard {
-                Text("Teaching content")
+                Text("教學內容")
                     .font(Theme.Typography.cardTitle)
-                Text(session.teachingContent ?? "No teaching content has been entered for this lesson.")
+                Text(session.teachingContent ?? "此課堂尚未輸入教學內容。")
                     .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
@@ -23,8 +23,8 @@ struct TeacherLessonSessionDetailView: View {
                 TeacherAttendanceView(session: session)
             } label: {
                 QuickActionTile(
-                    title: "Take attendance",
-                    subtitle: "Mark present, excused, absent or makeup completed.",
+                    title: "學生出席",
+                    subtitle: "標記出席、缺席或請假，缺席會自動產生補課任務。",
                     icon: "checklist.checked"
                 )
             }

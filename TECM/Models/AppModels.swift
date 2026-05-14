@@ -199,10 +199,10 @@ enum ExamAttendanceStatus: String, CaseIterable, Identifiable, Codable {
 
     var title: String {
         switch self {
-        case .present: return "Present"
-        case .excused: return "Excused"
-        case .absent: return "Absent"
-        case .makeupCompleted: return "Makeup completed"
+        case .present: return "出席"
+        case .excused: return "請假"
+        case .absent: return "缺席"
+        case .makeupCompleted: return "已補課"
         }
     }
 
