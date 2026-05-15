@@ -183,6 +183,29 @@
           "mode": "architect"
         }
       }
+    },
+    "omx-1778821636540-6c58qa": {
+      "session_id": "omx-1778821636540-6c58qa",
+      "leader_thread_id": "019e2a0e-eddc-75d1-a696-7cc05262ae22",
+      "updated_at": "2026-05-15T05:25:59.644Z",
+      "threads": {
+        "019e2a0e-eddc-75d1-a696-7cc05262ae22": {
+          "thread_id": "019e2a0e-eddc-75d1-a696-7cc05262ae22",
+          "kind": "leader",
+          "first_seen_at": "2026-05-15T05:18:08.204Z",
+          "last_seen_at": "2026-05-15T05:21:38.689Z",
+          "last_turn_id": "019e2a13-cdfd-7262-86de-ecc4d2e9ecc1",
+          "turn_count": 3
+        },
+        "019e2a08-4a57-7861-8889-23cef61af665": {
+          "thread_id": "019e2a08-4a57-7861-8889-23cef61af665",
+          "kind": "subagent",
+          "first_seen_at": "2026-05-15T05:25:59.644Z",
+          "last_seen_at": "2026-05-15T05:25:59.644Z",
+          "last_turn_id": "019e2a08-7325-7230-8b8a-d247dc6dc460",
+          "turn_count": 1
+        }
+      }
     }
   }
 }

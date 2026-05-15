@@ -5,9 +5,9 @@ struct TeacherTodayClassView: View {
     @EnvironmentObject private var authViewModel: AuthViewModel
 
     var body: some View {
-        ScreenContainer(title: "今日課堂") {
+        ScreenContainer(title: "今日課堂", showBackButton: true) {
             PremiumSectionHeader(
-                eyebrow: "TeacherTodayClassView",
+                eyebrow: "教師課堂",
                 title: "今日課堂",
                 subtitle: "只顯示已指派給目前登入教師的考試班課堂。"
             )
@@ -25,9 +25,7 @@ struct TeacherTodayClassView: View {
                 EmptyStateView(title: "今日暫無課堂", message: "已指派的考試班課堂會顯示在這裡。")
             } else {
                 ForEach(viewModel.sessions) { session in
-                    NavigationLink {
-                        TeacherLessonSessionDetailView(session: session)
-                    } label: {
+                    NavigationLink(value: TeacherRoute.sessionDetail(session)) {
                         TeacherSessionCard(session: session)
                     }
                     .buttonStyle(PressableScaleStyle())

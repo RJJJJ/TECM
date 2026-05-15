@@ -42,6 +42,14 @@ struct RootTabView: View {
             if authViewModel.currentRole == .teacher || authViewModel.currentRole == .admin {
                 NavigationStack(path: $router.teacherPath) {
                     TeacherTodayClassView()
+                        .navigationDestination(for: TeacherRoute.self) { route in
+                            switch route {
+                            case .sessionDetail(let session):
+                                TeacherLessonSessionDetailView(session: session)
+                            case .attendance(let session):
+                                TeacherAttendanceView(session: session)
+                            }
+                        }
                 }
                 .tabItem {
                     Label(AppTab.teacher.title, systemImage: AppTab.teacher.icon)

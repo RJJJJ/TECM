@@ -65,7 +65,7 @@ Use `parent-test@tecm.com` to confirm:
 5. Open the created lesson session.
 6. Tap `學生出席`.
 7. Mark `TECM 測試學生` as `缺席`.
-8. Tap `提交點名`.
+8. Tap `提交出席紀錄`.
 9. Confirm success message: `已提交，缺席學生會自動產生補課任務。`
 10. Verify in Supabase:
     - `attendance_records` has an `absent` row for the session/student.
@@ -82,3 +82,43 @@ Use `parent-test@tecm.com` to confirm:
 
 If this shell cannot run Xcode, run the iOS build manually in the VM/Xcode environment and record the result in the final regression report.
 
+## Corrected teacher navigation behavior
+
+Teacher attendance is role-gated to `teacher` and `admin`; normal parent users must not see or enter the teacher flow.
+
+Expected navigation after this fix:
+
+1. More -> `教師` opens `教師 / 今日課堂` at the root every time.
+2. `今日課堂` -> `課堂詳情` opens the selected lesson session.
+3. `課堂詳情` -> `學生出席` opens attendance marking.
+4. Back from `學生出席` returns to `課堂詳情`.
+5. Back from `課堂詳情` returns to `今日課堂`.
+6. Back from `今日課堂` returns to More when the system places the Teacher tab under More.
+7. Leaving the teacher flow and tapping `教師` again must reopen `今日課堂`, not the previous nested `學生出席` screen.
+
+## Post-submit expected behavior
+
+After a successful attendance submission:
+
+- The success copy remains: `已提交，缺席學生會自動產生補課任務。`
+- The teacher is not left in an ambiguous dead end.
+- The screen shows clear actions:
+  - `返回課堂詳情`
+  - `完成並返回今日課堂`
+
+## 12-student and longer-list manual test
+
+Use a teacher/admin account with a lesson session containing at least 13 students, or temporarily preview/mock more than 12 students in the iOS preview only.
+
+1. Open More -> `教師` -> `今日課堂`.
+2. Open a lesson and tap `學生出席`.
+3. Confirm all students are reachable by scrolling; there is no fixed 12-student cap.
+4. Confirm each row remains compact and readable:
+   - student name
+   - school name when available
+   - `出席 / 缺席 / 請假` control
+5. Mark a mix of statuses for 12+ students.
+6. Confirm the submit button remains reachable in the bottom action area while scrolling.
+7. Submit and confirm the post-submit success copy and return actions above.
+8. Tap `返回課堂詳情`, then back to `今日課堂`.
+9. Leave the teacher flow, tap `教師` again, and confirm it starts at `今日課堂`.

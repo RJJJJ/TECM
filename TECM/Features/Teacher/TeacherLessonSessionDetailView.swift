@@ -4,9 +4,9 @@ struct TeacherLessonSessionDetailView: View {
     let session: TeacherTodaySession
 
     var body: some View {
-        ScreenContainer(title: "課堂詳情") {
+        ScreenContainer(title: "課堂詳情", showBackButton: true) {
             PremiumSectionHeader(
-                eyebrow: "TeacherLessonSessionDetailView",
+                eyebrow: "教師課堂",
                 title: "第 \(session.sequenceNo) 堂：\(session.lessonTitle)",
                 subtitle: "\(session.cohortName) · \(session.timeRangeText)"
             )
@@ -19,9 +19,7 @@ struct TeacherLessonSessionDetailView: View {
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
 
-            NavigationLink {
-                TeacherAttendanceView(session: session)
-            } label: {
+            NavigationLink(value: TeacherRoute.attendance(session)) {
                 QuickActionTile(
                     title: "學生出席",
                     subtitle: "標記出席、缺席或請假，缺席會自動產生補課任務。",

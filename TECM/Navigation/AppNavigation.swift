@@ -1,6 +1,12 @@
 import SwiftUI
 import Combine
 
+
+enum TeacherRoute: Hashable {
+    case sessionDetail(TeacherTodaySession)
+    case attendance(TeacherTodaySession)
+}
+
 enum AppTab: Int, CaseIterable {
     case home
     case courses
@@ -43,6 +49,10 @@ final class TabRouter: ObservableObject {
     @Published var parentCenterPath = NavigationPath()
 
     func select(_ tab: AppTab) {
+        if tab == .teacher {
+            resetTeacherFlow()
+        }
+
         if selectedTab == tab {
             resetPath(for: tab)
         } else {
@@ -52,6 +62,10 @@ final class TabRouter: ObservableObject {
 
     func resetCurrentTabToRoot() {
         resetPath(for: selectedTab)
+    }
+
+    func resetTeacherFlow() {
+        teacherPath = NavigationPath()
     }
 
     private func resetPath(for tab: AppTab) {

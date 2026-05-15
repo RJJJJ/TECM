@@ -216,7 +216,7 @@ enum ExamAttendanceStatus: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-struct TeacherTodaySession: Identifiable {
+struct TeacherTodaySession: Identifiable, Hashable {
     let id: UUID
     let cohortID: UUID
     let cohortName: String
