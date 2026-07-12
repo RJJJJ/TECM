@@ -1,0 +1,8 @@
+project_id = "tecm"
+
+[db]
+major_version = 16
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]

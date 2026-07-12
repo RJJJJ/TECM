@@ -27,5 +27,5 @@
 | Demo package | Portfolio writeup | Complete | `docs/demo/portfolio-writeup.md` |
 | Security | `.env.local` not committed | Passed | Real local env files remain out of git. |
 | Security | Service role remains server-side | Passed | n8n does not receive Supabase service role key. |
-| Security | Workflow JSON has placeholder secret only | Passed | Uses `REPLACE_WITH_TECM_AUTOMATION_SECRET`. |
+| Security | Workflow JSON reads secret from environment/credentials | Passed | Uses `TECM_AUTOMATION_SECRET`; no secret value is stored in workflow data. |
 | Security | No direct WeChat auto-send | Passed | Staff manually copies WeChat / WhatsApp text. |

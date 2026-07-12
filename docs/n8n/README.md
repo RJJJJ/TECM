@@ -1,5 +1,11 @@
 # TECM n8n Workflow Templates
 
+## 教育中心營運 MVP workflow
+
+`workflows/education-ops-*.json` 是本次新增的六個可匯入流程：早上摘要、晚上摘要、低堂數、欠費、未排補課及每週報告。全部預設 inactive、時區為 `Asia/Macau`，只呼叫 Admin Web 的 `/api/automation/operations` 建立或更新內部任務，不含任何外部發送節點。
+
+必須以 n8n environment/credential 提供 `TECM_ADMIN_WEB_URL`、`TECM_ORGANIZATION_ID`、`TECM_AUTOMATION_SECRET`。禁止把 Supabase service role key 放入 n8n；亦不要把 secret 放進 Set node 或一般 execution data。
+
 ## Overview
 
 This folder contains safe v1 n8n workflow templates for TECM booking follow-up automation. n8n calls the Admin Web automation endpoints only; it does not connect directly to Supabase and does not send WeChat / WhatsApp messages automatically.
@@ -16,7 +22,7 @@ This folder contains safe v1 n8n workflow templates for TECM booking follow-up a
 - n8n calls Admin Web automation endpoints with `x-tecm-automation-secret`.
 - n8n does **not** receive `SUPABASE_SERVICE_ROLE_KEY`.
 - Admin Web remains the server-side authority for Supabase access, validation, and task creation.
-- Workflow JSON files use `REPLACE_WITH_TECM_AUTOMATION_SECRET`; never commit a real secret.
+- Workflow JSON files read `TECM_AUTOMATION_SECRET` and `TECM_ORGANIZATION_ID` from n8n environment/credentials; never place a real secret in a Set node or commit it.
 - In production, store the automation secret in n8n credentials or environment variables instead of hard-coding it in nodes.
 
 ## Local testing

@@ -1,6 +1,7 @@
 param(
   [string]$BaseUrl = "http://localhost:3000",
   [string]$AutomationSecret,
+  [string]$OrganizationId,
   [string]$BookingId,
   [switch]$DryRun
 )
@@ -26,7 +27,7 @@ function Require-Param {
   param([string]$Value, [string]$Name)
   if ([string]::IsNullOrWhiteSpace($Value)) {
     Write-Host "[FAIL] Missing required parameter: $Name"
-    Write-Host "Usage: .\scripts\testing\automation-api-smoke-test.ps1 -BaseUrl http://localhost:3000 -AutomationSecret <secret> -BookingId <booking_uuid>"
+    Write-Host "Usage: .\scripts\testing\automation-api-smoke-test.ps1 -BaseUrl http://localhost:3000 -AutomationSecret <secret> -OrganizationId <organization_uuid> -BookingId <booking_uuid>"
     exit 2
   }
 }
@@ -43,16 +44,19 @@ function Invoke-JsonPost {
 }
 
 Require-Param $AutomationSecret "AutomationSecret"
+Require-Param $OrganizationId "OrganizationId"
 Require-Param $BookingId "BookingId"
 
 $BaseUrl = $BaseUrl.TrimEnd('/')
-$validHeaders = @{ "x-tecm-automation-secret" = $AutomationSecret }
-$invalidHeaders = @{ "x-tecm-automation-secret" = "invalid-secret-for-smoke-test" }
+$organizationHeader = @{ "x-tecm-organization-id" = $OrganizationId }
+$validHeaders = @{ "x-tecm-automation-secret" = $AutomationSecret; "x-tecm-organization-id" = $OrganizationId }
+$invalidHeaders = @{ "x-tecm-automation-secret" = "invalid-secret-for-smoke-test"; "x-tecm-organization-id" = $OrganizationId }
 
 Write-Host "TECM automation API smoke test"
 Write-Host "BaseUrl: $BaseUrl"
 Write-Host "AutomationSecret: <redacted length=$($AutomationSecret.Length)>"
 Write-Host "BookingId: $BookingId"
+Write-Host "OrganizationId: $OrganizationId"
 if ($DryRun) {
   Write-Host "DryRun: enabled; requests will not be sent."
   Write-Host "[PASS] Parameters accepted"
@@ -60,12 +64,22 @@ if ($DryRun) {
 }
 
 try {
-  Invoke-JsonPost -Url "$BaseUrl/api/automation/follow-up-digest" -Headers @{} -Body @{ status = "open"; limit = 1 } | Out-Null
+  Invoke-JsonPost -Url "$BaseUrl/api/automation/follow-up-digest" -Headers $organizationHeader -Body @{ status = "open"; limit = 1 } | Out-Null
   Add-Result "Missing secret rejected" $false "Request unexpectedly succeeded"
 } catch {
   $statusCode = $null
   if ($_.Exception.Response) { $statusCode = [int]$_.Exception.Response.StatusCode }
   Add-Result "Missing secret rejected" ($statusCode -eq 401) "Expected 401, got $statusCode"
+}
+
+try {
+  $period = "smoke-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+  $first = Invoke-JsonPost -Url "$BaseUrl/api/automation/operations" -Headers $validHeaders -Body @{ job_type = "low_credit"; period_key = $period }
+  $second = Invoke-JsonPost -Url "$BaseUrl/api/automation/operations" -Headers $validHeaders -Body @{ job_type = "low_credit"; period_key = $period }
+  $passed = ($first.ok -eq $true) -and ($second.ok -eq $true) -and ($first.affected_count -eq $second.affected_count)
+  Add-Result "Operational job retry idempotent" $passed "Expected two successful calls with stable affected_count"
+} catch {
+  Add-Result "Operational job retry idempotent" $false $_.Exception.Message
 }
 
 try {

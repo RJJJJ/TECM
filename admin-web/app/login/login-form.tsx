@@ -14,7 +14,7 @@ function SubmitButton() {
       disabled={pending}
       className="w-full rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
     >
-      {pending ? '登入中...' : 'Login'}
+      {pending ? '登入中…' : '登入'}
     </button>
   );
 }
@@ -26,7 +26,7 @@ export default function LoginForm() {
     <form action={formAction} className="mt-6 space-y-4">
       <div>
         <label htmlFor="email" className="mb-1 block text-sm font-medium text-slate-700">
-          Email
+          電郵
         </label>
         <input
           id="email"
@@ -40,7 +40,7 @@ export default function LoginForm() {
       </div>
       <div>
         <label htmlFor="password" className="mb-1 block text-sm font-medium text-slate-700">
-          Password
+          密碼
         </label>
         <input
           id="password"

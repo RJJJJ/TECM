@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'TECM Admin Web',
-  description: 'TECM booking management admin web'
+  title: 'TECM 教育中心營運助手',
+  description: '澳門教育中心招生、點名、請假補課、堂數及收費營運系統'
 };
 
 export default function RootLayout({
@@ -13,18 +13,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-Hant">
-      <body>
-        <div className="min-h-screen">
-          <header className="border-b border-slate-200 bg-white">
-            <div className="mx-auto flex h-14 max-w-6xl items-center px-4">
-              <p className="text-sm font-semibold tracking-wide text-slate-700">
-                TECM Admin Web
-              </p>
-            </div>
-          </header>
-          <main className="mx-auto w-full max-w-6xl px-4 py-8">{children}</main>
-        </div>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { getOperationsContext } from '@/lib/operations/context';
 import FollowUpCopyButton from '../follow-up-copy-button';
 import { dismissFollowUpTaskAction, markFollowUpTaskDoneAction } from './actions';
 import {
@@ -26,6 +26,22 @@ type SummaryCard = {
   label: string;
   value: number | null;
   tone: string;
+};
+
+type FollowUpRow = FollowUpTask & {
+  task_type: string | null;
+  subject_student_id: string | null;
+  due_at: string | null;
+  students: { display_name: string | null } | null;
+};
+
+const TASK_TYPE_LABELS: Record<string, string> = {
+  morning_summary: '早上營運摘要',
+  evening_summary: '晚上點名摘要',
+  low_credit: '低堂數／續費',
+  overdue_payment: '逾期欠費',
+  unassigned_makeup: '未安排補課',
+  weekly_report: '每週營運報告'
 };
 
 const STATUS_OPTIONS: Array<{ label: string; value: 'all' | FollowUpStatus }> = [
@@ -107,7 +123,7 @@ function todayDateString() {
 
 export default async function AdminFollowUpsPage({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
-  const supabase = await createServerSupabaseClient();
+  const { supabase, organizationId } = await getOperationsContext();
 
   const selectedStatusRaw = pickSingle(resolvedSearchParams?.status) ?? 'open';
   const selectedPriorityRaw = pickSingle(resolvedSearchParams?.priority) ?? 'all';
@@ -124,7 +140,12 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
     .select(
       `
       id,
+      organization_id,
       booking_id,
+      task_type,
+      subject_student_id,
+      due_at,
+      students!follow_up_tasks_subject_student_id_fkey(display_name),
       parent_name,
       phone,
       child_name,
@@ -146,7 +167,8 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
       created_at,
       updated_at
     `
-    );
+    )
+    .eq('organization_id', organizationId);
 
   if (selectedStatus !== 'all') query = query.eq('status', selectedStatus);
   if (selectedPriority !== 'all') query = query.eq('priority', selectedPriority);
@@ -155,12 +177,12 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
   if (selectedKeyword) {
     const escapedKeyword = selectedKeyword.replace(/[%_]/g, (char) => `\\${char}`);
     query = query.or(
-      `parent_name.ilike.%${escapedKeyword}%,phone.ilike.%${escapedKeyword}%,child_name.ilike.%${escapedKeyword}%,course_title_snapshot.ilike.%${escapedKeyword}%,intent_summary.ilike.%${escapedKeyword}%`
+      `parent_name.ilike.%${escapedKeyword}%,phone.ilike.%${escapedKeyword}%,child_name.ilike.%${escapedKeyword}%,course_title_snapshot.ilike.%${escapedKeyword}%,intent_summary.ilike.%${escapedKeyword}%,suggested_message.ilike.%${escapedKeyword}%,task_type.ilike.%${escapedKeyword}%`
     );
   }
 
   const { data, error } = await query.order('created_at', { ascending: false });
-  const tasks = ((data ?? []) as FollowUpTask[]).sort((a, b) => {
+  const tasks = ((data ?? []) as unknown as FollowUpRow[]).sort((a, b) => {
     const priorityDiff = priorityOrder(a.priority) - priorityOrder(b.priority);
     if (priorityDiff !== 0) return priorityDiff;
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
@@ -168,10 +190,10 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
 
   const today = todayDateString();
   const [openCountResult, highOpenResult, todayResult, doneResult] = await Promise.all([
-    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('status', 'open'),
-    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('status', 'open').eq('priority', 'high'),
-    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('status', 'open').eq('booking_date', today),
-    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('status', 'done')
+    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'open'),
+    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'open').eq('priority', 'high'),
+    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'open').eq('booking_date', today),
+    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'done')
   ]);
 
   const summaryCards: SummaryCard[] = [
@@ -187,7 +209,7 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">跟進任務</h2>
           <p className="mt-1 max-w-3xl text-sm text-slate-600">
-            集中管理 AI 生成的家長跟進建議，staff 可複製 WeChat / WhatsApp 話術後手動聯絡家長。
+            集中管理招生、低堂數、欠費及補課跟進；職員核對繁體中文草稿後，才人工複製到 WeChat / WhatsApp。
           </p>
         </div>
         <p className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
@@ -255,6 +277,7 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
                 <span className={followUpPriorityBadgeClass(task.priority)}>優先：{followUpPriorityLabel(task.priority)}</span>
                 <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">{followUpChannelLabel(task.channel)}</span>
                 <span className={followUpStatusBadgeClass(task.status)}>{followUpStatusLabel(task.status)}</span>
+                {task.task_type ? <span className="inline-flex rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-700">{TASK_TYPE_LABELS[task.task_type] ?? task.task_type}</span> : null}
               </div>
 
               <div className="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
@@ -265,7 +288,7 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
                 </div>
                 <div>
                   <p className="text-xs text-slate-500">學生 / 課程</p>
-                  <p className="mt-1 font-medium text-slate-800">{task.child_name || '-'}</p>
+                  <p className="mt-1 font-medium text-slate-800">{task.child_name || task.students?.display_name || '-'}</p>
                   <p className="mt-1 text-xs text-slate-500">{task.course_title_snapshot || '-'}</p>
                 </div>
                 <div>
@@ -302,7 +325,8 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
               <div className="mt-4 flex flex-wrap gap-2">
                 {task.status === 'open' ? (
                   <>
-                    <form action={markFollowUpTaskDoneAction.bind(null, task.id, task.booking_id)}>
+                    <form action={markFollowUpTaskDoneAction.bind(null, task.id, task.booking_id)} className="flex flex-wrap gap-2">
+                      <input name="outcome" aria-label="聯絡結果" placeholder="聯絡結果（選填）" className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs" />
                       <button type="submit" className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700">標記已完成</button>
                     </form>
                     <form action={dismissFollowUpTaskAction.bind(null, task.id, task.booking_id)}>
@@ -310,7 +334,7 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
                     </form>
                   </>
                 ) : null}
-                <Link href={`/admin/bookings/${task.booking_id}`} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100">查看 Booking</Link>
+                {task.booking_id ? <Link href={`/admin/bookings/${task.booking_id}`} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100">查看招生查詢</Link> : null}
               </div>
             </article>
           ))}

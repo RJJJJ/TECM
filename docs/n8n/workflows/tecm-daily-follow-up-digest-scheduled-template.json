@@ -44,13 +44,7 @@
             {
               "id": "base",
               "name": "base_url",
-              "value": "REPLACE_WITH_DEPLOYED_ADMIN_WEB_URL",
-              "type": "string"
-            },
-            {
-              "id": "secret",
-              "name": "automation_secret",
-              "value": "REPLACE_WITH_TECM_AUTOMATION_SECRET",
+              "value": "={{$env.TECM_ADMIN_WEB_URL}}",
               "type": "string"
             },
             {
@@ -91,7 +85,11 @@
             },
             {
               "name": "x-tecm-automation-secret",
-              "value": "={{$json.automation_secret}}"
+              "value": "={{$env.TECM_AUTOMATION_SECRET}}"
+            },
+            {
+              "name": "x-tecm-organization-id",
+              "value": "={{$env.TECM_ORGANIZATION_ID}}"
             }
           ]
         },

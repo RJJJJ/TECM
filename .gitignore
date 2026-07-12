@@ -4,3 +4,6 @@ admin-web/.env.local
 admin-web/.env*.local
 .env.staging
 .env.production
+.env
+.env.local
+.env.*.local

@@ -1,4 +1,5 @@
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { getOperationsContext } from '@/lib/operations/context';
+import { DataTable, EmptyState, ErrorState, PageHeader } from '@/components/operations-ui';
 
 type Teacher = {
   id: string;
@@ -9,53 +10,14 @@ type Teacher = {
 };
 
 export default async function TeachersPage() {
-  const supabase = await createServerSupabaseClient();
+  const { supabase, organizationId } = await getOperationsContext();
   const { data, error } = await supabase
     .from('teacher_profiles')
     .select('id,user_id,display_name,phone,is_active')
+    .eq('organization_id', organizationId)
     .order('display_name');
 
   const teachers = (data ?? []) as Teacher[];
 
-  return (
-    <section className="space-y-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-      <div>
-        <h2 className="text-2xl font-semibold text-slate-900">Teacher Profiles</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Teachers use Supabase Auth through the iOS app, but they are not staff_roles and do not receive admin-web access.
-        </p>
-      </div>
-
-      {error ? (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error.message}</div>
-      ) : teachers.length === 0 ? (
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-600">
-          No teacher profiles found.
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
-              <tr>
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Phone</th>
-                <th className="px-4 py-3">User ID</th>
-                <th className="px-4 py-3">Active</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {teachers.map((teacher) => (
-                <tr key={teacher.id}>
-                  <td className="px-4 py-3 font-medium">{teacher.display_name}</td>
-                  <td className="px-4 py-3">{teacher.phone ?? '-'}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{teacher.user_id}</td>
-                  <td className="px-4 py-3">{teacher.is_active ? 'Yes' : 'No'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
+  return <><PageHeader title="導師" description="查看導師帳戶及啟用狀態；導師只可存取獲指派的班別與課堂。"/>{error?<ErrorState message={error.message}/>:teachers.length===0?<EmptyState>尚未有導師資料。</EmptyState>:<DataTable headers={['姓名','電話','使用者 ID','狀態']}>{teachers.map(t=><tr key={t.id}><td className="px-4 py-3 font-medium">{t.display_name}</td><td className="px-4 py-3">{t.phone??'—'}</td><td className="px-4 py-3 font-mono text-xs">{t.user_id}</td><td className="px-4 py-3">{t.is_active?'啟用':'停用'}</td></tr>)}</DataTable>}</>;
 }

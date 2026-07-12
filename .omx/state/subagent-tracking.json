@@ -206,6 +206,61 @@
           "turn_count": 1
         }
       }
+    },
+    "019f5104-0fb2-78e0-94b8-4d353d93993f": {
+      "session_id": "019f5104-0fb2-78e0-94b8-4d353d93993f",
+      "leader_thread_id": "019f5105-1f8c-7121-be87-3e729935af8a",
+      "updated_at": "2026-07-11T16:10:45.334Z",
+      "threads": {
+        "019f5105-1f8c-7121-be87-3e729935af8a": {
+          "thread_id": "019f5105-1f8c-7121-be87-3e729935af8a",
+          "kind": "leader",
+          "first_seen_at": "2026-07-11T11:52:03.958Z",
+          "last_seen_at": "2026-07-11T11:52:03.958Z",
+          "last_turn_id": "019f5105-2085-7492-9cb9-b50b34cb368b",
+          "turn_count": 1
+        },
+        "019f5106-4cba-7e83-99e7-16056a6c7fec": {
+          "thread_id": "019f5106-4cba-7e83-99e7-16056a6c7fec",
+          "kind": "subagent",
+          "first_seen_at": "2026-07-11T11:55:38.127Z",
+          "last_seen_at": "2026-07-11T12:13:08.889Z",
+          "last_turn_id": "019f510c-6a65-7802-a374-937c377a7bec",
+          "turn_count": 2
+        },
+        "019f5106-7f92-7c51-9e0d-262feccb6712": {
+          "thread_id": "019f5106-7f92-7c51-9e0d-262feccb6712",
+          "kind": "subagent",
+          "first_seen_at": "2026-07-11T11:57:00.455Z",
+          "last_seen_at": "2026-07-11T11:57:00.455Z",
+          "last_turn_id": "019f5106-a730-7081-9d52-bdeef23489cd",
+          "turn_count": 1
+        },
+        "019f5106-1927-73d0-9cee-ccfc974c6891": {
+          "thread_id": "019f5106-1927-73d0-9cee-ccfc974c6891",
+          "kind": "subagent",
+          "first_seen_at": "2026-07-11T11:57:32.602Z",
+          "last_seen_at": "2026-07-11T12:17:57.249Z",
+          "last_turn_id": "019f510c-29ef-7a22-8125-f4951ee86cb6",
+          "turn_count": 2
+        },
+        "019f510c-5986-76c0-ac24-7df20984b9cc": {
+          "thread_id": "019f510c-5986-76c0-ac24-7df20984b9cc",
+          "kind": "subagent",
+          "first_seen_at": "2026-07-11T12:02:24.532Z",
+          "last_seen_at": "2026-07-11T12:02:24.532Z",
+          "last_turn_id": "019f510c-8173-7ea0-87bc-87665c47b99d",
+          "turn_count": 1
+        },
+        "019f5104-0fb2-78e0-94b8-4d353d93993f": {
+          "thread_id": "019f5104-0fb2-78e0-94b8-4d353d93993f",
+          "kind": "subagent",
+          "first_seen_at": "2026-07-11T16:10:45.334Z",
+          "last_seen_at": "2026-07-11T16:10:45.334Z",
+          "last_turn_id": "216df5f4-1214-4324-b0d6-71f66fa31e9b",
+          "turn_count": 1
+        }
+      }
     }
   }
 }

@@ -94,7 +94,7 @@ try {
       (Convert-UnicodeEscapes "\u9a57\u8b49\u5f8c\u53ef\u6a19\u8a18\u5b8c\u6210\u6216\u5ffd\u7565")
     )
     internal_note = "Staging smoke test created this task. Staff may dismiss after verification."
-    source = "n8n_staging_test"
+    source = "n8n"
   }
   $task = Invoke-JsonPost -Url "$BaseUrl/api/automation/follow-up-tasks" -Headers $validHeaders -Body $taskBody
   Add-Result "Create task endpoint ok" ($task.ok -eq $true) "Expected ok=true"

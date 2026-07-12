@@ -10,7 +10,7 @@ Use this workflow to generate a daily follow-up digest for staff. It returns sum
 2. Import from file.
 3. Select `docs/n8n/workflows/tecm-daily-follow-up-digest.json`.
 4. Replace `base_url` if Admin Web is not `http://localhost:3000`.
-5. Replace `REPLACE_WITH_TECM_AUTOMATION_SECRET` inside n8n only.
+5. Set `TECM_AUTOMATION_SECRET` and `TECM_ORGANIZATION_ID` in n8n environment/credentials; do not place the secret in workflow data.
 6. Execute the workflow from **Manual Trigger**.
 
 ## 3. Optional schedule mode

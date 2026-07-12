@@ -23,7 +23,7 @@ Use this workflow to manually test TECM booking follow-up automation. It does no
 2. Import from file.
 3. Select `docs/n8n/workflows/tecm-booking-follow-up-manual.json`.
 4. Replace `base_url` if Admin Web is not `http://localhost:3000`.
-5. Replace `REPLACE_WITH_TECM_AUTOMATION_SECRET` inside n8n only. Do not commit the real value.
+5. Set `TECM_AUTOMATION_SECRET` and `TECM_ORGANIZATION_ID` in n8n environment/credentials. Do not place the secret in workflow data or commit the real value.
 6. Replace the sample `booking_id` with an existing booking UUID.
 7. Execute the workflow from **Manual Trigger**.
 

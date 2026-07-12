@@ -1,5 +1,6 @@
 ﻿import { NextResponse } from 'next/server';
 import { createServiceRoleSupabaseClient } from '@/lib/supabase/service-role';
+import { verifyAutomationRequest } from '@/lib/automation/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,18 +26,6 @@ function jsonError(status: number, error: string) {
   return NextResponse.json({ ok: false, error }, { status });
 }
 
-function verifyAutomationSecret(request: Request) {
-  const expected = process.env.TECM_AUTOMATION_SECRET;
-  if (!expected) return { ok: false as const, response: jsonError(500, 'Automation secret is not configured') };
-
-  const received = request.headers.get('x-tecm-automation-secret');
-  if (!received || received !== expected) {
-    return { ok: false as const, response: jsonError(401, 'Invalid automation secret') };
-  }
-
-  return { ok: true as const };
-}
-
 function normalizeString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -46,8 +35,8 @@ function buildRecommendedPrompt(booking: BookingPreview) {
 }
 
 export async function POST(request: Request) {
-  const secretCheck = verifyAutomationSecret(request);
-  if (!secretCheck.ok) return secretCheck.response;
+  const auth = verifyAutomationRequest(request);
+  if (!auth.ok) return jsonError(auth.status, auth.error);
 
   let body: Record<string, unknown>;
   try {
@@ -71,6 +60,7 @@ export async function POST(request: Request) {
   const { data, error } = await supabase
     .from('bookings')
     .select('id, parent_name, phone, child_name, child_age, school_name, course_title_snapshot, booking_date, start_time, end_time, note, status, campuses(name)')
+    .eq('organization_id', auth.identity.organizationId)
     .eq('id', bookingId)
     .maybeSingle();
 

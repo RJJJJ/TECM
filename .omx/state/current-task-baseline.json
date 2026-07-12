@@ -2,11 +2,18 @@
   "version": 1,
   "tasks": [
     {
+      "branch_name": "education-ops-mvp-v2",
+      "worktree_path": "C:\\Users\\RJ\\Desktop\\TECM",
+      "status": "active",
+      "created_at": "2026-07-11T11:55:38.481Z",
+      "updated_at": "2026-07-11T16:10:45.870Z"
+    },
+    {
       "branch_name": "main",
-      "worktree_path": "D:\\桌面\\TECM",
+      "worktree_path": "C:\\Users\\RJ\\Desktop\\TECM",
       "status": "active",
       "created_at": "2026-05-12T12:50:48.202Z",
-      "updated_at": "2026-05-15T05:25:59.949Z"
+      "updated_at": "2026-07-11T11:52:04.521Z"
     }
   ]
 }

@@ -1,8 +1,7 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { verifyActiveStaffAccess } from '@/lib/auth/staff-access';
-import { logoutAction } from './actions';
+import AdminShell from '@/components/admin-shell';
 
 export default async function AdminLayout({
   children
@@ -17,79 +16,7 @@ export default async function AdminLayout({
     redirect('/login?error=unauthorized');
   }
 
-  return (
-    <div className="mx-auto w-full max-w-6xl space-y-6 px-4 py-6 md:px-6 md:py-8">
-      <header className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Admin Console</p>
-            <h1 className="text-lg font-semibold text-slate-900">TECM Admin Web</h1>
-            <p className="text-sm text-slate-600">Bookings, Courses, FAQ and News management operations</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <nav className="flex items-center gap-2" aria-label="Admin sections">
-              <Link
-                href="/admin/bookings"
-                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-              >
-                Bookings
-              </Link>
-              <Link
-                href="/admin/follow-ups"
-                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-              >
-                Follow-ups
-              </Link>
-              <Link
-                href="/admin/courses"
-                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-              >
-                Courses
-              </Link>
-              <Link
-                href="/admin/exam-cohorts"
-                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-              >
-                Exam Cohorts
-              </Link>
-              <Link
-                href="/admin/makeup"
-                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-              >
-                Makeup
-              </Link>
-              <Link
-                href="/admin/teachers"
-                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-              >
-                Teachers
-              </Link>
-              <Link
-                href="/admin/faq"
-                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-              >
-                FAQ
-              </Link>
-              <Link
-                href="/admin/news"
-                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-              >
-                News
-              </Link>
-            </nav>
-            <form action={logoutAction}>
-              <button
-                type="submit"
-                className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-              >
-                Logout
-              </button>
-            </form>
-          </div>
-        </div>
-      </header>
-
-      <div className="space-y-6">{children}</div>
-    </div>
-  );
+  const { data: membership } = await supabase.from('organization_members').select('role,organizations(name)').eq('user_id', access.user!.id).eq('status', 'active').limit(1).maybeSingle();
+  const organization = membership?.organizations as unknown as { name?: string } | null;
+  return <AdminShell organizationName={organization?.name} role={membership?.role}>{children}</AdminShell>;
 }

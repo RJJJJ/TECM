@@ -1,6 +1,7 @@
 ﻿import { NextResponse } from 'next/server';
 import { createServiceRoleSupabaseClient } from '@/lib/supabase/service-role';
 import { type FollowUpStatus } from '@/lib/types/follow-up';
+import { verifyAutomationRequest } from '@/lib/automation/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,18 +26,6 @@ type DigestItem = {
 
 function jsonError(status: number, error: string) {
   return NextResponse.json({ ok: false, error }, { status });
-}
-
-function verifyAutomationSecret(request: Request) {
-  const expected = process.env.TECM_AUTOMATION_SECRET;
-  if (!expected) return { ok: false as const, response: jsonError(500, 'Automation secret is not configured') };
-
-  const received = request.headers.get('x-tecm-automation-secret');
-  if (!received || received !== expected) {
-    return { ok: false as const, response: jsonError(401, 'Invalid automation secret') };
-  }
-
-  return { ok: true as const };
 }
 
 function todayDateString() {
@@ -84,8 +73,9 @@ function buildDigestText(items: DigestItem[], summary: Record<string, number>, d
 }
 
 export async function POST(request: Request) {
-  const secretCheck = verifyAutomationSecret(request);
-  if (!secretCheck.ok) return secretCheck.response;
+  const auth = verifyAutomationRequest(request);
+  if (!auth.ok) return jsonError(auth.status, auth.error);
+  const organizationId = auth.identity.organizationId;
 
   let body: Record<string, unknown> = {};
   try {
@@ -112,10 +102,10 @@ export async function POST(request: Request) {
   }
 
   const [openCountResult, highOpenResult, todayResult, doneResult] = await Promise.all([
-    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('status', 'open'),
-    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('status', 'open').eq('priority', 'high'),
-    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('status', 'open').eq('booking_date', date),
-    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('status', 'done')
+    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'open'),
+    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'open').eq('priority', 'high'),
+    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'open').eq('booking_date', date),
+    supabase.from('follow_up_tasks').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'done')
   ]);
 
   if (openCountResult.error || highOpenResult.error || todayResult.error || doneResult.error) {
@@ -125,6 +115,7 @@ export async function POST(request: Request) {
   let itemsQuery = supabase
     .from('follow_up_tasks')
     .select('id, booking_id, priority, channel, parent_name, phone, child_name, course_title_snapshot, booking_date, start_time, intent_summary, suggested_message, suggested_next_steps')
+    .eq('organization_id', organizationId)
     .eq('status', status)
     .order('created_at', { ascending: false })
     .limit(limit);
