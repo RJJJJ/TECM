@@ -1,4 +1,4 @@
-﻿-- TECM v1 Supabase Data Layer
+-- TECM v1 Supabase Data Layer
 -- Scope: schema + indexes + triggers/functions + RLS + policies + seed data + verification queries
 
 /* =========================================================

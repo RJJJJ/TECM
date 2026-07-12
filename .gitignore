@@ -7,3 +7,6 @@ admin-web/.env*.local
 .env
 .env.local
 .env.*.local
+.omx/
+supabase/.branches/
+supabase/.temp/

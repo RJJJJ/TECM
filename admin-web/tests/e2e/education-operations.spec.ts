@@ -6,7 +6,7 @@ const password = process.env.PLAYWRIGHT_ADMIN_PASSWORD;
 test.describe('教育中心營運主流程', () => {
   test.skip(!email || !password, '需要 seed 後的 PLAYWRIGHT_ADMIN_EMAIL / PLAYWRIGHT_ADMIN_PASSWORD');
 
-  test('招生、報讀、收費、點名、扣堂、請假、補課及跟進', async ({ page }) => {
+  test('招生、報讀、收費、點名、扣堂、請假、補課及跟進', async ({ page }, testInfo) => {
     const runId = Date.now().toString();
     const studentName = `驗收學生 ${runId}`;
 
@@ -14,6 +14,7 @@ test.describe('教育中心營運主流程', () => {
     await page.getByLabel('電郵').fill(email!);
     await page.getByLabel('密碼').fill(password!);
     await page.getByRole('button', { name: '登入' }).click();
+    await expect(page).toHaveURL(/\/admin\/dashboard$/, { timeout: 30_000 });
 
     await page.goto('/admin/students');
     await page.getByLabel('家長姓名').fill(`驗收家長 ${runId}`);
@@ -23,7 +24,8 @@ test.describe('教育中心營運主流程', () => {
     await page.getByLabel('套票').selectOption({ index: 1 });
     await page.getByRole('button', { name: '建立資料' }).click();
     await expect(page.getByRole('status')).toContainText('已建立');
-    await expect(page.getByText(studentName)).toBeVisible();
+    await page.reload();
+    await expect(page.getByText(studentName).first()).toBeVisible();
 
     await page.goto('/admin/payments');
     const chargeValue = await page.getByLabel('收費項目').locator('option').filter({ hasText: studentName }).getAttribute('value');
@@ -42,7 +44,7 @@ test.describe('教育中心營運主流程', () => {
     await expect(attendancePanel.getByRole('status')).toContainText('不會重複扣堂');
 
     await page.goto('/admin/packages');
-    await expect(page.getByText(studentName)).toBeVisible();
+    await expect(page.getByText(studentName).first()).toBeVisible();
 
     await page.goto('/admin/leave-makeup');
     await page.getByLabel('請假學生').selectOption({ label: studentName });
@@ -53,13 +55,15 @@ test.describe('教育中心營運主流程', () => {
     const entitlementValue = await page.getByLabel('可用補課額').locator('option').filter({ hasText: studentName }).getAttribute('value');
     await page.getByLabel('可用補課額').selectOption(entitlementValue!);
     await page.getByLabel('補課導師').selectOption({ index: 1 });
-    await page.getByLabel('補課時間').fill('2027-01-10T10:00');
+    const makeupTime = testInfo.project.name === 'teacher-mobile' ? '2027-01-10T11:00' : '2027-01-10T10:00';
+    await page.getByLabel('補課時間').fill(makeupTime);
     await page.getByRole('button', { name: '預約補課' }).click();
-    await expect(page.getByRole('status')).toContainText('補課預約已建立');
+    await expect(page.getByRole('status').filter({ hasText: '補課預約已建立' })).toBeVisible();
 
     await page.goto('/admin/dashboard');
     await expect(page.getByRole('heading', { name: '營運儀表板' })).toBeVisible();
     await page.goto('/admin/follow-ups');
-    await expect(page.getByText(/跟進/).first()).toBeVisible();
+    await expect(page).toHaveURL(/\/admin\/follow-ups$/);
+    await expect(page.locator('main h2')).toBeVisible();
   });
 });

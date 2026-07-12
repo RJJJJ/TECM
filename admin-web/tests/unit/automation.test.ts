@@ -7,7 +7,7 @@ import {
   isOperationJobType
 } from '../../lib/automation/messages.ts';
 
-const ORGANIZATION_ID = '00000000-0000-4000-8000-000000000001';
+const ORGANIZATION_ID = '10000000-0000-4000-8000-000000000000';
 
 test('automation authentication requires a tenant UUID', () => {
   process.env.TECM_AUTOMATION_SECRET = 'test-only';

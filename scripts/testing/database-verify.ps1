@@ -31,13 +31,15 @@ try {
     '/workspace/supabase/migrations/202607110000_legacy_baseline.sql',
     '/workspace/supabase/migrations/202607110001_tenant_operations_finance.sql',
     '/workspace/supabase/migrations/202607110002_invariants_rls_rpcs.sql',
+    '/workspace/supabase/migrations/202607110003_release_blockers.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
     '/workspace/supabase/tests/002_rls_tenant_isolation.sql',
     '/workspace/supabase/tests/003_attendance_leave_makeup.sql',
     '/workspace/supabase/tests/004_finance_ledger.sql',
-    '/workspace/supabase/tests/005_automation_audit.sql'
+    '/workspace/supabase/tests/005_automation_audit.sql',
+    '/workspace/supabase/tests/006_submit_attendance_rpc.sql'
   )
 
   foreach ($file in $files) {
@@ -46,7 +48,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Database verification failed: $file" }
   }
 
-  Write-Host '[PASS] migrations, repeatable seed, RLS and five SQL suites'
+  Write-Host '[PASS] migrations, repeatable seed, RLS and six SQL suites'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity

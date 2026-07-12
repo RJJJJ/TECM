@@ -21,6 +21,69 @@ where id in (
   '10000000-0000-4000-8000-000000000005'
 );
 
+-- The plain PostgreSQL verification shim has a deliberately small auth.users
+-- table. When the full Supabase Auth schema is present, add the fields and
+-- email identities that GoTrue requires for password login.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'auth' and table_name = 'users' and column_name = 'instance_id'
+  ) then
+    execute $sql$
+      update auth.users
+      set instance_id = '00000000-0000-0000-0000-000000000000',
+          confirmation_token = '',
+          recovery_token = '',
+          email_change_token_new = '',
+          email_change = '',
+          phone_change = '',
+          phone_change_token = '',
+          email_change_token_current = '',
+          reauthentication_token = '',
+          created_at = coalesce(created_at, now()),
+          updated_at = coalesce(updated_at, now())
+      where id in (
+        '10000000-0000-4000-8000-000000000001',
+        '10000000-0000-4000-8000-000000000002',
+        '10000000-0000-4000-8000-000000000003',
+        '10000000-0000-4000-8000-000000000004',
+        '10000000-0000-4000-8000-000000000005',
+        '20000000-0000-4000-8000-000000000001'
+      )
+    $sql$;
+  end if;
+
+  if to_regclass('auth.identities') is not null then
+    execute $sql$
+      insert into auth.identities (
+        provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at
+      )
+      select
+        u.id::text,
+        u.id,
+        jsonb_build_object('sub', u.id::text, 'email', u.email),
+        'email',
+        now(),
+        now(),
+        now()
+      from auth.users u
+      where u.id in (
+        '10000000-0000-4000-8000-000000000001',
+        '10000000-0000-4000-8000-000000000002',
+        '10000000-0000-4000-8000-000000000003',
+        '10000000-0000-4000-8000-000000000004',
+        '10000000-0000-4000-8000-000000000005',
+        '20000000-0000-4000-8000-000000000001'
+      )
+      on conflict (provider_id, provider) do update set
+        identity_data = excluded.identity_data,
+        updated_at = excluded.updated_at
+    $sql$;
+  end if;
+end
+$$;
+
 insert into public.organizations (id, slug, name, timezone, currency_code) values
   ('10000000-0000-4000-8000-000000000000', 'tecm-a', 'TECM A', 'Asia/Macau', 'MOP'),
   ('20000000-0000-4000-8000-000000000000', 'tecm-b', 'TECM B', 'Asia/Macau', 'MOP')

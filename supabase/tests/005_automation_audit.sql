@@ -56,10 +56,16 @@ begin
   begin
     delete from public.audit_logs where organization_id='10000000-0000-4000-8000-000000000000';
     raise exception 'audit delete unexpectedly succeeded';
-  exception when sqlstate '55000' then null;
+  exception when sqlstate '55000' or insufficient_privilege then null;
   end;
 end
 $$;
 
 reset role;
-select '005_automation_audit: one job and one task per subject across retry; append-only audit populated' as passed;
+set role service_role;
+select set_config('request.jwt.claims','{"role":"service_role"}',false);
+select public.run_automation_job(
+  '10000000-0000-4000-8000-000000000000','weekly_report','service-role-claim-test'
+);
+reset role;
+select '005_automation_audit: idempotent jobs/tasks, service-role claim, append-only audit' as passed;

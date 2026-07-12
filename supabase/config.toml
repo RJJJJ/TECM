@@ -1,7 +1,7 @@
 project_id = "tecm"
 
 [db]
-major_version = 16
+major_version = 15
 
 [db.seed]
 enabled = true
