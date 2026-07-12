@@ -44,13 +44,7 @@
             {
               "id": "base",
               "name": "base_url",
-              "value": "REPLACE_WITH_DEPLOYED_ADMIN_WEB_URL",
-              "type": "string"
-            },
-            {
-              "id": "secret",
-              "name": "automation_secret",
-              "value": "REPLACE_WITH_TECM_AUTOMATION_SECRET",
+              "value": "={{$env.TECM_ADMIN_WEB_URL}}",
               "type": "string"
             },
             {
@@ -85,7 +79,11 @@
             },
             {
               "name": "x-tecm-automation-secret",
-              "value": "={{$json.automation_secret}}"
+              "value": "={{$env.TECM_AUTOMATION_SECRET}}"
+            },
+            {
+              "name": "x-tecm-organization-id",
+              "value": "={{$env.TECM_ORGANIZATION_ID}}"
             }
           ]
         },
@@ -179,7 +177,7 @@
     },
     {
       "parameters": {
-        "jsCode": "function parseMaybeJson(value) {\n  if (typeof value === 'string') {\n    try { return JSON.parse(value); } catch (error) { return null; }\n  }\n  if (value && typeof value === 'object') return value;\n  return null;\n}\n\nconst fallback = {\n  booking_id: $node['Set Config'].json.booking_id,\n  channel: 'wechat_manual',\n  priority: 'medium',\n  intent_summary: 'AI 輸出未通過格式驗證，需要 staff 人工檢查。',\n  suggested_message: '您好，我們收到您的預約資料。為了安排合適的體驗內容，想先與您確認孩子的學習背景和可出席時段。',\n  suggested_next_steps: ['確認預約時段', '了解孩子學習背景', '由 staff 人工判斷後續安排'],\n  internal_note: 'AI output validation failed; fallback draft created.',\n  source: 'n8n_ai',\n  validation_status: 'fallback'\n};\n\nconst candidate = parseMaybeJson($json.ai_output_json || $json.output || $json.text || $json.content || $json);\nconst allowedChannels = ['wechat_manual', 'whatsapp_manual', 'phone_manual', 'in_app'];\nconst allowedPriorities = ['high', 'medium', 'low'];\nconst required = ['channel', 'priority', 'intent_summary', 'suggested_message', 'suggested_next_steps', 'internal_note'];\n\nlet valid = !!candidate && required.every((field) => candidate[field] !== undefined && candidate[field] !== null);\nvalid = valid && allowedChannels.includes(candidate.channel);\nvalid = valid && allowedPriorities.includes(candidate.priority);\nvalid = valid && Array.isArray(candidate.suggested_next_steps);\nvalid = valid && String(candidate.suggested_message || '').trim().length > 0;\n\nif (!valid) {\n  return [{ json: fallback }];\n}\n\nreturn [{\n  json: {\n    booking_id: $node['Set Config'].json.booking_id,\n    channel: candidate.channel,\n    priority: candidate.priority,\n    intent_summary: String(candidate.intent_summary),\n    suggested_message: String(candidate.suggested_message),\n    suggested_next_steps: candidate.suggested_next_steps.map((step) => String(step)),\n    internal_note: String(candidate.internal_note),\n    source: 'n8n_ai',\n    validation_status: 'passed'\n  }\n}];"
+        "jsCode": "function parseMaybeJson(value) {\n  if (typeof value === 'string') {\n    try { return JSON.parse(value); } catch (error) { return null; }\n  }\n  if (value && typeof value === 'object') return value;\n  return null;\n}\n\nconst fallback = {\n  booking_id: $node['Set Config'].json.booking_id,\n  channel: 'wechat_manual',\n  priority: 'medium',\n  intent_summary: 'AI 輸出未通過格式驗證，需要 staff 人工檢查。',\n  suggested_message: '您好，我們收到您的預約資料。為了安排合適的體驗內容，想先與您確認孩子的學習背景和可出席時段。',\n  suggested_next_steps: ['確認預約時段', '了解孩子學習背景', '由 staff 人工判斷後續安排'],\n  internal_note: 'AI output validation failed; fallback draft created.',\n  source: 'n8n',\n  validation_status: 'fallback'\n};\n\nconst candidate = parseMaybeJson($json.ai_output_json || $json.output || $json.text || $json.content || $json);\nconst allowedChannels = ['wechat_manual', 'whatsapp_manual', 'phone_manual', 'in_app'];\nconst allowedPriorities = ['high', 'medium', 'low'];\nconst required = ['channel', 'priority', 'intent_summary', 'suggested_message', 'suggested_next_steps', 'internal_note'];\n\nlet valid = !!candidate && required.every((field) => candidate[field] !== undefined && candidate[field] !== null);\nvalid = valid && allowedChannels.includes(candidate.channel);\nvalid = valid && allowedPriorities.includes(candidate.priority);\nvalid = valid && Array.isArray(candidate.suggested_next_steps);\nvalid = valid && String(candidate.suggested_message || '').trim().length > 0;\n\nif (!valid) {\n  return [{ json: fallback }];\n}\n\nreturn [{\n  json: {\n    booking_id: $node['Set Config'].json.booking_id,\n    channel: candidate.channel,\n    priority: candidate.priority,\n    intent_summary: String(candidate.intent_summary),\n    suggested_message: String(candidate.suggested_message),\n    suggested_next_steps: candidate.suggested_next_steps.map((step) => String(step)),\n    internal_note: String(candidate.internal_note),\n    source: 'n8n',\n    validation_status: 'passed'\n  }\n}];"
       },
       "id": "30000000-0000-4000-8000-000000000008",
       "name": "Validate AI Output",
@@ -211,7 +209,7 @@
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ booking_id: $json.booking_id, channel: $json.channel, priority: $json.priority, intent_summary: $json.intent_summary, suggested_message: $json.suggested_message, suggested_next_steps: $json.suggested_next_steps, internal_note: $json.internal_note, source: \"n8n_ai\" }) }}",
+        "jsonBody": "={{ JSON.stringify({ booking_id: $json.booking_id, channel: $json.channel, priority: $json.priority, intent_summary: $json.intent_summary, suggested_message: $json.suggested_message, suggested_next_steps: $json.suggested_next_steps, internal_note: $json.internal_note, source: \"n8n\" }) }}",
         "options": {}
       },
       "id": "30000000-0000-4000-8000-000000000009",

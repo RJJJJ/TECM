@@ -692,7 +692,7 @@ with check (public.is_staff_or_admin());
 --   and tablename in ('follow_up_tasks', 'notifications', 'booking_parent_notifications')
 -- order by tablename;
 
-order by tablename;
+-- order by tablename;
 
 /* =========================================================
    9) EXAM COHORT ATTENDANCE & MAKEUP TRACKING

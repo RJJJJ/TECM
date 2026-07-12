@@ -1,5 +1,6 @@
 ﻿import { NextResponse } from 'next/server';
 import { createServiceRoleSupabaseClient } from '@/lib/supabase/service-role';
+import { verifyAutomationRequest } from '@/lib/automation/auth';
 import {
   type FollowUpChannel,
   type FollowUpPriority,
@@ -30,25 +31,13 @@ function jsonError(status: number, error: string) {
   return NextResponse.json({ ok: false, error }, { status });
 }
 
-function verifyAutomationSecret(request: Request) {
-  const expected = process.env.TECM_AUTOMATION_SECRET;
-  if (!expected) return { ok: false as const, response: jsonError(500, 'Automation secret is not configured') };
-
-  const received = request.headers.get('x-tecm-automation-secret');
-  if (!received || received !== expected) {
-    return { ok: false as const, response: jsonError(401, 'Invalid automation secret') };
-  }
-
-  return { ok: true as const };
-}
-
 function normalizeString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
 export async function POST(request: Request) {
-  const secretCheck = verifyAutomationSecret(request);
-  if (!secretCheck.ok) return secretCheck.response;
+  const auth = verifyAutomationRequest(request);
+  if (!auth.ok) return jsonError(auth.status, auth.error);
 
   let body: Record<string, unknown>;
   try {
@@ -84,6 +73,7 @@ export async function POST(request: Request) {
   const { data: bookingData, error: bookingError } = await supabase
     .from('bookings')
     .select('id, parent_name, phone, child_name, course_title_snapshot, booking_date, start_time, end_time, campuses(name)')
+    .eq('organization_id', auth.identity.organizationId)
     .eq('id', bookingId)
     .maybeSingle();
 
@@ -91,7 +81,8 @@ export async function POST(request: Request) {
   if (!bookingData) return jsonError(404, 'Booking not found');
 
   const booking = bookingData as unknown as BookingSnapshot;
-  const payload: FollowUpTaskInsert = {
+  const payload: FollowUpTaskInsert & { organization_id: string } = {
+    organization_id: auth.identity.organizationId,
     booking_id: booking.id,
     parent_name: booking.parent_name,
     phone: booking.phone,
@@ -118,6 +109,7 @@ export async function POST(request: Request) {
   const { data: existingTask, error: existingError } = await supabase
     .from('follow_up_tasks')
     .select('id')
+    .eq('organization_id', auth.identity.organizationId)
     .eq('booking_id', bookingId)
     .eq('status', 'open')
     .in('source', ['automation', 'n8n'])

@@ -8,7 +8,7 @@ export type LoginFormState = {
   error?: string;
 };
 
-const DEFAULT_LOGIN_ERROR = '登入失敗，請確認 Email 與密碼。';
+const DEFAULT_LOGIN_ERROR = '登入失敗，請確認電郵與密碼。';
 
 export async function loginAction(
   _prevState: LoginFormState,
@@ -18,7 +18,7 @@ export async function loginAction(
   const password = String(formData.get('password') ?? '');
 
   if (!email || !password) {
-    return { error: '請輸入 Email 與密碼。' };
+    return { error: '請輸入電郵與密碼。' };
   }
 
   const supabase = await createServerSupabaseClient();
@@ -39,5 +39,5 @@ export async function loginAction(
     return { error: '此帳號沒有後台權限或已停用。' };
   }
 
-  redirect('/admin/bookings');
+  redirect('/admin');
 }

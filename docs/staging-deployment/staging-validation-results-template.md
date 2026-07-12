@@ -42,7 +42,7 @@ Default status: Pending. Do not mark staging as passed until the deployed enviro
 | Check | Result | Evidence | Notes |
 |---|---|---|---|
 | staging manual workflow imports | Pending | `<path>` | |
-| staging manual workflow creates `source=n8n_staging` task | Pending | `<path>` | |
+| staging manual workflow creates `source=n8n` task | Pending | `<path>` | |
 | staging digest workflow imports | Pending | `<path>` | |
 | staging real AI template imports | Pending | `<path>` | Template only unless provider configured. |
 

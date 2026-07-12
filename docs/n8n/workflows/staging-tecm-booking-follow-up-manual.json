@@ -60,7 +60,11 @@
             },
             {
               "name": "x-tecm-automation-secret",
-              "value": "={{$json.automation_secret}}"
+              "value": "={{$env.TECM_AUTOMATION_SECRET}}"
+            },
+            {
+              "name": "x-tecm-organization-id",
+              "value": "={{$env.TECM_ORGANIZATION_ID}}"
             }
           ]
         },
@@ -157,14 +161,18 @@
             },
             {
               "name": "x-tecm-automation-secret",
-              "value": "={{$node['Set Config'].json.automation_secret}}"
+              "value": "={{$env.TECM_AUTOMATION_SECRET}}"
+            },
+            {
+              "name": "x-tecm-organization-id",
+              "value": "={{$env.TECM_ORGANIZATION_ID}}"
             }
           ]
         },
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ booking_id: $json.booking_id, channel: $json.channel, priority: $json.priority, intent_summary: $json.intent_summary, suggested_message: $json.suggested_message, suggested_next_steps: $json.suggested_next_steps, internal_note: $json.internal_note, source: 'n8n_staging' }) }}",
+        "jsonBody": "={{ JSON.stringify({ booking_id: $json.booking_id, channel: $json.channel, priority: $json.priority, intent_summary: $json.intent_summary, suggested_message: $json.suggested_message, suggested_next_steps: $json.suggested_next_steps, internal_note: $json.internal_note, source: 'n8n' }) }}",
         "options": {}
       },
       "id": "7eddb2ee-74c0-44e6-b553-9489d3a4f2bd",

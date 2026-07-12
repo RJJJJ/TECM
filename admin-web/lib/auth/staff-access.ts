@@ -19,6 +19,19 @@ export async function verifyActiveStaffAccess(
     };
   }
 
+  const { data: organizationMember, error: membershipError } = await supabase
+    .from('organization_members')
+    .select('user_id, status, role')
+    .eq('user_id', user.id)
+    .eq('status', 'active')
+    .in('role', ['admin', 'staff', 'teacher'])
+    .limit(1)
+    .maybeSingle();
+
+  if (!membershipError && organizationMember) return { allowed: true, user };
+
+  // Compatibility fallback while an existing deployment is moving from the
+  // global v1 role table to organization_members.
   const { data: staffRole, error } = await supabase
     .from('staff_roles')
     .select('user_id, is_active')
@@ -26,12 +39,7 @@ export async function verifyActiveStaffAccess(
     .eq('is_active', true)
     .maybeSingle();
 
-  if (error || !staffRole) {
-    return {
-      allowed: false,
-      user
-    };
-  }
+  if (error || !staffRole) return { allowed: false, user };
 
   return {
     allowed: true,
