@@ -1,4 +1,5 @@
 import Combine
+import Foundation
 import SwiftUI
 
 @MainActor
@@ -131,7 +132,7 @@ struct ParentOperationsView: View {
                 summaryRow(title: item.reason, detail: item.status.capitalized)
             }
         }
-        .onChange(of: selectedStudentID) { _, _ in
+        .onChange(of: selectedStudentID) { _ in
             selectedSessionID = nil
         }
     }
@@ -186,6 +187,7 @@ struct ParentOperationsView: View {
     }
 
     private func money(_ minor: Int64, _ currency: String) -> String {
-        "\(currency) \(Double(minor) / 100, format: .number.precision(.fractionLength(2)))"
+        let amount = (Double(minor) / 100).formatted(.number.precision(.fractionLength(2)))
+        return "\(currency) \(amount)"
     }
 }
