@@ -1,7 +1,12 @@
 TECM/Config/Secrets.xcconfig
 TECM.xcodeproj/xcuserdata/
+TECM.xcodeproj/project.xcworkspace/xcuserdata/
 admin-web/.env.local
 admin-web/.env*.local
+admin-web/.next/
+admin-web/playwright-report/
+admin-web/test-results/
+admin-web/tsconfig.tsbuildinfo
 .env.staging
 .env.production
 .env

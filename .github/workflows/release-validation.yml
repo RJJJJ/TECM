@@ -1,0 +1,124 @@
+name: Release validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - feature/ios-parent-app-push-sync
+
+permissions:
+  contents: read
+
+jobs:
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify migrations, repeatable seed, RLS, and SQL suites
+        shell: pwsh
+        run: ./scripts/testing/database-verify.ps1
+
+  admin-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: admin-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: admin-web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --audit-level=high
+
+  repository-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: node scripts/testing/validate-n8n.mjs
+      - run: node scripts/testing/repository-security-scan.mjs
+      - run: deno check supabase/functions/send-apns/index.ts
+
+  admin-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: admin-web/package-lock.json
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Start local Supabase and reset schema
+        run: |
+          supabase start
+          supabase db reset
+          KONG_CONTAINER="$(docker ps --filter name=supabase_kong_ --format '{{.Names}}' | head -n 1)"
+          test -n "$KONG_CONTAINER"
+          docker restart "$KONG_CONTAINER" >/dev/null
+          API_URL="$(supabase status -o json | jq -r .API_URL)"
+          ANON_KEY="$(supabase status -o json | jq -r .ANON_KEY)"
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error --header "apikey: $ANON_KEY" "$API_URL/auth/v1/health" >/dev/null; then
+              break
+            fi
+            test "$attempt" -lt 20
+            sleep 2
+          done
+          echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
+          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$(supabase status -o json | jq -r .SERVICE_ROLE_KEY)" >> "$GITHUB_ENV"
+      - name: Install Admin Web and Chromium
+        working-directory: admin-web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium webkit
+      - name: Run live Playwright flows
+        working-directory: admin-web
+        env:
+          PLAYWRIGHT_ADMIN_EMAIL: admin@tecm.local
+          PLAYWRIGHT_ADMIN_PASSWORD: LocalDemoOnly-1234
+        run: npm run test:e2e
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project TECM.xcodeproj
+      - name: Build without signing
+        run: >-
+          xcodebuild build
+          -project TECM.xcodeproj
+          -scheme TECM
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro'
+          CODE_SIGNING_ALLOWED=NO
+      - name: Run Swift tests when a test target exists
+        run: >-
+          xcodebuild test
+          -project TECM.xcodeproj
+          -scheme TECM
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro'
+          CODE_SIGNING_ALLOWED=NO
