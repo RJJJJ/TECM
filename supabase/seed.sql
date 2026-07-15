@@ -103,9 +103,9 @@ insert into public.staff_roles (id,user_id,role,is_active,organization_id) value
   ('22000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001','admin',true,'20000000-0000-4000-8000-000000000000')
 on conflict (user_id) do update set role=excluded.role,is_active=excluded.is_active,organization_id=excluded.organization_id;
 
-insert into public.parent_profiles (id,user_id,full_name,phone,organization_id) values
-('13000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000003','Guardian A','+85360000001','10000000-0000-4000-8000-000000000000')
-on conflict (id) do update set full_name=excluded.full_name;
+insert into public.parent_profiles (id,user_id,full_name,phone,organization_id,account_status,email,linked_at) values
+('13000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000003','Guardian A','+85360000001','10000000-0000-4000-8000-000000000000','active','guardian-a@tecm.test',now())
+on conflict (id) do update set full_name=excluded.full_name,account_status=excluded.account_status,email=excluded.email,linked_at=coalesce(public.parent_profiles.linked_at,excluded.linked_at);
 
 insert into public.children (id,parent_id,child_name,age,school_name,organization_id) values
 ('14000000-0000-4000-8000-000000000001','13000000-0000-4000-8000-000000000001','Student A',10,'TECM School','10000000-0000-4000-8000-000000000000')

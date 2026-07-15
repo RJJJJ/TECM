@@ -32,6 +32,7 @@ try {
     '/workspace/supabase/migrations/202607110001_tenant_operations_finance.sql',
     '/workspace/supabase/migrations/202607110002_invariants_rls_rpcs.sql',
     '/workspace/supabase/migrations/202607110003_release_blockers.sql',
+    '/workspace/supabase/migrations/202607150004_parent_notifications.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
@@ -39,16 +40,17 @@ try {
     '/workspace/supabase/tests/003_attendance_leave_makeup.sql',
     '/workspace/supabase/tests/004_finance_ledger.sql',
     '/workspace/supabase/tests/005_automation_audit.sql',
-    '/workspace/supabase/tests/006_submit_attendance_rpc.sql'
+    '/workspace/supabase/tests/006_submit_attendance_rpc.sql',
+    '/workspace/supabase/tests/007_parent_notifications.sql'
   )
 
   foreach ($file in $files) {
     Write-Host "[RUN] $file"
-    docker exec $containerName sh -c "psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -f '$file' 2>/dev/null"
+    docker exec $containerName sh -c "psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -f '$file'"
     if ($LASTEXITCODE -ne 0) { throw "Database verification failed: $file" }
   }
 
-  Write-Host '[PASS] migrations, repeatable seed, RLS and six SQL suites'
+  Write-Host '[PASS] migrations, repeatable seed, RLS and seven SQL suites'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity
