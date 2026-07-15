@@ -39,14 +39,25 @@ final class ParentCenterViewModel: ObservableObject {
 
         do {
             let profile = try await parentProfileService.fetchCurrentParentProfile(userID: userID)
-            async let bookingsTask = bookingService.fetchMyBookings(parentID: profile.id)
-            async let notificationsTask = notificationService.fetchMyNotifications(parentID: profile.id)
-            async let examSummariesTask = examCohortService.fetchParentAttendanceSummary()
-
             self.profile = profile
-            self.reservations = try await bookingsTask
-            self.notifications = try await notificationsTask
-            self.examSummaries = try await examSummariesTask
+
+            do {
+                reservations = try await bookingService.fetchMyBookings(parentID: profile.id)
+            } catch {
+                reservations = []
+            }
+
+            do {
+                notifications = try await notificationService.fetchMyNotifications(parentID: profile.id)
+            } catch {
+                notifications = []
+            }
+
+            do {
+                examSummaries = try await examCohortService.fetchParentAttendanceSummary()
+            } catch {
+                examSummaries = []
+            }
         } catch {
             clear()
             errorMessage = error.localizedDescription

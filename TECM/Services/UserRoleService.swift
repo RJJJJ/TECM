@@ -2,7 +2,7 @@ import Foundation
 import Supabase
 
 protocol UserRoleServicing {
-    func resolveRole(userID: UUID) async throws -> UserAppRole
+    func resolveCapabilities(userID: UUID) async throws -> UserRoleCapabilities
 }
 
 struct UserRoleService: UserRoleServicing {
@@ -12,47 +12,25 @@ struct UserRoleService: UserRoleServicing {
         self.client = client
     }
 
-    func resolveRole(userID: UUID) async throws -> UserAppRole {
-        async let staffTask: [StaffRoleLookupDTO] = client
-            .from("staff_roles")
-            .select("role,is_active")
+    func resolveCapabilities(userID: UUID) async throws -> UserRoleCapabilities {
+        let memberships: [OrganizationMembershipDTO] = try await client
+            .from("organization_members")
+            .select("organization_id,role,status")
             .eq("user_id", value: userID)
-            .eq("is_active", value: true)
-            .limit(1)
+            .eq("status", value: "active")
             .execute()
             .value
 
-        async let teacherTask: [TeacherProfileLookupDTO] = client
-            .from("teacher_profiles")
-            .select("id,user_id,display_name,is_active")
-            .eq("user_id", value: userID)
-            .eq("is_active", value: true)
-            .limit(1)
-            .execute()
-            .value
-
-        async let parentTask: [ParentProfileDTO] = client
+        let parentRows: [ParentProfileDTO] = try await client
             .from("parent_profiles")
             .select("id,user_id,full_name,phone")
             .eq("user_id", value: userID)
             .limit(1)
             .execute()
             .value
-
-        let (staffRows, teacherRows, parentRows) = try await (staffTask, teacherTask, parentTask)
-
-        if let staff = staffRows.first, staff.isActive {
-            return staff.role == "admin" ? .admin : .admin
-        }
-
-        if teacherRows.first?.isActive == true {
-            return .teacher
-        }
-
-        if !parentRows.isEmpty {
-            return .parent
-        }
-
-        return .guest
+        return UserRoleCapabilities.resolve(
+            organizationRoleNames: memberships.map(\.role),
+            hasParentProfile: !parentRows.isEmpty
+        )
     }
 }

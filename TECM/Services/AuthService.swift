@@ -6,6 +6,7 @@ protocol AuthServicing {
     func signOut() async throws
     func restoreSession() async throws -> User?
     func currentUser() async throws -> User?
+    func handleAuthCallback(url: URL) async throws -> User
 }
 
 struct AuthService: AuthServicing {
@@ -35,5 +36,10 @@ struct AuthService: AuthServicing {
         } catch {
             return nil
         }
+    }
+
+    func handleAuthCallback(url: URL) async throws -> User {
+        let session = try await client.auth.session(from: url)
+        return session.user
     }
 }
