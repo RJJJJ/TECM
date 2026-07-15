@@ -27,9 +27,22 @@
 		B10000000000000000000000 /* TECMTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TECMTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		C10000000000000000000000 /* Exceptions for "TECM" folder in "TECM" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 30FA294D2F8930A1006789B5 /* TECM */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		30FA29502F8930A1006789B5 /* TECM */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				C10000000000000000000000 /* Exceptions for "TECM" folder in "TECM" target */,
+			);
 			path = TECM;
 			sourceTree = "<group>";
 		};
