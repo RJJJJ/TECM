@@ -21,10 +21,12 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
 
     private static let installationIDKey = "tecm.push.installation-id"
 
-    init(
-        notificationService: NotificationServicing = NotificationService(),
-        client: SupabaseClient = SupabaseClientProvider.shared
-    ) {
+    override convenience init() {
+        let client = SupabaseClientProvider.shared
+        self.init(notificationService: NotificationService(client: client), client: client)
+    }
+
+    init(notificationService: NotificationServicing, client: SupabaseClient) {
         self.notificationService = notificationService
         self.client = client
         super.init()
