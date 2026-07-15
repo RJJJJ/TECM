@@ -133,7 +133,6 @@ jobs:
           -scheme TECM
           -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}'
           -resultBundlePath '${{ runner.temp }}/TECMTests.xcresult'
-          CODE_SIGNING_ALLOWED=NO
       - name: Print XCTest bootstrap diagnostics
         if: failure()
         shell: bash
@@ -143,11 +142,18 @@ jobs:
             xcrun xcresulttool get test-results summary --path "$result_bundle" || true
             xcrun xcresulttool get log --path "$result_bundle" --type console || true
           fi
-          xcrun simctl spawn booted log show \
+          simulator_id='${{ steps.simulator.outputs.id }}'
+          xcrun simctl boot "$simulator_id" || true
+          xcrun simctl bootstatus "$simulator_id" -b || true
+          xcrun simctl spawn "$simulator_id" log show \
             --last 15m \
             --style compact \
             --predicate 'process == "TECM" OR process == "TECMTests"' \
             | tail -n 600 || true
+          find "$HOME/Library/Logs/DiagnosticReports" \
+            "$HOME/Library/Developer/CoreSimulator/Devices/$simulator_id/data/Library/Logs/CrashReporter" \
+            -type f \( -name 'TECM*.crash' -o -name 'TECM*.ips' \) \
+            -print -exec tail -n 400 {} \; 2>/dev/null || true
       - name: Remove the CI simulator
         if: always()
         shell: bash
