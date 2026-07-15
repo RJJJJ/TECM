@@ -4,7 +4,6 @@ import Supabase
 import UIKit
 import UserNotifications
 
-@MainActor
 final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     @Published private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
     @Published private(set) var unreadCount = 0
