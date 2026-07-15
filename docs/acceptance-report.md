@@ -23,9 +23,10 @@
 | Admin production build | passed | Next.js build 成功，27 routes |
 | Dependency audit | passed | `npm audit --audit-level=high`，0 vulnerabilities |
 | Live Playwright E2E | passed | 干淨 DB reset 後 4/4：Chromium + WebKit/mobile，既有營運主流程 + 家長邀請/原子停用/範本/公告/投遞摘要/跨 tenant 拒絕 |
+| iOS Xcode build + Swift tests | passed | GitHub Actions [run 29408055591](https://github.com/RJJJJ/TECM/actions/runs/29408055591)：Xcode 16.4、iOS 18.5 Simulator，套件解析、無簽名 build 與 XCTest 全部成功 |
 | Deno Edge Function | passed | `deno fmt --check` 與 `deno check supabase/functions/send-apns/index.ts` |
 | n8n safety | passed | 14 workflow JSON 有效、inactive、無禁止的對外 sender 或密鑰 |
-| Repository safety scan | passed | 316 個工作樹/候選檔案與所有可達歷史文字 blob（交付前掃描 627 個）；無 PEM/service-role JWT 洩露，無禁止的生成檔 |
+| Repository safety scan | passed | 交付前掃描至少 318 個工作樹/候選檔案與 648 個可達歷史文字 blob；無 PEM/service-role JWT 洩露，無禁止的生成檔 |
 | Git diff hygiene | passed | `git diff --check` 無 whitespace error |
 
 ## 功能驗收覆蓋
@@ -42,7 +43,6 @@
 
 | Gate | 狀態 | 原因/後續 |
 |---|---|---|
-| macOS `xcodebuild` + Swift tests | pending | Windows 無 Xcode；GitHub Actions `ios` job 已配置，推送後以該 run 為準 |
 | iOS Simulator 人工 deep-link/foreground UX | pending | 需在 macOS 開啟 fixture `.apns` 驗證 |
 | Apple entitlement/provisioning | blocked | 需要 Apple Developer Team/App ID/profile，儲存庫不含憑證 |
 | APNs sandbox 真實裝置 | blocked | 需要 `.p8` secret 與 development-signed 實體 iPhone |
