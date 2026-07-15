@@ -106,6 +106,17 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Create an Xcode 16.4 simulator
+        id: simulator
+        shell: bash
+        run: |
+          simulator_id=$(xcrun simctl create \
+            'TECM iPhone 16 Pro' \
+            'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro' \
+            'com.apple.CoreSimulator.SimRuntime.iOS-18-5')
+          echo "id=$simulator_id" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$simulator_id"
+          xcrun simctl bootstatus "$simulator_id" -b
       - name: Resolve Swift packages
         run: xcodebuild -resolvePackageDependencies -project TECM.xcodeproj
       - name: Build without signing
@@ -113,14 +124,14 @@ jobs:
           xcodebuild build
           -project TECM.xcodeproj
           -scheme TECM
-          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.5'
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}'
           CODE_SIGNING_ALLOWED=NO
       - name: Run Swift tests when a test target exists
         run: >-
           xcodebuild test
           -project TECM.xcodeproj
           -scheme TECM
-          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.5'
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}'
           -resultBundlePath '${{ runner.temp }}/TECMTests.xcresult'
           CODE_SIGNING_ALLOWED=NO
       - name: Print XCTest bootstrap diagnostics
@@ -137,3 +148,12 @@ jobs:
             --style compact \
             --predicate 'process == "TECM" OR process == "TECMTests"' \
             | tail -n 600 || true
+      - name: Remove the CI simulator
+        if: always()
+        shell: bash
+        run: |
+          simulator_id='${{ steps.simulator.outputs.id }}'
+          if [[ -n "$simulator_id" ]]; then
+            xcrun simctl shutdown "$simulator_id" || true
+            xcrun simctl delete "$simulator_id" || true
+          fi
