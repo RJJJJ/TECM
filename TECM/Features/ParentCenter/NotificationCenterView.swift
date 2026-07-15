@@ -1,3 +1,4 @@
+import Auth
 import Combine
 import SwiftUI
 import UIKit
