@@ -121,4 +121,19 @@ jobs:
           -project TECM.xcodeproj
           -scheme TECM
           -destination 'platform=iOS Simulator,name=iPhone 16 Pro'
+          -resultBundlePath '${{ runner.temp }}/TECMTests.xcresult'
           CODE_SIGNING_ALLOWED=NO
+      - name: Print XCTest bootstrap diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          result_bundle='${{ runner.temp }}/TECMTests.xcresult'
+          if [[ -d "$result_bundle" ]]; then
+            xcrun xcresulttool get test-results summary --path "$result_bundle" || true
+            xcrun xcresulttool get log --path "$result_bundle" --type console || true
+          fi
+          xcrun simctl spawn booted log show \
+            --last 15m \
+            --style compact \
+            --predicate 'process == "TECM" OR process == "TECMTests"' \
+            | tail -n 600 || true
