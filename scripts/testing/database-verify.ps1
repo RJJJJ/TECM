@@ -19,9 +19,15 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not start PostgreSQL verification contai
 
 try {
   $ready = $false
+  $stableReadyChecks = 0
   for ($attempt = 0; $attempt -lt 60; $attempt++) {
-    docker exec $containerName pg_isready -U postgres -d $database 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+    docker exec $containerName pg_isready -q -U postgres -d $database 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+      $stableReadyChecks++
+      if ($stableReadyChecks -ge 2) { $ready = $true; break }
+    } else {
+      $stableReadyChecks = 0
+    }
     Start-Sleep -Seconds 1
   }
   if (-not $ready) { throw 'PostgreSQL did not become ready.' }
