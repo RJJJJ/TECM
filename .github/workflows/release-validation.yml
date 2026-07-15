@@ -113,14 +113,14 @@ jobs:
           xcodebuild build
           -project TECM.xcodeproj
           -scheme TECM
-          -destination 'platform=iOS Simulator,name=iPhone 16 Pro'
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.5'
           CODE_SIGNING_ALLOWED=NO
       - name: Run Swift tests when a test target exists
         run: >-
           xcodebuild test
           -project TECM.xcodeproj
           -scheme TECM
-          -destination 'platform=iOS Simulator,name=iPhone 16 Pro'
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.5'
           -resultBundlePath '${{ runner.temp }}/TECMTests.xcresult'
           CODE_SIGNING_ALLOWED=NO
       - name: Print XCTest bootstrap diagnostics
