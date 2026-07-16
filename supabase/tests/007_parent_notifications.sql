@@ -61,15 +61,21 @@ values('10000000-0000-4000-8000-000000000000','13000000-0000-4000-8000-000000000
 -- Linked parent is a tenant principal without an organization_members row.
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000003',false);
 select public.activate_parent_account();
+set role service_role;
+do $$ begin
+  if not exists(
+    select 1 from public.parent_account_invitations
+    where auth_user_id='10000000-0000-4000-8000-000000000003'
+      and status='accepted' and accepted_at is not null
+  ) then
+    raise exception 'authenticated parent session did not accept the invitation audit';
+  end if;
+end $$;
+set role authenticated;
+select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000003',false);
 do $$ begin
   if (select account_status from public.parent_profiles where user_id=auth.uid())<>'active' then
     raise exception 'authenticated parent session did not activate the account independently of push registration';
-  end if;
-  if not exists(
-    select 1 from public.parent_account_invitations
-    where auth_user_id=auth.uid() and status='accepted' and accepted_at is not null
-  ) then
-    raise exception 'authenticated parent session did not accept the invitation audit';
   end if;
   if exists(select 1 from public.organization_members where user_id=auth.uid()) then
     raise exception 'parent was exposed as organization member';
