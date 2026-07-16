@@ -38,6 +38,7 @@ try {
     '/workspace/supabase/migrations/202607110001_tenant_operations_finance.sql',
     '/workspace/supabase/migrations/202607110002_invariants_rls_rpcs.sql',
     '/workspace/supabase/migrations/202607110003_release_blockers.sql',
+    '/workspace/supabase/tests/000_legacy_parent_fixture.sql',
     '/workspace/supabase/migrations/202607150004_parent_notifications.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/seed.sql',

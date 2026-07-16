@@ -141,13 +141,16 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
         }
     }
 
-    func deactivateCurrentInstallation() async {
-        guard activeUserID != nil else { return }
+    func deactivateCurrentInstallation() async throws {
         do {
             try await notificationService.deactivatePushDevice(installationID: Self.installationID)
         } catch {
             lastErrorMessage = error.localizedDescription
+            throw error
         }
+        UIApplication.shared.unregisterForRemoteNotifications()
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
         activeUserID = nil
         await stopRealtimeSubscription()
         unreadCount = 0

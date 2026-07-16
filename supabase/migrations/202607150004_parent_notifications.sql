@@ -6,6 +6,14 @@ alter table public.parent_profiles add column if not exists account_status text 
   check (account_status in ('unlinked','invited','active','disabled'));
 alter table public.parent_profiles add column if not exists invited_at timestamptz;
 alter table public.parent_profiles add column if not exists linked_at timestamptz;
+
+-- Preserve legacy account access when upgrading profiles that were already linked.
+update public.parent_profiles
+set account_status = 'active',
+    linked_at = coalesce(linked_at, updated_at, created_at, now())
+where user_id is not null
+  and account_status = 'unlinked';
+
 create unique index if not exists uq_parent_profiles_organization_email
   on public.parent_profiles (organization_id, lower(email)) where email is not null;
 
@@ -366,9 +374,9 @@ for each row execute function public.protect_notification_preference_identity();
 
 -- Parent read/write policies for operational data; internal attendance notes remain RPC-only.
 create policy leave_requests_parent_read on public.leave_requests for select using(public.is_parent_of_student(student_id));
-create policy leave_requests_parent_insert on public.leave_requests for insert with check(
-  public.is_parent_of_student(student_id) and requested_by=auth.uid()
-);
+-- Parent writes must use submit_parent_leave_request so session/cohort, status,
+-- requester, future-date, and idempotency validation cannot be bypassed.
+drop policy if exists leave_requests_parent_insert on public.leave_requests;
 create policy makeup_entitlements_parent_read on public.makeup_entitlements for select using(public.is_parent_of_student(student_id));
 create policy makeup_tasks_parent_read on public.makeup_tasks for select using(public.is_parent_of_student(student_id));
 create policy makeup_sessions_parent_read on public.makeup_sessions for select using(public.is_parent_of_student(student_id));
@@ -433,6 +441,21 @@ returns trigger language plpgsql security definer set search_path=public as $$ b
 end $$;
 create trigger trg_notifications_enqueue after insert on public.notifications
 for each row execute function public.enqueue_notification_devices();
+
+create or replace function public.activate_parent_account()
+returns boolean language plpgsql security definer set search_path=public as $$
+declare v_org uuid; begin
+  if auth.uid() is null then raise exception 'authenticated user required'; end if;
+  update public.parent_profiles
+  set account_status='active',linked_at=coalesce(linked_at,now()),updated_at=now()
+  where user_id=auth.uid() and account_status in ('invited','active')
+  returning organization_id into v_org;
+  if v_org is null then raise exception 'invited or active parent profile required'; end if;
+  update public.parent_account_invitations
+  set status='accepted',accepted_at=coalesce(accepted_at,now()),updated_at=now()
+  where organization_id=v_org and auth_user_id=auth.uid() and status in ('pending','sent','expired');
+  return true;
+end $$;
 
 create or replace function public.register_push_device(
   p_installation_id text,p_device_token text,p_environment text,p_bundle_id text,
@@ -670,6 +693,7 @@ create index if not exists idx_payment_allocations_charge on public.payment_allo
 do $$ declare sig text; begin for sig in select p.oid::regprocedure::text from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.prosecdef loop execute format('revoke all on function %s from public',sig); end loop; end $$;
 grant execute on function public.can_access_organization_data(uuid) to authenticated,service_role;
 grant execute on function public.has_parent_account_access(uuid) to authenticated,service_role;
+grant execute on function public.activate_parent_account() to authenticated;
 grant execute on function public.register_push_device(text,text,text,text,text,text) to authenticated;
 grant execute on function public.deactivate_push_device(text) to authenticated;
 grant execute on function public.mark_notification_read(uuid) to authenticated;

@@ -23,6 +23,22 @@ final class AuthViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.currentUser)
         XCTAssertEqual(viewModel.currentCapabilities, .guest)
     }
+
+    func testSignOutStopsWhenDeviceDeactivationFails() async {
+        let authService = MockAuthService()
+        let viewModel = AuthViewModel(
+            authService: authService,
+            userRoleService: MockUserRoleService()
+        )
+        viewModel.configureSignOutCleanup {
+            throw MockError.deviceDeactivationFailed
+        }
+
+        await viewModel.signOut()
+
+        XCTAssertFalse(authService.signOutCalled)
+        XCTAssertNotNil(viewModel.errorMessage)
+    }
 }
 
 private final class MockAuthService: AuthServicing {
@@ -50,4 +66,5 @@ private struct MockUserRoleService: UserRoleServicing {
 
 private enum MockError: Error {
     case unexpectedCall
+    case deviceDeactivationFailed
 }

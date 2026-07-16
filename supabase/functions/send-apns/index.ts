@@ -58,27 +58,34 @@ export async function handleRequest(request: Request) {
     const supabase = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
-    const { data, error } = await supabase.rpc("claim_notification_outbox", {
-      p_worker_id: workerId,
-      p_limit: 25,
-      p_lease_seconds: 90,
-    });
-    if (error) throw new Error(`Outbox claim failed: ${error.message}`);
-
-    const items = (data ?? []) as ClaimedNotification[];
-    const providerToken = dryRun || items.length === 0
-      ? null
-      : await createProviderToken(
-        requiredSecret("APNS_KEY_ID"),
-        requiredSecret("APNS_TEAM_ID"),
-        requiredSecret("APNS_PRIVATE_KEY"),
-      );
+    let providerToken: string | null = null;
+    let claimed = 0;
     let delivered = 0;
     let wouldSend = 0;
     let retried = 0;
     let failed = 0;
 
-    for (const item of items) {
+    // Claim only the row about to be sent. Claiming a batch under one lease
+    // lets later rows expire while earlier network calls are still running.
+    for (let index = 0; index < 25; index += 1) {
+      const { data, error } = await supabase.rpc("claim_notification_outbox", {
+        p_worker_id: workerId,
+        p_limit: 1,
+        p_lease_seconds: 90,
+      });
+      if (error) throw new Error(`Outbox claim failed: ${error.message}`);
+      const item = ((data ?? []) as ClaimedNotification[])[0];
+      if (!item) break;
+      claimed += 1;
+
+      if (!dryRun && providerToken === null) {
+        providerToken = await createProviderToken(
+          requiredSecret("APNS_KEY_ID"),
+          requiredSecret("APNS_TEAM_ID"),
+          requiredSecret("APNS_PRIVATE_KEY"),
+        );
+      }
+
       if (item.bundle_id !== configuredBundleId) {
         const { error: retryError } = await supabase.rpc(
           "retry_notification_delivery",
@@ -183,7 +190,7 @@ export async function handleRequest(request: Request) {
     }
 
     return response(200, {
-      claimed: items.length,
+      claimed,
       delivered,
       would_send: wouldSend,
       retried,

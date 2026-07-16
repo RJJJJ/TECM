@@ -31,7 +31,9 @@ APNS_DRY_RUN=true|false
 supabase functions deploy send-apns --no-verify-jwt
 ```
 
-Function 自行驗證 `Authorization: Bearer <PUSH_WORKER_SECRET>` 或 `x-tecm-worker-secret`。只讓 Supabase Cron／受信 scheduler 呼叫；不要建立公開無 secret 排程。重複 invocation 由 outbox lease/idempotency 保護。
+Function 自行驗證 `Authorization: Bearer <PUSH_WORKER_SECRET>` 或 `x-tecm-worker-secret`。只讓 Supabase Cron／受信 scheduler 呼叫；不要建立公開無 secret 排程。每次只 claim 即將處理的一筆，APNs request 有 30 秒 timeout，active lease 與 notification/device unique key 防止重複排隊或並行處理。
+
+APNs 與 PostgreSQL 不能形成單一交易，因此 delivery 是 at-least-once：若 APNs 已接受但資料庫 completion acknowledgement 失敗，backoff retry 或 lease 到期後可能重送。attempt/APNs request id 用於偵測及調查這個模糊狀態；文件不宣稱 exactly-once。
 
 第一次部署先設 `APNS_DRY_RUN=true`。dry-run 只產生 `would_send` attempt，不標記 delivered。確認 tenant、recipient、environment 和 generic payload 後才在受控環境改為 false。
 

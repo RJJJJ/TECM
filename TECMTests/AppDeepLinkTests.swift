@@ -47,4 +47,12 @@ final class AppDeepLinkTests: XCTestCase {
             .notificationCenter
         )
     }
+
+    func testParentRouteWaitsForAuthenticationBeforeNavigation() {
+        let route = AppDeepLinkRoute.notification(UUID())
+
+        XCTAssertFalse(route.isReadyForParentNavigation(hasParentRole: false, userID: nil))
+        XCTAssertFalse(route.isReadyForParentNavigation(hasParentRole: true, userID: nil))
+        XCTAssertTrue(route.isReadyForParentNavigation(hasParentRole: true, userID: UUID()))
+    }
 }

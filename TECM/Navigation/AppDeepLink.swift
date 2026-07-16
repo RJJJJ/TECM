@@ -51,6 +51,10 @@ enum AppDeepLinkRoute: Equatable {
         if case .notification(let identifier) = self { return identifier }
         return nil
     }
+
+    func isReadyForParentNavigation(hasParentRole: Bool, userID: UUID?) -> Bool {
+        self != .authCallback && hasParentRole && userID != nil
+    }
 }
 
 enum ParentRoute: Hashable {

@@ -198,6 +198,7 @@ export async function sendToApns(
         "apns-priority": "10",
         "content-type": "application/json",
       },
+      signal: AbortSignal.timeout(30_000),
       body: JSON.stringify(buildApnsPayload(item)),
     },
   );

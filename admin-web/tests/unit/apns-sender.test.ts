@@ -93,6 +93,7 @@ test('mock APNs provider receives HTTP/2-compatible request metadata and safe pa
   assert.equal(headers.authorization, 'bearer provider-token');
   assert.equal(headers['apns-topic'], 'app.TECM');
   assert.equal(headers['apns-push-type'], 'alert');
+  assert.ok(capturedInit!.signal, 'APNs requests must have a bounded timeout signal');
   assert.equal(String(capturedInit!.body).includes(item.body!), false);
   assert.equal(result.status, 200);
   assert.equal(result.requestId, 'request-id');

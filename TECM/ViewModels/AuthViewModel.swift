@@ -12,7 +12,7 @@ final class AuthViewModel: ObservableObject {
 
     private let authService: AuthServicing
     private let userRoleService: UserRoleServicing
-    private var signOutCleanup: (() async -> Void)?
+    private var signOutCleanup: (() async throws -> Void)?
 
     var currentRole: UserAppRole { currentCapabilities.primaryRole }
     var hasParentRole: Bool { currentCapabilities.hasParentRole }
@@ -51,7 +51,7 @@ final class AuthViewModel: ObservableObject {
 
         do {
             if let signOutCleanup {
-                await signOutCleanup()
+                try await signOutCleanup()
             }
             try await authService.signOut()
             currentUser = nil
@@ -77,7 +77,7 @@ final class AuthViewModel: ObservableObject {
         }
     }
 
-    func configureSignOutCleanup(_ cleanup: @escaping () async -> Void) {
+    func configureSignOutCleanup(_ cleanup: @escaping () async throws -> Void) {
         signOutCleanup = cleanup
     }
 

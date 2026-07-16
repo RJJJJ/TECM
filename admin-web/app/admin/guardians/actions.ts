@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { getOperationsContext } from '@/lib/operations/context';
+import { hasConflictingParentLink } from '@/lib/parent-invitation';
 import { createServiceRoleSupabaseClient } from '@/lib/supabase/service-role';
 
 const text = (form: FormData, key: string) => String(form.get(key) ?? '').trim();
@@ -44,6 +45,17 @@ export async function inviteGuardianAction(form: FormData): Promise<void> {
     .in('status', ['pending', 'sent']).lt('sent_at', new Date(Date.now() - 7 * 86400000).toISOString());
 
   let authUser = await findUserByEmail(email);
+  let existingLinks: Array<{ id: string; organization_id: string; user_id: string | null }> = [];
+  if (authUser) {
+    const { data, error } = await service.from('parent_profiles')
+      .select('id,organization_id,user_id').eq('user_id', authUser.id);
+    if (error) throw error;
+    existingLinks = data;
+  }
+  if (hasConflictingParentLink(profile, authUser?.id ?? null, existingLinks)) {
+    throw new Error('此登入身份已連結其他家長或機構，未發送邀請。');
+  }
+
   const redirectTo = process.env.NEXT_PUBLIC_PARENT_AUTH_REDIRECT_URL || 'tecm://auth/callback';
   try {
     if (!authUser) {
@@ -68,7 +80,14 @@ export async function inviteGuardianAction(form: FormData): Promise<void> {
     p_auth_user_id: authUser.id, p_email: email, p_idempotency_key: idempotencyKey,
     p_invited_by: context.user.id
   });
-  if (linkError) throw linkError;
+  if (linkError) {
+    await service.from('parent_account_invitations').upsert({
+      organization_id: context.organizationId, parent_profile_id: parentProfileId, email,
+      status: 'failed', idempotency_key: idempotencyKey, invited_by: context.user.id,
+      last_error: linkError.message.slice(0, 500)
+    }, { onConflict: 'organization_id,idempotency_key' });
+    throw linkError;
+  }
   revalidatePath('/admin/guardians');
 }
 

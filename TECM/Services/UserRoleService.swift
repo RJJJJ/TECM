@@ -28,6 +28,11 @@ struct UserRoleService: UserRoleServicing {
             .limit(1)
             .execute()
             .value
+        if !parentRows.isEmpty {
+            try await client
+                .rpc("activate_parent_account")
+                .execute()
+        }
         return UserRoleCapabilities.resolve(
             organizationRoleNames: memberships.map(\.role),
             hasParentProfile: !parentRows.isEmpty

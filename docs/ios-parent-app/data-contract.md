@@ -24,7 +24,7 @@ Admin Auth invitation 使用 server action。資料庫不保存臨時密碼、ma
 
 `notification_preferences` 分開 transactional、announcement、marketing、class reminder、attendance、leave/makeup、payment/receipt、quiet hours 和 timezone。marketing 預設 opt-out；交易／安全訊息不歸類為 marketing。
 
-`notification_outbox` 每 notification + device 一 row，狀態至少有 pending、processing、retrying、delivered、would_send、dead_letter。lease owner/expiry 防止重複處理。
+`notification_outbox` 每 notification + device 一 row，狀態至少有 pending、processing、retrying、delivered、would_send、dead_letter。worker 只在即將處理時 claim 單 row；lease owner/expiry 防止 active lease 期間並行處理。
 
 `notification_delivery_attempts` 保存 provider、request id、HTTP status、sanitized error、retry decision 和時間；不保存 APNs token、JWT、私鑰或完整 payload。
 
@@ -47,7 +47,7 @@ mark_all_notifications_read()
 get_unread_notification_count() -> bigint
 ```
 
-device registration 會驗證登入 parent 的 active account link、environment、bundle/token format，支援同帳號多裝置和 token rollover；登出只停用本 installation。
+device registration 會驗證登入 parent 的 active account link、environment、bundle/token format，支援同帳號多裝置和 token rollover；登出只停用本 installation。若 server deactivation 失敗，App 保留登入 session 並顯示錯誤，禁止在 token 仍 active 時完成登出；成功後同時 unregister remote notifications 並清除本機通知。
 
 ## Worker RPC
 
@@ -60,6 +60,8 @@ retry_notification_delivery(..., p_retryable boolean, p_invalidate_device boolea
 ```
 
 claim 是單一 statement/transaction 的 `FOR UPDATE SKIP LOCKED` lease。complete/retry 必須同時驗證 row 仍由該 worker 持有；invalid token 更新同一 device；attempt audit 與 state transition 同一 transaction 完成。
+
+delivery 語義是 at-least-once，不是 exactly-once。APNs request 限時 30 秒；若 provider 已接受但 completion RPC 無法提交，資料庫與 APNs 之間仍有不可消除的模糊狀態，backoff retry 或 lease 到期後可能重送，須以 attempt 和 provider request id 監察。
 
 ## Deep-link contract
 

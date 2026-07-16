@@ -1,6 +1,22 @@
 \set ON_ERROR_STOP on
 
+do $$ begin
+  if not exists(
+    select 1 from public.parent_profiles
+    where id='93000000-0000-4000-8000-000000000099'
+      and user_id='90000000-0000-4000-8000-000000000099'
+      and account_status='active'
+      and linked_at is not null
+  ) then
+    raise exception 'migration did not preserve an existing linked parent account';
+  end if;
+end $$;
+
 -- Staff creates an auditable, idempotent invitation record and a notification.
+update public.parent_profiles
+set account_status='invited',linked_at=null
+where id='13000000-0000-4000-8000-000000000001';
+
 set role authenticated;
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);
 insert into public.parent_account_invitations(
@@ -44,7 +60,17 @@ values('10000000-0000-4000-8000-000000000000','13000000-0000-4000-8000-000000000
 
 -- Linked parent is a tenant principal without an organization_members row.
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000003',false);
+select public.activate_parent_account();
 do $$ begin
+  if (select account_status from public.parent_profiles where user_id=auth.uid())<>'active' then
+    raise exception 'authenticated parent session did not activate the account independently of push registration';
+  end if;
+  if not exists(
+    select 1 from public.parent_account_invitations
+    where auth_user_id=auth.uid() and status='accepted' and accepted_at is not null
+  ) then
+    raise exception 'authenticated parent session did not accept the invitation audit';
+  end if;
   if exists(select 1 from public.organization_members where user_id=auth.uid()) then
     raise exception 'parent was exposed as organization member';
   end if;
@@ -60,6 +86,17 @@ do $$ begin
   if exists(select 1 from public.get_parent_lesson_sessions('15000000-0000-4000-8000-000000000001') where session_id='1d000000-0000-4000-8000-000000000002') then
     raise exception 'parent session list exposed another cohort';
   end if;
+  begin
+    insert into public.leave_requests(
+      organization_id,student_id,lesson_session_id,requested_by,reason,status,idempotency_key
+    ) values(
+      '10000000-0000-4000-8000-000000000000','15000000-0000-4000-8000-000000000001',
+      '1d000000-0000-4000-8000-000000000002',auth.uid(),'direct bypass','approved','leave:direct-bypass'
+    );
+    raise exception 'parent bypassed leave RPC validation with a direct insert';
+  exception when others then
+    if sqlerrm='parent bypassed leave RPC validation with a direct insert' then raise; end if;
+  end;
   begin
     perform public.submit_parent_leave_request(
       '15000000-0000-4000-8000-000000000001','1d000000-0000-4000-8000-000000000002','invalid session','leave:invalid-session'
@@ -104,7 +141,7 @@ do $$ begin
     raise exception 'push registration did not derive the tenant from the authenticated parent';
   end if;
   if (select account_status from public.parent_profiles where user_id=auth.uid())<>'active' then
-    raise exception 'first authenticated device registration did not activate parent account';
+    raise exception 'push registration changed an active parent account unexpectedly';
   end if;
   begin
     update public.notification_preferences set user_id='10000000-0000-4000-8000-000000000002' where user_id=auth.uid();

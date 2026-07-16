@@ -94,6 +94,9 @@ struct RootTabView: View {
             } else if router.selectedTab == .teacher, !capabilities.canAccessTeacherTools {
                 router.select(.home)
             }
+            if capabilities.hasParentRole, let route = pushCoordinator.pendingRoute {
+                Task { await navigate(to: route) }
+            }
         }
     }
 
@@ -107,9 +110,11 @@ struct RootTabView: View {
     }
 
     private func navigate(to route: AppDeepLinkRoute) async {
+        guard route.isReadyForParentNavigation(
+            hasParentRole: authViewModel.hasParentRole,
+            userID: authViewModel.currentUser?.id
+        ), let userID = authViewModel.currentUser?.id else { return }
         defer { pushCoordinator.consumePendingRoute() }
-        guard route != .authCallback, authViewModel.hasParentRole,
-              let userID = authViewModel.currentUser?.id else { return }
 
         router.select(.parentCenter)
         switch route {
