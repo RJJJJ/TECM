@@ -351,8 +351,15 @@ create policy notifications_select_own on public.notifications for select using(
 
 -- Parent self-service may change ordinary contact details, never tenant or onboarding state.
 create or replace function public.protect_parent_profile_account_fields()
-returns trigger language plpgsql set search_path=public as $$ begin
+returns trigger language plpgsql set search_path=public as $$
+declare v_trusted_activation boolean; begin
+  v_trusted_activation :=
+    coalesce(current_setting('tecm.parent_account_activation',true)='on',false)
+    and current_user=pg_get_userbyid((
+      select proowner from pg_proc where oid=to_regprocedure('public.activate_parent_account()')
+    ));
   if auth.uid()=old.user_id and not public.can_manage_organization(old.organization_id) and
+    not v_trusted_activation and
     (new.id,new.organization_id,new.user_id,new.email,new.account_status,new.invited_at,new.linked_at,new.created_at)
       is distinct from
     (old.id,old.organization_id,old.user_id,old.email,old.account_status,old.invited_at,old.linked_at,old.created_at)
@@ -446,6 +453,7 @@ create or replace function public.activate_parent_account()
 returns boolean language plpgsql security definer set search_path=public as $$
 declare v_org uuid; begin
   if auth.uid() is null then raise exception 'authenticated user required'; end if;
+  perform set_config('tecm.parent_account_activation','on',true);
   update public.parent_profiles
   set account_status='active',linked_at=coalesce(linked_at,now()),updated_at=now()
   where user_id=auth.uid() and account_status in ('invited','active')
