@@ -44,3 +44,17 @@ not_invited -> invited -> active
 ## 本地驗證
 
 使用 local Supabase/Inbucket 或 Auth mock 和 `@example.invalid`／本機 seed address。禁止向真實家長 Email、WhatsApp 或 WeChat 發送訊息。
+# Foundation lifecycle security addendum (2026-07-18)
+
+Parent operational access requires an `active` profile. `invited`, `expired`, and
+`disabled` profiles cannot read parent data or register devices. Invitation expiry
+uses database time and activation atomically marks stale invitations/profile state
+as expired. Resend appends a fresh invitation with a new expiry while retaining
+history. Auth linking locks the parent profile and revalidates identity after the
+lock, so a concurrent second identity cannot overwrite the first.
+
+Authenticated staff cannot directly mutate parent identity/lifecycle fields or
+invitation rows; onboarding and disable operations use the controlled service-role
+RPCs. Device registration never activates an invitation. Registration and disable
+lock the profile before device rows, and a committed disabled profile must have zero
+active devices. See `foundation-security-migration.md` before applying the migration.

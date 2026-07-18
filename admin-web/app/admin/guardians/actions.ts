@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { getOperationsContext } from '@/lib/operations/context';
-import { hasConflictingParentLink } from '@/lib/parent-invitation';
+import { findAuthUserByEmail, hasConflictingParentLink } from '@/lib/parent-invitation';
 import { createServiceRoleSupabaseClient } from '@/lib/supabase/service-role';
 
 const text = (form: FormData, key: string) => String(form.get(key) ?? '').trim();
@@ -15,13 +15,11 @@ async function requireGuardianManager() {
 
 async function findUserByEmail(email: string) {
   const service = createServiceRoleSupabaseClient();
-  for (let page = 1; page <= 10; page += 1) {
-    const { data, error } = await service.auth.admin.listUsers({ page, perPage: 100 });
+  return findAuthUserByEmail(email, async (page, perPage) => {
+    const { data, error } = await service.auth.admin.listUsers({ page, perPage });
     if (error) throw error;
-    const match = data.users.find((user) => user.email?.toLowerCase() === email);
-    if (match || data.users.length < 100) return match ?? null;
-  }
-  throw new Error('使用者目錄過大，未能安全完成電郵查找。');
+    return data.users;
+  });
 }
 
 export async function inviteGuardianAction(form: FormData): Promise<void> {

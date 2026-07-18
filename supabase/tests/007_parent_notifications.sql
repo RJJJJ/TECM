@@ -12,21 +12,22 @@ do $$ begin
   end if;
 end $$;
 
--- Staff creates an auditable, idempotent invitation record and a notification.
+-- Staff creates an auditable, idempotent invitation through the controlled RPC.
 update public.parent_profiles
 set account_status='invited',linked_at=null
 where id='13000000-0000-4000-8000-000000000001';
 
-set role authenticated;
-select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);
-insert into public.parent_account_invitations(
-  organization_id,parent_profile_id,email,auth_user_id,status,idempotency_key,invited_by,sent_at
-) values (
+set role service_role;
+select set_config('request.jwt.claims','{"role":"service_role"}',false);
+select public.link_parent_auth_account(
   '10000000-0000-4000-8000-000000000000','13000000-0000-4000-8000-000000000001',
-  'guardian-a@tecm.test','10000000-0000-4000-8000-000000000003','sent','invite:guardian-a',
-  '10000000-0000-4000-8000-000000000001',now()
-) on conflict(organization_id,idempotency_key) do update set sent_at=excluded.sent_at,status='sent';
+  '10000000-0000-4000-8000-000000000003','guardian-a@tecm.test','invite:guardian-a',
+  '10000000-0000-4000-8000-000000000001'
+);
 
+set role authenticated;
+select set_config('request.jwt.claims','{}',false);
+select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);
 do $$ begin
   begin
     insert into public.parent_account_invitations(organization_id,parent_profile_id,email,auth_user_id,status,idempotency_key)
@@ -72,6 +73,7 @@ do $$ begin
   end if;
 end $$;
 set role authenticated;
+select set_config('request.jwt.claims','{}',false);
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000003',false);
 do $$ begin
   if (select account_status from public.parent_profiles where user_id=auth.uid())<>'active' then
@@ -240,6 +242,7 @@ select public.disable_parent_account(
   '10000000-0000-4000-8000-000000000000','13000000-0000-4000-8000-000000000001'
 );
 set role authenticated;
+select set_config('request.jwt.claims','{}',false);
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000003',false);
 do $$ begin
   if exists(select 1 from public.parent_profiles where user_id=auth.uid()) then raise exception 'disabled parent can read own profile'; end if;
