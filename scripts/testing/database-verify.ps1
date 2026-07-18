@@ -1,5 +1,15 @@
 param(
-  [string]$PostgresImage = 'postgres:15-alpine'
+  [string]$PostgresImage = 'postgres:15-alpine',
+  [ValidateRange(1, 3600)]
+  [int]$ConcurrencyTimeoutSeconds = $(
+    if ($env:TECM_DATABASE_RACE_TIMEOUT_SECONDS) {
+      [int]$env:TECM_DATABASE_RACE_TIMEOUT_SECONDS
+    } else {
+      60
+    }
+  ),
+  # Test-only switch for proving the bounded wait path. It is intentionally opt-in.
+  [switch]$InjectConcurrencyHang
 )
 
 $ErrorActionPreference = 'Stop'
@@ -61,6 +71,54 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Database verification failed: $file" }
   }
 
+  function Wait-DatabaseRaceJobs {
+    param(
+      [Parameter(Mandatory)]
+      [System.Management.Automation.Job[]]$Jobs,
+      [Parameter(Mandatory)]
+      [int]$TimeoutSeconds
+    )
+
+    $terminalStates = @('Completed', 'Failed', 'Stopped')
+    $deadline = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+      while (@($Jobs | Where-Object { $_.State -notin $terminalStates }).Count -gt 0) {
+        if ($deadline.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+          $unfinished = @($Jobs | Where-Object { $_.State -notin $terminalStates })
+          $unfinishedSummary = ($unfinished | ForEach-Object { "$($_.Name) ($($_.State))" }) -join ', '
+          Write-Host "[TIMEOUT] Database race exceeded ${TimeoutSeconds}s. Unfinished jobs: $unfinishedSummary"
+          foreach ($job in $Jobs) {
+            $diagnosticOutput = @(Receive-Job -Job $job -Keep -ErrorAction Continue 2>&1)
+            Write-Host "[RACE OUTPUT] $($job.Name) ($($job.State))"
+            if ($diagnosticOutput.Count -gt 0) { $diagnosticOutput | Out-String | Write-Host }
+          }
+          throw "Database race timed out after ${TimeoutSeconds}s: $unfinishedSummary"
+        }
+        Start-Sleep -Milliseconds 100
+      }
+
+      return @(
+        foreach ($job in $Jobs) {
+          [pscustomobject]@{
+            Name = $job.Name
+            State = $job.State
+            Output = @(Receive-Job -Job $job -ErrorAction Continue 2>&1)
+          }
+        }
+      )
+    } finally {
+      foreach ($job in $Jobs) {
+        if ($job.State -notin $terminalStates) {
+          Stop-Job -Job $job -ErrorAction SilentlyContinue
+        }
+      }
+      foreach ($job in $Jobs) {
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
   function Invoke-DatabaseRace {
     param(
       [string]$FirstFile,
@@ -70,27 +128,42 @@ try {
     )
 
     Write-Host "[RACE] $FirstFile <> $SecondFile"
-    $first = Start-Job -ScriptBlock {
-      param($Name,$Db,$File)
-      & docker exec $Name psql -q -v ON_ERROR_STOP=1 -U postgres -d $Db -f $File 2>&1
-      [pscustomobject]@{ ExitCode = $LASTEXITCODE }
-    } -ArgumentList $containerName,$database,$FirstFile
-    Start-Sleep -Milliseconds 250
-    $second = Start-Job -ScriptBlock {
-      param($Name,$Db,$File)
-      & docker exec $Name psql -q -v ON_ERROR_STOP=1 -U postgres -d $Db -f $File 2>&1
-      [pscustomobject]@{ ExitCode = $LASTEXITCODE }
-    } -ArgumentList $containerName,$database,$SecondFile
+    $raceJobs = @()
+    try {
+      $first = Start-Job -Name 'race-first' -ScriptBlock {
+        param($Name,$Db,$File)
+        & docker exec $Name psql -q -v ON_ERROR_STOP=1 -U postgres -d $Db -f $File 2>&1
+        [pscustomobject]@{ ExitCode = $LASTEXITCODE }
+      } -ArgumentList $containerName,$database,$FirstFile
+      $raceJobs += $first
+      Start-Sleep -Milliseconds 250
+      $second = Start-Job -Name 'race-second' -ScriptBlock {
+        param($Name,$Db,$File,$Hang,$HangSeconds)
+        if ($Hang) { Start-Sleep -Seconds $HangSeconds }
+        & docker exec $Name psql -q -v ON_ERROR_STOP=1 -U postgres -d $Db -f $File 2>&1
+        [pscustomobject]@{ ExitCode = $LASTEXITCODE }
+      } -ArgumentList $containerName,$database,$SecondFile,$InjectConcurrencyHang,($ConcurrencyTimeoutSeconds + 5)
+      $raceJobs += $second
 
-    $firstOutput = Receive-Job -Job $first -Wait
-    $secondOutput = Receive-Job -Job $second -Wait
-    Remove-Job -Job $first,$second
-    $firstExit = ($firstOutput | Where-Object { $_ -is [pscustomobject] } | Select-Object -Last 1).ExitCode
-    $secondExit = ($secondOutput | Where-Object { $_ -is [pscustomobject] } | Select-Object -Last 1).ExitCode
-    if ($firstExit -ne $ExpectedFirstExit -or $secondExit -ne $ExpectedSecondExit) {
-      $firstOutput | Write-Host
-      $secondOutput | Write-Host
-      throw "Unexpected race exits: first=$firstExit second=$secondExit"
+      $raceResults = @(Wait-DatabaseRaceJobs -Jobs $raceJobs -TimeoutSeconds $ConcurrencyTimeoutSeconds)
+      $firstOutput = ($raceResults | Where-Object Name -eq 'race-first').Output
+      $secondOutput = ($raceResults | Where-Object Name -eq 'race-second').Output
+      $firstExit = ($firstOutput | Where-Object { $null -ne $_.ExitCode } | Select-Object -Last 1).ExitCode
+      $secondExit = ($secondOutput | Where-Object { $null -ne $_.ExitCode } | Select-Object -Last 1).ExitCode
+      if ($firstExit -ne $ExpectedFirstExit -or $secondExit -ne $ExpectedSecondExit) {
+        $firstOutput | Write-Host
+        $secondOutput | Write-Host
+        throw "Unexpected race exits: first=$firstExit second=$secondExit"
+      }
+    } finally {
+      # This also covers a failure between starting the two jobs. The helper's
+      # cleanup is intentionally idempotent, so completed races remain safe.
+      foreach ($job in $raceJobs) {
+        if ($job.State -notin @('Completed', 'Failed', 'Stopped')) {
+          Stop-Job -Job $job -ErrorAction SilentlyContinue
+        }
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+      }
     }
   }
 

@@ -96,3 +96,19 @@ See `docs/ios-parent-app/foundation-security-migration.md` for preflight and rec
 
 This gate does **not** pass APNs worker/outbox reliability, Apple credentials, live
 push delivery, TestFlight, production deployment, or merging to `main`.
+
+## Foundation security regression follow-up (2026-07-18)
+
+- `008_foundation_security.sql` now injects a controlled legacy invalid timezone
+  only while the validation trigger is disabled, then restores it before invoking
+  `publish_notification_announcement`. The test follows the production fanout path
+  through notification creation and `enqueue_notification_devices`, and verifies
+  announcement persistence plus notification/outbox rows for both a valid and the
+  corrupt legacy recipient, with no cross-tenant notification.
+- Mutation evidence: replacing enqueue-time normalization with direct `AT TIME ZONE
+  np.timezone` fails the SQL suite with `legacy invalid timezone rolled back
+  announcement fanout`.
+- `database-verify.ps1` now bounds all three independent-session races with a
+  configurable, non-zero deadline (60 seconds by default). Its test-only injected
+  hang mode failed non-zero with timeout diagnostics and no remaining PowerShell
+  background jobs. A normal verifier run passed all three races.

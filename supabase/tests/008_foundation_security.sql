@@ -256,8 +256,10 @@ do $$ begin
 end $$;
 reset role;
 
--- E. Invalid/blank/null timezones normalize safely, and legacy corruption cannot
--- roll back a tenant-wide announcement.
+-- E. Invalid/blank/null timezones normalize safely.  The legacy-corruption
+-- regression below exercises publish_notification_announcement -> notifications
+-- -> trg_notifications_enqueue -> enqueue_notification_devices, rather than
+-- only the normalization helper.
 insert into public.notification_preferences(organization_id,user_id,quiet_hours_start,quiet_hours_end,timezone)
 values(
   '10000000-0000-4000-8000-000000000000',
@@ -279,21 +281,116 @@ update public.notification_preferences set timezone='   ' where user_id=auth.uid
 update public.notification_preferences set timezone=null where user_id=auth.uid();
 reset role;
 
+begin;
+
+-- A second, active recipient proves that one corrupted legacy row cannot
+-- prevent fanout to other parents in the same tenant.  The fixed IDs and
+-- synthetic tokens are test-only, non-PII fixtures.
+insert into auth.users(id,email,role)
+values('90000000-0000-4000-8000-000000000094','foundation-timezone-valid@tecm.test','authenticated')
+on conflict (id) do nothing;
+insert into public.parent_profiles(id,organization_id,user_id,full_name,email,account_status,linked_at)
+values(
+  '93000000-0000-4000-8000-000000000094',
+  '10000000-0000-4000-8000-000000000000',
+  '90000000-0000-4000-8000-000000000094',
+  'Foundation Timezone Valid Recipient','foundation-timezone-valid@tecm.test','active',statement_timestamp()
+)
+on conflict (id) do update set account_status='active',linked_at=excluded.linked_at;
+
+insert into public.notification_preferences(organization_id,user_id,quiet_hours_start,quiet_hours_end,timezone)
+values
+  ('10000000-0000-4000-8000-000000000000','90000000-0000-4000-8000-000000000094','00:00','23:59','Asia/Macau'),
+  ('10000000-0000-4000-8000-000000000000','90000000-0000-4000-8000-000000000098','00:00','23:59','Asia/Macau')
+on conflict (organization_id,user_id) do update
+set quiet_hours_start=excluded.quiet_hours_start,quiet_hours_end=excluded.quiet_hours_end,timezone=excluded.timezone;
+
+insert into public.push_devices(
+  organization_id,user_id,installation_id,device_token,environment,bundle_id,is_active
+) values
+  ('10000000-0000-4000-8000-000000000000','90000000-0000-4000-8000-000000000094',
+   'foundation-timezone-valid',repeat('d',64),'sandbox','app.TECM',true),
+  ('10000000-0000-4000-8000-000000000000','90000000-0000-4000-8000-000000000098',
+   'foundation-timezone-legacy',repeat('e',64),'sandbox','app.TECM',true)
+on conflict (user_id,installation_id) do update
+set device_token=excluded.device_token,is_active=true,invalidated_at=null;
+
+-- Simulate a pre-migration/corrupt row using a controlled trigger bypass; the
+-- trigger is re-enabled before the production publish/fanout path is invoked.
 alter table public.notification_preferences disable trigger trg_notification_preferences_validate_timezone;
 update public.notification_preferences set timezone='Legacy/Invalid'
-where user_id='90000000-0000-4000-8000-000000000098';
+where organization_id='10000000-0000-4000-8000-000000000000'
+  and user_id='90000000-0000-4000-8000-000000000098';
 alter table public.notification_preferences enable trigger trg_notification_preferences_validate_timezone;
 
 set role authenticated;
 select set_config('request.jwt.claims','{}',false);
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);
-select public.publish_notification_announcement(
-  '10000000-0000-4000-8000-000000000000',
-  'Foundation fixture announcement','Fictional recipients only','announcement',null
-);
+do $$ begin
+  perform public.publish_notification_announcement(
+    '10000000-0000-4000-8000-000000000000',
+    'Foundation timezone fanout probe','Synthetic fixture recipients only','announcement',null
+  );
+exception when others then
+  -- This is the Mutation 5 sentinel: direct "AT TIME ZONE np.timezone" makes
+  -- the enqueue trigger throw here for Legacy/Invalid and fails the suite.
+  raise exception 'legacy invalid timezone rolled back announcement fanout';
+end $$;
 reset role;
-update public.notification_preferences set timezone='Asia/Macau'
-where user_id='90000000-0000-4000-8000-000000000098';
+
+do $$ declare v_announcement_id uuid; begin
+  select id into v_announcement_id from public.notification_announcements
+  where organization_id='10000000-0000-4000-8000-000000000000'
+    and title='Foundation timezone fanout probe';
+  if v_announcement_id is null then
+    raise exception 'legacy invalid timezone did not persist announcement';
+  end if;
+  if not exists(
+    select 1 from public.notifications n join public.notification_outbox o on o.notification_id=n.id
+    where n.organization_id='10000000-0000-4000-8000-000000000000'
+      and n.entity_type='announcement' and n.entity_id=v_announcement_id
+      and n.recipient_user_id='90000000-0000-4000-8000-000000000094'
+  ) then
+    raise exception 'legacy invalid timezone prevented valid recipient enqueue';
+  end if;
+  if not exists(
+    select 1 from public.notifications n join public.notification_outbox o on o.notification_id=n.id
+    where n.organization_id='10000000-0000-4000-8000-000000000000'
+      and n.entity_type='announcement' and n.entity_id=v_announcement_id
+      and n.recipient_user_id='90000000-0000-4000-8000-000000000098'
+  ) then
+    raise exception 'legacy invalid timezone recipient was not safely enqueued';
+  end if;
+  if exists(
+    select 1 from public.notifications n
+    where n.entity_type='announcement' and n.entity_id=v_announcement_id
+      and n.organization_id<>'10000000-0000-4000-8000-000000000000'
+  ) then
+    raise exception 'timezone fanout crossed tenant boundary';
+  end if;
+end $$;
+
+-- Keep this regression self-contained: remove its notifications (and their
+-- outbox rows through FK cascade), devices, preferences, and synthetic user.
+delete from public.notifications
+where entity_type='announcement'
+  and entity_id in (
+    select id from public.notification_announcements
+    where organization_id='10000000-0000-4000-8000-000000000000'
+      and title='Foundation timezone fanout probe'
+  );
+delete from public.notification_announcements
+where organization_id='10000000-0000-4000-8000-000000000000'
+  and title='Foundation timezone fanout probe';
+delete from public.push_devices
+where installation_id in ('foundation-timezone-valid','foundation-timezone-legacy');
+delete from public.notification_preferences
+where organization_id='10000000-0000-4000-8000-000000000000'
+  and user_id in ('90000000-0000-4000-8000-000000000094','90000000-0000-4000-8000-000000000098');
+delete from public.parent_profiles where id='93000000-0000-4000-8000-000000000094';
+delete from auth.users where id='90000000-0000-4000-8000-000000000094';
+
+commit;
 
 -- F. Leave idempotency is non-null, normalized, immutable, requester-bound,
 -- and cannot mutate finalized rows.
