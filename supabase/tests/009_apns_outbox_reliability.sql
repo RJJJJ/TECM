@@ -135,8 +135,9 @@ do $$ declare v_outbox uuid; begin
 end $$;
 
 -- Case 6: delivered completion records delivery timestamp and provider response evidence.
-do $$ declare v_outbox uuid; begin
-  select outbox_id into v_outbox from tmp_009_claim;
+do $$ declare v_outbox uuid; v_request uuid; begin
+  select outbox_id,apns_request_id into v_outbox,v_request from tmp_009_claim;
+  perform public.begin_notification_dispatch(v_outbox,'009-worker-a',v_request);
   perform public.complete_notification_delivery(v_outbox,'009-worker-a','apns-009-delivered',200,'delivered');
   if not exists(select 1 from public.notification_outbox
       where id=v_outbox

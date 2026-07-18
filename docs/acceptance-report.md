@@ -183,3 +183,55 @@ fixtures were added, and both mutations were rerun until caught.
   environment is validated at registration, and live Apple environment evidence
   remains `NOT PASSED`; deployments that require strict environment separation
   must use separate backends/schedulers.
+
+## APNs dispatch ambiguity and CI provenance follow-up (2026-07-18)
+
+This follow-up closes the two remaining blockers on PR #48 without changing the
+stack base, merging either PR, deploying, contacting Apple, or using credentials.
+
+### Local evidence
+
+| Gate | Status | Current-branch evidence |
+|---|---|---|
+| PostgreSQL dispatch boundary | PASSED | `database-verify.ps1`, exit 0: migrations 005/006/007 each applied twice, SQL suites 001-010, negative preflight, controller-released two-worker claim race, and dispatch ownership race |
+| APNs worker contract | PASSED | 33/33 Node tests; the worker persists `dispatching` before Apple I/O, quarantines ambiguous outcomes as `delivery_uncertain`, and never automatically reclaims them |
+| Database depth defense | PASSED | `complete_notification_delivery(..., 'delivered')` rejects a merely `claimed` row; dry-run `would_send` remains legal without Apple I/O |
+| Admin lint/typecheck/build/audit | PASSED | both TypeScript checks exit 0; Next.js 15.5.20 builds 27 pages; `npm audit --audit-level=high` reports 0 vulnerabilities |
+| Deno worker checks | PASSED | formatter checked 4 files and `deno check` passed |
+| Repository and n8n safety | PASSED | 14 inactive workflows, 354 tracked/candidate paths, and 699 historical text blobs passed the safety scans |
+| Local Playwright | NOT PASSED | all 4 tests enumerate, but the Supabase CLI is unavailable on this Windows host; final-SHA `admin-e2e` CI is the executable gate |
+| Local iOS/XCTest | NOT PASSED | Xcode is unavailable on Windows; final-SHA macOS `ios` CI is the executable gate |
+| Real APNs/TestFlight/production | NOT PASSED by design | no Apple request, real credential, deployment, production data mutation, or merge was authorized |
+
+### New mutation verification
+
+Both mutations were applied with patches, exercised against their targeted
+contracts, reversed, and checked against the complete pre-mutation SHA-256.
+
+| ID | Injected defect | Result | Catch evidence |
+|---|---|---|---|
+| M9 | Recover an expired `dispatching` lease to automatically claimable `retry` | CAUGHT | SQL 010 case 4 failed because uncertainty evidence was not preserved |
+| M10 | Bypass `begin_notification_dispatch` before the APNs send path | CAUGHT | the targeted worker test failed because begin failure no longer prevented every send; restoration test passed |
+
+The final migration and orchestrator restore hashes were respectively
+`B139F4ECF30C90EDEEB7F6178221FE7A9CAE5366096247CB96D95C53837E064B`
+and `D6BB675BA35F7AB5BC766E090E5FE257594708E98C0A4090B1E023B2C7B265A2`
+at mutation time. Later review hardening intentionally changed the migration by
+requiring durable dispatch evidence at the completion RPC as well.
+
+### CI checkout provenance
+
+Every release-validation job now verifies the checked-out commit before any
+project command. Pull-request jobs must run the GitHub synthetic merge commit:
+`HEAD == GITHUB_SHA`, exactly two parents, first parent equal to the event base
+SHA, and second parent equal to the event head SHA. Push jobs require
+`HEAD == GITHUB_SHA`. The final commit SHA and five-job run are recorded in PR
+#48 after the remote run completes, avoiding a self-referential evidence commit.
+
+### Independent adversarial review
+
+The first review found one HIGH database depth-defense gap and one MEDIUM race
+fixture weakness. The completion RPC now requires `dispatching` evidence for a
+real delivered result, SQL 010 proves the negative path, and the claim workers
+now wait behind a controller-released barrier. Focused re-review reports 0 HIGH
+and 0 MEDIUM issues in both remediated areas.

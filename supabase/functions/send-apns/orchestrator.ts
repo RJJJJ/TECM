@@ -42,6 +42,7 @@ export type ApnsWorkerSummary = {
   claimed: number;
   delivered: number;
   would_send: number;
+  uncertain: number;
   retried: number;
   failed: number;
   dry_run: boolean;
@@ -124,6 +125,46 @@ async function claimNext(
   return ((data ?? []) as ClaimedNotification[])[0] ?? null;
 }
 
+async function beginDispatch(
+  deps: ApnsWorkerDependencies,
+  item: ClaimedNotification,
+  workerId: string,
+) {
+  const result = await deps.db.rpc<string>("begin_notification_dispatch", {
+    p_outbox_id: item.outbox_id,
+    p_worker_id: workerId,
+    p_apns_request_id: item.apns_request_id,
+  });
+  if (result.error) {
+    throw new Error(rpcMessage("Dispatch boundary", result.error.message));
+  }
+  return result.data;
+}
+
+async function markDeliveryUncertain(
+  deps: ApnsWorkerDependencies,
+  item: ClaimedNotification,
+  workerId: string,
+  reason: string,
+) {
+  const result = await deps.db.rpc<string>(
+    "mark_notification_delivery_uncertain",
+    {
+      p_outbox_id: item.outbox_id,
+      p_worker_id: workerId,
+      p_reason: reason,
+    },
+  );
+  if (result.error) {
+    throw new Error(
+      rpcMessage("Delivery uncertainty update", result.error.message),
+    );
+  }
+  if (result.data !== "delivery_uncertain") {
+    throw new Error("Delivery uncertainty update returned an invalid state");
+  }
+}
+
 async function retryDelivery(
   deps: ApnsWorkerDependencies,
   item: ClaimedNotification,
@@ -197,6 +238,7 @@ export async function runApnsOutboxWorker(
     claimed: 0,
     delivered: 0,
     would_send: 0,
+    uncertain: 0,
     retried: 0,
     failed: 0,
     dry_run: config.dryRun,
@@ -263,18 +305,26 @@ export async function runApnsOutboxWorker(
       continue;
     }
 
+    const dispatchState = await beginDispatch(deps, item, config.workerId);
+    if (dispatchState !== "dispatching") {
+      summary.failed += 1;
+      continue;
+    }
+
     let result: ApnsResult;
     try {
       result = await deps.send(item, providerToken);
     } catch (error) {
-      await retryDelivery(deps, item, config, {
-        status: null,
-        reason: sanitizeError(error),
-        retryable: true,
-        invalidateDevice: false,
-      });
-      summary.retried += 1;
-      continue;
+      await markDeliveryUncertain(
+        deps,
+        item,
+        config.workerId,
+        sanitizeError(error),
+      );
+      summary.uncertain += 1;
+      summary.stopped = true;
+      summary.stop_reason = "ambiguous_delivery";
+      break;
     }
 
     if (result.failureClass === "accepted") {
@@ -295,6 +345,18 @@ export async function runApnsOutboxWorker(
           },
         );
       } catch {
+        try {
+          await markDeliveryUncertain(
+            deps,
+            item,
+            config.workerId,
+            "AcceptedByApnsCompletionExhausted",
+          );
+          summary.uncertain += 1;
+        } catch {
+          // If PostgreSQL is still unavailable, the durable dispatching row is
+          // recovered to delivery_uncertain after lease expiry by the claim RPC.
+        }
         summary.stopped = true;
         summary.stop_reason = "completion_exhausted";
         break;

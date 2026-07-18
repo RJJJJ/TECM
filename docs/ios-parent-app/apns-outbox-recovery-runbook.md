@@ -2,8 +2,8 @@
 
 This runbook is forward-only. Do not recover APNs outbox incidents by rolling
 back delivery state. Disable scheduling, classify the failure, repair the
-credential or data issue, and replay only eligible `dead_letter` rows through
-the service-role RPC.
+credential or data issue, and replay only investigated, eligible `dead_letter`
+or `delivery_uncertain` rows through the service-role RPC.
 
 ## Scope and limits
 
@@ -11,8 +11,8 @@ Local and mock capabilities:
 
 - Inspect outbox status and provider evidence.
 - Validate worker secrets with `APNS_DRY_RUN=true`.
-- Reclaim expired leases through `claim_notification_outbox`.
-- Replay eligible `dead_letter` rows with an operator reason and idempotency
+- Reclaim only expired pre-dispatch `claimed` leases through `claim_notification_outbox`.
+- Replay eligible `dead_letter` or `delivery_uncertain` rows with an operator reason and idempotency
   UUID.
 
 NOT PASSED by local/mock recovery:
@@ -48,6 +48,8 @@ where status in (
   'pending',
   'retry',
   'claimed',
+  'dispatching',
+  'delivery_uncertain',
   'dead_letter',
   'expired',
   'cancelled'
@@ -68,6 +70,8 @@ where organization_id = :'organization_id'::uuid
     'pending',
     'retry',
     'claimed',
+    'dispatching',
+    'delivery_uncertain',
     'dead_letter',
     'expired',
     'cancelled'
@@ -126,6 +130,11 @@ order by coalesce(lease_expires_at, claimed_at) nulls first;
 leases or test credentials. Use only synthetic notifications in an isolated
 environment or an explicitly approved set of disposable rows. Normal claim
 cleanup will recover expired leases on the next real worker invocation.
+
+`dispatching` is different: the pre-send boundary has already committed, so
+Apple may have received the request. An expired dispatch lease becomes
+`delivery_uncertain`; it never returns to `pending` or `retry`, is excluded from
+normal claims, and must not be automatically resent.
 
 ## Provider 403 stop-worker procedure
 
@@ -206,7 +215,7 @@ select public.replay_dead_letter_notification_outbox(
 
 Requirements:
 
-- `outbox_id` is currently `dead_letter`.
+- `outbox_id` is currently `dead_letter` or an investigated `delivery_uncertain` row.
 - `replay_request_id` is a new UUID generated for this operator action.
 - `operator_reason` is non-empty and 500 characters or fewer.
 - The device is active and not invalidated.
@@ -253,7 +262,7 @@ select
 from public.notification_outbox o
 join public.push_devices d on d.id = o.device_id
 join public.notifications n on n.id = o.notification_id
-where o.status = 'dead_letter'
+where o.status in ('dead_letter', 'delivery_uncertain')
   and o.replay_request_id is null
   and d.is_active
   and d.invalidated_at is null
@@ -264,7 +273,8 @@ limit 100;
 ```
 
 Review candidates manually. Do not batch replay rows only because they are
-`dead_letter`; confirm the failure class and incident root cause.
+`dead_letter` or `delivery_uncertain`; confirm the failure class, whether APNs
+may already have delivered, and the incident root cause.
 
 ## 410 expectations
 
@@ -284,7 +294,7 @@ Do not replay old-generation `dead_letter`, `cancelled`, or `expired` rows after
 a 410-style invalidation. If the user later reinstalls or reauthorizes push,
 new outbox rows must come from new notifications.
 
-## Accepted but completion failed
+## Accepted or possibly delivered but completion failed
 
 If Apple accepted the request but `complete_notification_delivery` failed after
 bounded retries, the worker stops with `stop_reason = 'completion_exhausted'`.
@@ -292,10 +302,11 @@ The worker does not call the send-retry transition in that invocation.
 
 Observable symptoms:
 
-- The row may remain `claimed` until the lease expires.
+- The row is already `dispatching`; the worker attempts to move it to
+  `delivery_uncertain`, or lease recovery does so after PostgreSQL becomes available.
 - No `delivered` attempt row is written if completion never committed.
-- APNs may have delivered the notification, so automatic resend is
-  at-least-once and can duplicate user-visible delivery.
+- APNs may have delivered the notification. The system does not promise
+  exactly-once, but this ambiguous row is never automatically resent.
 
 Diagnosis query:
 
@@ -313,7 +324,7 @@ select
   count(a.id) as attempt_rows
 from public.notification_outbox o
 left join public.notification_delivery_attempts a on a.outbox_id = o.id
-where o.status = 'claimed'
+where o.status in ('dispatching', 'delivery_uncertain')
 group by
   o.id,
   o.notification_id,
@@ -329,13 +340,19 @@ order by o.claimed_at desc;
 
 Recovery options:
 
-- If the lease is still valid and the operator has exact APNs accepted evidence
-  plus the current `claimed_by` worker id, complete the row with the existing
-  RPC and provider request id.
-- If accepted evidence is unavailable or the lease expired, allow the next
-  claim to recover the row. This may resend because the system is at-least-once.
-- Do not replay this row unless it later becomes an eligible `dead_letter` and
-  the replay reason explains the completion ambiguity.
+- If a `dispatching` lease is still valid and the operator has exact APNs
+  accepted evidence plus the current `claimed_by` worker id, complete the row
+  with the existing RPC and provider request id.
+- If accepted evidence is unavailable or the lease expired, keep the row in
+  `delivery_uncertain`. Generic claim/recovery must not resend it.
+- Replay only after operator investigation and approval. The reason must explain
+  the ambiguity; replay preserves the original attempt evidence and assigns a
+  new logical `apns_request_id`.
+
+APNs and PostgreSQL cannot form one atomic transaction. A crash after the
+dispatch boundary but before the network call may therefore miss a push. The
+notification remains available in the App notification center; avoiding blind
+automatic resend is the intentional safety tradeoff.
 
 Manual completion during a valid lease:
 
@@ -415,7 +432,7 @@ select
   count(*) as rows,
   max(o.updated_at) as latest_update
 from public.notification_outbox o
-where o.status in ('dead_letter', 'expired', 'cancelled')
+where o.status in ('dead_letter', 'delivery_uncertain', 'expired', 'cancelled')
   and o.updated_at >= statement_timestamp() - interval '24 hours'
 group by o.status, o.last_error, o.provider_response
 order by latest_update desc;
@@ -444,7 +461,8 @@ Close the incident only after:
 
 - Scheduler state is intentional for the environment.
 - `pending` and `retry` counts are stable or draining.
-- `claimed` rows do not have unexpected expired leases.
+- `claimed` rows do not have unexpected expired leases and every
+  `delivery_uncertain` row has an investigation disposition.
 - New provider `403` rows are not appearing.
 - Replay audit records include operator reasons and idempotency UUIDs.
 - Apple sandbox/TestFlight/production evidence is collected when the incident

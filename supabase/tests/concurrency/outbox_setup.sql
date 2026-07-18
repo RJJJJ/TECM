@@ -4,7 +4,8 @@ reset role;
 drop table if exists public.__test_outbox_claim_barrier;
 create table public.__test_outbox_claim_barrier(
   worker text primary key,
-  ready_at timestamptz not null default statement_timestamp()
+  ready_at timestamptz not null default statement_timestamp(),
+  released_at timestamptz
 );
 grant select,insert,update on public.__test_outbox_claim_barrier to service_role;
 

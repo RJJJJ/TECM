@@ -6,14 +6,17 @@ select set_config('request.jwt.claims','{"role":"service_role"}',false);
 
 insert into public.__test_outbox_claim_barrier(worker) values('outbox-worker-a')
 on conflict (worker) do update set ready_at=statement_timestamp();
-do $$ declare deadline timestamptz:=clock_timestamp()+interval '8 seconds'; begin
-  while (select count(*) from public.__test_outbox_claim_barrier
-      where worker in ('outbox-worker-a','outbox-worker-b'))<2 loop
-    if clock_timestamp()>=deadline then
-      raise exception 'worker a timed out waiting for outbox claim peer readiness';
-    end if;
-    perform pg_sleep(0.05);
+
+do $$ declare i integer; begin
+  for i in 1..100 loop
+    exit when exists(select 1 from public.__test_outbox_claim_barrier
+      where worker='outbox-worker-a' and released_at is not null);
+    perform pg_sleep(0.1);
   end loop;
+  if not exists(select 1 from public.__test_outbox_claim_barrier
+      where worker='outbox-worker-a' and released_at is not null) then
+    raise exception 'worker a release barrier timed out';
+  end if;
 end $$;
 
 create temporary table outbox_claim_result as

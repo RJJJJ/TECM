@@ -152,6 +152,8 @@ function workerConfig(overrides: Partial<Parameters<typeof runApnsOutboxWorker>[
 
 function makeDb(claims: ClaimedNotification[], options: {
   completeFailures?: number;
+  beginFailure?: string;
+  uncertaintyFailure?: string;
   retryRejectsRequestId?: boolean;
   calls?: Array<{ name: string; args: Record<string, unknown> }>;
 } = {}) {
@@ -162,6 +164,14 @@ function makeDb(claims: ClaimedNotification[], options: {
       calls.push({ name, args });
       if (name === 'claim_notification_outbox') {
         return ok((claims.length ? [claims.shift()!] : []) as T);
+      }
+      if (name === 'begin_notification_dispatch') {
+        if (options.beginFailure) return fail<T>(options.beginFailure);
+        return ok('dispatching' as T);
+      }
+      if (name === 'mark_notification_delivery_uncertain') {
+        if (options.uncertaintyFailure) return fail<T>(options.uncertaintyFailure);
+        return ok('delivery_uncertain' as T);
       }
       if (name === 'complete_notification_delivery') {
         if (completeFailures > 0) {
@@ -264,6 +274,14 @@ test('accepted APNs response completes delivery with the provider request id', a
   }, workerConfig());
 
   assert.equal(summary.delivered, 1);
+  assert.deepEqual(
+    calls.filter((call) => [
+      'claim_notification_outbox',
+      'begin_notification_dispatch',
+      'complete_notification_delivery'
+    ].includes(call.name)).slice(0, 3).map((call) => call.name),
+    ['claim_notification_outbox', 'begin_notification_dispatch', 'complete_notification_delivery']
+  );
   const complete = calls.find((call) => call.name === 'complete_notification_delivery')!;
   assert.equal(complete.args.p_provider_request_id, 'apple-request-id');
   assert.equal(complete.args.p_delivery_status, 'delivered');
@@ -287,7 +305,7 @@ test('accepted completion retries briefly and succeeds without retrying the send
   assert.equal(calls.some((call) => call.name === 'retry_notification_delivery'), false);
 });
 
-test('accepted completion exhaustion leaves the lease and stops the batch', async () => {
+test('accepted completion exhaustion marks delivery uncertain and stops the batch', async () => {
   const { db, calls } = makeDb([{ ...item }, { ...item, outbox_id: 'next' }], { completeFailures: 5 });
   const summary = await runApnsOutboxWorker({
     db,
@@ -303,8 +321,82 @@ test('accepted completion exhaustion leaves the lease and stops the batch', asyn
   assert.equal(summary.stopped, true);
   assert.equal(summary.stop_reason, 'completion_exhausted');
   assert.equal(summary.delivered, 0);
+  assert.equal(summary.uncertain, 1);
   assert.equal(calls.filter((call) => call.name === 'claim_notification_outbox').length, 1);
   assert.equal(calls.some((call) => call.name === 'retry_notification_delivery'), false);
+  assert.equal(calls.some((call) => call.name === 'mark_notification_delivery_uncertain'), true);
+});
+
+test('a second worker invocation after dispatch lease expiry never sends the row again', async () => {
+  let state: 'pending' | 'claimed' | 'dispatching' | 'delivery_uncertain' = 'pending';
+  let leaseExpired = false;
+  let sends = 0;
+  const calls: string[] = [];
+  const db: RpcClient = {
+    async rpc<T = unknown>(name: string) {
+      calls.push(name);
+      if (name === 'claim_notification_outbox') {
+        if (state === 'dispatching' && leaseExpired) state = 'delivery_uncertain';
+        if (state !== 'pending') return ok([] as T);
+        state = 'claimed';
+        return ok([{ ...item }] as T);
+      }
+      if (name === 'begin_notification_dispatch') {
+        assert.equal(state, 'claimed');
+        state = 'dispatching';
+        return ok('dispatching' as T);
+      }
+      if (name === 'complete_notification_delivery') return fail<T>('database unavailable');
+      if (name === 'mark_notification_delivery_uncertain') return fail<T>('database unavailable');
+      throw new Error(`unexpected rpc ${name}`);
+    }
+  };
+  const deps = {
+    db,
+    async createProviderToken() {
+      return 'provider-token';
+    },
+    async send() {
+      sends += 1;
+      return classifyApnsResponse(200, null, 'apple-request-id');
+    },
+    async sleep() {}
+  };
+
+  const first = await runApnsOutboxWorker(deps, workerConfig({ completionRetries: 2 }));
+  assert.equal(first.stop_reason, 'completion_exhausted');
+  assert.equal(state, 'dispatching');
+  assert.equal(sends, 1);
+
+  leaseExpired = true;
+  const second = await runApnsOutboxWorker(deps, workerConfig({ completionRetries: 2 }));
+  assert.equal(second.claimed, 0);
+  assert.equal(state, 'delivery_uncertain');
+  assert.equal(sends, 1);
+  assert.equal(calls.filter((name) => name === 'begin_notification_dispatch').length, 1);
+});
+
+test('begin dispatch failure prevents every APNs send', async () => {
+  let sends = 0;
+  const { db, calls } = makeDb([{ ...item }], { beginFailure: 'lease lost' });
+  await assert.rejects(
+    () => runApnsOutboxWorker({
+      db,
+      async createProviderToken() {
+        return 'provider-token';
+      },
+      async send() {
+        sends += 1;
+        return classifyApnsResponse(200, null);
+      }
+    }, workerConfig()),
+    /Dispatch boundary failed: lease lost/
+  );
+  assert.equal(sends, 0);
+  assert.deepEqual(
+    calls.slice(0, 2).map((call) => call.name),
+    ['claim_notification_outbox', 'begin_notification_dispatch']
+  );
 });
 
 test('provider failure retries the current row, does not invalidate, and stops the batch', async () => {
@@ -379,7 +471,7 @@ test('invalid device token is classified as a device failure without calling App
   assert.equal(result.invalidateDevice, true);
 });
 
-test('network errors are recorded as retryable transient failures and the batch continues', async () => {
+test('ambiguous network errors become delivery uncertain and stop without send retry', async () => {
   const { db, calls } = makeDb([{ ...item }, { ...item, outbox_id: 'next' }]);
   let sends = 0;
   const summary = await runApnsOutboxWorker({
@@ -389,17 +481,18 @@ test('network errors are recorded as retryable transient failures and the batch 
     },
     async send() {
       sends += 1;
-      if (sends === 1) throw new TypeError('socket timeout with token abc');
-      return classifyApnsResponse(200, null, 'apple-request-id');
+      throw new TypeError('socket timeout with token abc');
     }
   }, workerConfig());
 
-  assert.equal(summary.retried, 1);
-  assert.equal(summary.delivered, 1);
-  const retry = calls.find((call) => call.name === 'retry_notification_delivery')!;
-  assert.equal(retry.args.p_http_status, null);
-  assert.equal(retry.args.p_error, 'TypeError');
-  assert.equal(retry.args.p_retryable, true);
+  assert.equal(summary.retried, 0);
+  assert.equal(summary.uncertain, 1);
+  assert.equal(summary.stopped, true);
+  assert.equal(summary.stop_reason, 'ambiguous_delivery');
+  assert.equal(sends, 1);
+  assert.equal(calls.some((call) => call.name === 'retry_notification_delivery'), false);
+  const uncertain = calls.find((call) => call.name === 'mark_notification_delivery_uncertain')!;
+  assert.equal(uncertain.args.p_reason, 'TypeError');
 });
 
 test('returned summary and recorded diagnostics omit secret substrings from thrown send errors', async () => {

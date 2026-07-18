@@ -24,8 +24,9 @@ deno check supabase/functions/send-apns/index.ts
 ```
 
 `database-verify.ps1` covers the SQL suites, including
-`supabase/tests/009_apns_outbox_reliability.sql` when the branch includes the
-APNs outbox reliability migration.
+`supabase/tests/009_apns_outbox_reliability.sql` and
+`supabase/tests/010_apns_dispatch_ambiguity.sql` when the branch includes the
+APNs outbox reliability migrations.
 
 ## CI gate
 
@@ -43,6 +44,13 @@ It defines:
 Do not mark CI or mutation testing as passed from documentation alone. Use the
 latest workflow artifacts for the exact commit under review.
 
+Every job runs `scripts/testing/verify-ci-checkout.sh` immediately after
+checkout. For a pull request, the job intentionally tests GitHub's synthetic
+merge ref and verifies that its first parent equals the event Base SHA, its
+second parent equals the event Head SHA, and checked-out `HEAD` equals
+`GITHUB_SHA`. For a push, it verifies `HEAD == GITHUB_SHA`. A mismatch fails the
+job; CI evidence must not be described as a direct PR Head checkout.
+
 ## APNs reliability gate
 
 Local/mock APNs evidence can pass before Apple evidence:
@@ -50,9 +58,10 @@ Local/mock APNs evidence can pass before Apple evidence:
 1. Mock sender tests cover safe payload copy, endpoint selection, stable
    `apns-id`, APNs timeout, provider-token construction, response
    classification, dry-run, provider failure stop, and completion ambiguity.
-2. SQL suite 009 covers outbox statuses, leases, retry ceilings, generation
-   cancellation, service-role-only RPC access, replay idempotency, and FORCE
-   RLS/search-path checks.
+2. SQL suites 009-010 cover outbox statuses, the durable pre-send dispatch
+   boundary, non-reclaimable delivery uncertainty, retry ceilings, generation
+   cancellation, service-role-only RPC access, controlled replay idempotency,
+   concurrency, and FORCE RLS/search-path checks.
 3. Dry-run can validate worker secrets and database transitions without Apple:
    claimed rows complete as `would_send`, not `delivered`.
 
@@ -123,5 +132,6 @@ delivery, entitlement correctness, or production endpoint behavior.
 
 APNs outbox recovery is forward-only. Do not describe recovery as rollback.
 Disable the scheduler, repair credentials or data, use the service-role replay
-RPC only for eligible `dead_letter` rows, and keep operator evidence on each
-replay.
+RPC only for investigated, eligible `dead_letter` or `delivery_uncertain` rows,
+and keep operator evidence on each replay. Generic claim/recovery never resends
+`delivery_uncertain` rows.

@@ -1,7 +1,8 @@
 \set ON_ERROR_STOP on
 do $$ begin
   if (select count(*) from public.__test_outbox_claim_barrier
-      where worker in ('outbox-worker-a','outbox-worker-b'))<>2 then
+      where worker in ('outbox-worker-a','outbox-worker-b')
+        and released_at is not null)<>2 then
     raise exception 'outbox claim race did not observe both ready workers';
   end if;
   if (select count(*) from public.notification_outbox o join public.notifications n on n.id=o.notification_id
