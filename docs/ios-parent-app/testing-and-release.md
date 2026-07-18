@@ -54,3 +54,16 @@ GitHub Actions 在 macOS runner 執行 package resolution、unsigned simulator b
 ## Release 禁止事項
 
 不 merge main、不 production deploy、不向真實家長發送 Email/push/WhatsApp/WeChat、不提交 `.env`、`.p8`、service-role、certificate、provisioning profile、Xcode user state、Playwright report 或 Codex/OMX runtime 檔案。
+# Foundation Security Gate verification addendum (2026-07-18)
+
+Run the read-only preflight in `scripts/testing/foundation-security-preflight.sql`,
+then use `scripts/testing/database-verify.ps1`. The database verifier uses PostgreSQL
+15 to match `supabase/config.toml`, applies the seed and new migration twice, proves
+unsafe data stops before mutable DDL, runs SQL suites 001-008, and executes the
+invitation-link race plus both disable/register orderings through independent sessions.
+
+The Admin gate is `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`.
+The new Auth lookup regression places the matching user on page 11 (>1,000 users).
+Run Playwright and the repository secret scan before publication. This foundation
+gate deliberately leaves APNs worker/outbox reliability and all live Apple/production
+evidence as not passed.

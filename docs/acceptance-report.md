@@ -80,3 +80,19 @@ deno check supabase/functions/send-apns/index.ts
 ```
 
 Live E2E 另需啟動本地 Supabase，執行 `npx supabase db reset`，設定本地 URL/keys 與 seed admin credentials，然後在 `admin-web` 執行 `npm run test:e2e`。
+# Foundation Security Gate update (2026-07-18)
+
+The stacked fix branch adds migration `202607180005_foundation_security.sql` and
+tests for blockers A-G: legacy same-tenant identity backfill, database-time invitation
+expiry, locked invitation identity, server-controlled lifecycle DML, safe timezone
+normalization, strict leave idempotency, and shared register/disable lock ordering.
+
+Local evidence: PostgreSQL 15 fresh bootstrap passed; seed and migration each passed
+twice; an unsafe-data migration was blocked before its first DDL; SQL suites 001-008
+passed; independent-session invitation and both device race orderings passed; Admin
+unit tests passed 15/15 including lookup beyond 1,000 Auth users; Playwright passed
+4/4 after a clean local Supabase reset.
+See `docs/ios-parent-app/foundation-security-migration.md` for preflight and recovery.
+
+This gate does **not** pass APNs worker/outbox reliability, Apple credentials, live
+push delivery, TestFlight, production deployment, or merging to `main`.
