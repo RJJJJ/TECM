@@ -141,7 +141,8 @@ the Edge Function, contact Apple, alter production data, or use real credentials
 | Local iOS/XCTest | NOT PASSED | `xcodebuild` is unavailable on Windows; the required macOS job is delegated to final-SHA CI |
 | Apple sandbox/TestFlight/production push | NOT PASSED | No Apple credential, provisioning, physical iPhone, TestFlight, production scheduler, or live APNs request was used |
 | Production deploy/data migration | NOT PASSED by design | No deployment, production mutation, main merge, or PR #46 mutation is authorized |
-| Final-SHA CI | PENDING | Record only after the draft stacked PR exists and all five required jobs complete on the exact head SHA |
+| Implementation-SHA CI | PASSED | Commit `a5802342aca173edd3b88b11d44024d7eb0b64b0`, GitHub Actions [run 29647937153](https://github.com/RJJJJ/TECM/actions/runs/29647937153): `database`, `admin-web`, `repository-safety`, `admin-e2e`, and `ios` all completed successfully |
+| Final documentation SHA CI | PENDING at report-authoring time | The documentation-only follow-up commit must pass the same five jobs; record its exact SHA/run in PR #48 and the final task report without creating an infinite self-referential evidence commit |
 
 ### Mutation verification
 
