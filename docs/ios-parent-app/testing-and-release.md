@@ -1,17 +1,12 @@
-# 測試與 Release Gate
+# Testing and release gate
 
-## 證據分類
+Use this checklist to decide whether the parent-app notification work is ready
+to release. A gate is not passed until the named command or external evidence
+has been collected for the current branch and environment.
 
-| 分類 | 可以證明 | 不可以證明 |
-|---|---|---|
-| 自動測試 | migration/RLS/RPC、Web build/unit、mock sender、payload safety | Apple entitlement 或真實交付 |
-| Simulator | deep link、foreground/tap UI、fixture payload | APNs network/device token |
-| macOS runner | package resolve、Xcode compile、Swift tests | production signing/TestFlight |
-| Apple credential | token auth、sandbox/production endpoint | 最終裝置 UX（若無真機） |
-| 真實 iPhone | permission、token、foreground/background/tap | 完整產品驗收 |
-| 人工產品驗收 | 文案、角色流程、營運可用性 | 自動安全不變量 |
+## Local verification
 
-## Windows/Linux 可執行 gate
+Run these from the repository root:
 
 ```powershell
 ./scripts/testing/database-verify.ps1
@@ -25,45 +20,108 @@ npm audit --audit-level=high
 Set-Location ..
 node scripts/testing/validate-n8n.mjs
 node scripts/testing/repository-security-scan.mjs
+deno check supabase/functions/send-apns/index.ts
 ```
 
-Live E2E 需先 `supabase start`、`supabase db reset` 並提供本機 seed account；不得使用真實家長 Email。
+`database-verify.ps1` covers the SQL suites, including
+`supabase/tests/009_apns_outbox_reliability.sql` when the branch includes the
+APNs outbox reliability migration.
 
-## macOS CI gate
+## CI gate
 
-GitHub Actions 在 macOS runner 執行 package resolution、unsigned simulator build 和 Swift tests。一般 PR 不需 production signing，不使用 Apple repo secret。未取得成功 run 前，Xcode 狀態只能是 pending/blocked。
+The current GitHub workflow is `.github/workflows/release-validation.yml`.
+It defines:
 
-## APNs gate
+| Job | Evidence |
+| --- | --- |
+| `database` | `./scripts/testing/database-verify.ps1` on PostgreSQL 15 |
+| `admin-web` | install, lint, typecheck, unit tests, build, high-severity audit |
+| `repository-safety` | n8n validation, repository security scan, `deno check send-apns` |
+| `admin-e2e` | local Supabase reset plus Playwright Chromium/WebKit flows |
+| `ios` | Xcode package resolve, unsigned simulator build, Swift tests |
 
-1. mock：200、429、500、410、BadDeviceToken、timeout、duplicate claim、max retry/dead-letter、payload privacy、endpoint selection。
-2. dry-run：Edge Function claim + `would_send`，不需 `.p8`。
-3. sandbox：development-signed 真機。
-4. TestFlight：production token + 真機，驗證 foreground、background、tap route、badge、登出停用。
+Do not mark CI or mutation testing as passed from documentation alone. Use the
+latest workflow artifacts for the exact commit under review.
 
-沒有 Apple credential、provisioning 或真實 iPhone evidence 時，第 3/4 步必須標記 blocked。
+## APNs reliability gate
 
-## 人工驗收
+Local/mock APNs evidence can pass before Apple evidence:
 
-- 邀請既有 parent、重發、接受、停用；確認沒有 duplicate Auth user/link。
-- parent 只見自己 organization/children；跨 tenant URL/RPC 被拒。
-- admin 建立公告、預覽、預計接收人數、delivery summary；畫面不顯示 token。
-- parent 查看通知、單一/全部已讀、重新連線後 badge 校正。
-- teacher 點名與既有營運 Web flow 無 regression。
-- 未知 deep link 安全返回通知中心。
+1. Mock sender tests cover safe payload copy, endpoint selection, stable
+   `apns-id`, APNs timeout, provider-token construction, response
+   classification, dry-run, provider failure stop, and completion ambiguity.
+2. SQL suite 009 covers outbox statuses, leases, retry ceilings, generation
+   cancellation, service-role-only RPC access, replay idempotency, and FORCE
+   RLS/search-path checks.
+3. Dry-run can validate worker secrets and database transitions without Apple:
+   claimed rows complete as `would_send`, not `delivered`.
 
-## Release 禁止事項
+NOT PASSED by local/mock evidence:
 
-不 merge main、不 production deploy、不向真實家長發送 Email/push/WhatsApp/WeChat、不提交 `.env`、`.p8`、service-role、certificate、provisioning profile、Xcode user state、Playwright report 或 Codex/OMX runtime 檔案。
-# Foundation Security Gate verification addendum (2026-07-18)
+- Sandbox push to a physical development-signed iPhone.
+- TestFlight push to a production-token iPhone.
+- App Store production APNs delivery.
+- Apple Developer account, entitlement, key, provisioning profile, and device
+  evidence.
+- Production scheduler behavior under live load.
 
-Run the read-only preflight in `scripts/testing/foundation-security-preflight.sql`,
-then use `scripts/testing/database-verify.ps1`. The database verifier uses PostgreSQL
-15 to match `supabase/config.toml`, applies the seed and new migration twice, proves
-unsafe data stops before mutable DDL, runs SQL suites 001-008, and executes the
-invitation-link race plus both disable/register orderings through independent sessions.
+## Apple sandbox gate
 
-The Admin gate is `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`.
-The new Auth lookup regression places the matching user on page 11 (>1,000 users).
-Run Playwright and the repository secret scan before publication. This foundation
-gate deliberately leaves APNs worker/outbox reliability and all live Apple/production
-evidence as not passed.
+Required evidence:
+
+- A development-signed build with the Push Notifications entitlement.
+- A registered sandbox token stored through `register_push_device`.
+- `push_devices.environment = 'sandbox'` for the claimed row.
+- `APNS_BUNDLE_ID` matching the app bundle.
+- A worker invocation with `APNS_DRY_RUN=false`.
+- A delivered notification on a physical iPhone, including foreground,
+  background, tap route, and badge behavior where applicable.
+
+Record the outbox row, `apns_request_id`, APNs provider request id if present,
+and device generation used for the test.
+
+## TestFlight and production gate
+
+Required evidence:
+
+- Production-signed TestFlight or App Store build.
+- `push_devices.environment = 'production'`.
+- Production APNs endpoint selection.
+- Real device receipt for foreground, background, tap route, and badge behavior
+  where applicable.
+- Scheduler owner, cadence, and rollback-free forward recovery procedure.
+
+Do not use simulator notification injection as production APNs evidence.
+
+## Simulator gate
+
+Simulator notification injection only verifies app handling of a payload file:
+
+```powershell
+xcrun simctl push booted app.TECM docs/ios-parent-app/fixtures/notification.apns
+```
+
+It does not verify APNs provider auth, device-token registration, Apple network
+delivery, entitlement correctness, or production endpoint behavior.
+
+## Release checklist
+
+- Database migration and APNs SQL suite passed for the current commit.
+- Admin web lint, typecheck, tests, build, audit, and E2E passed for the current
+  commit.
+- `deno check supabase/functions/send-apns/index.ts` passed for the current
+  commit.
+- iOS simulator build and Swift tests passed on macOS.
+- APNs sandbox physical-device gate passed.
+- TestFlight or production APNs gate passed before public release.
+- `APNS_DRY_RUN` value is intentional for the target environment.
+- Scheduler is enabled only after credential and dry-run checks are complete.
+- `docs/ios-parent-app/apns-outbox-recovery-runbook.md` has been reviewed by
+  the release operator.
+
+## Recovery stance
+
+APNs outbox recovery is forward-only. Do not describe recovery as rollback.
+Disable the scheduler, repair credentials or data, use the service-role replay
+RPC only for eligible `dead_letter` rows, and keep operator evidence on each
+replay.

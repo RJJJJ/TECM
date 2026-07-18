@@ -112,3 +112,73 @@ push delivery, TestFlight, production deployment, or merging to `main`.
   configurable, non-zero deadline (60 seconds by default). Its test-only injected
   hang mode failed non-zero with timeout diagnostics and no remaining PowerShell
   background jobs. A normal verifier run passed all three races.
+
+## APNs outbox reliability stacked gate (2026-07-18)
+
+Branch: `fix/pr46-apns-outbox-reliability`
+
+Stack base: `feature/ios-parent-app-push-sync` at
+`4abf2c65e511ebada1d0620d057baed9b581306f`.
+
+This gate is a forward-only reliability change. It does not merge PR #46, deploy
+the Edge Function, contact Apple, alter production data, or use real credentials.
+
+### Local evidence
+
+| Gate | Status | Current-branch evidence |
+|---|---|---|
+| PostgreSQL 15 migration/state machine | PASSED | `./scripts/testing/database-verify.ps1`, exit 0: migration 006 applied twice, SQL suites 001-009, unsafe-data negative preflight, existing parent races, and bounded two-worker `FOR UPDATE SKIP LOCKED` outbox race |
+| APNs SQL reliability coverage | PASSED | Suite 009 covers attempt 8, lease recovery/crash, inactive/expired/stale-generation cleanup, invalidation/reactivation, replay success/idempotency/rejections, tenant boundaries, grants, FORCE RLS, and fixed search paths |
+| Admin install/audit | PASSED | `npm ci` and `npm audit --audit-level=high`; 0 vulnerabilities |
+| Admin lint/typecheck | PASSED | `npm run lint` and `npm run typecheck`; 0 errors |
+| Node unit tests | PASSED | `npm test`; 31/31, including 23 APNs sender/orchestrator tests |
+| Admin production build | PASSED | `npm run build`; Next.js production build and 27 static pages completed |
+| Deno worker checks | PASSED | `npx -y deno fmt --check supabase/functions/send-apns` checked 4 files; `npx -y deno check supabase/functions/send-apns/index.ts` exit 0 |
+| n8n safety | PASSED | 14 workflow JSON files parse, remain inactive, and contain no prohibited sender/secrets |
+| Repository/history safety | PASSED | 347 tracked/candidate paths and 687 reachable historical text blobs scanned; no prohibited secret/runtime artifact |
+| Diff hygiene | PASSED | `git diff --check`, exit 0; only Git line-ending conversion warnings |
+| Local Playwright E2E | NOT PASSED | Not rerun in this Windows pass; the required clean-Supabase Playwright gate is delegated to final-SHA CI |
+| Local iOS/XCTest | NOT PASSED | `xcodebuild` is unavailable on Windows; the required macOS job is delegated to final-SHA CI |
+| Apple sandbox/TestFlight/production push | NOT PASSED | No Apple credential, provisioning, physical iPhone, TestFlight, production scheduler, or live APNs request was used |
+| Production deploy/data migration | NOT PASSED by design | No deployment, production mutation, main merge, or PR #46 mutation is authorized |
+| Final-SHA CI | PENDING | Record only after the draft stacked PR exists and all five required jobs complete on the exact head SHA |
+
+### Mutation verification
+
+Every mutation was applied with a patch, run against the named test, then
+reversed. The migration, core sender, and orchestrator hashes matched their
+pre-mutation values after restoration.
+
+| ID | Injected defect | Result | Catch evidence |
+|---|---|---|---|
+| M1 | Let a retryable attempt at count 8 remain retryable | CAUGHT | SQL suite 009 failed at the attempt ceiling (`claimable APNs outbox exceeded attempt ceiling`) |
+| M2 | Remove inactive-device cleanup and claim eligibility checks | CAUGHT | Added depth-defense fixture failed case 13b: inactive legacy backlog survived claim cleanup |
+| M3 | Ignore notification expiry in cleanup and candidate selection | CAUGHT | SQL suite 009 failed case 11: expired notification was not terminalized |
+| M4 | Remove registration-generation cleanup and claim eligibility checks | CAUGHT | Added depth-defense fixture failed case 21b: stale-generation backlog survived claim cleanup |
+| M5 | Classify APNs provider credential failures as device failures | CAUGHT | Sender tests failed provider classification and no-invalidation assertions |
+| M6 | Create the APNs provider token only after claiming a row | CAUGHT | Worker tests failed preflight ordering and zero-claim-on-preflight-failure assertions |
+| M7 | Replace the stable database `apns_request_id` header with a random UUID | CAUGHT | Mock-provider test rejected the changed `apns-id` request header |
+| M8 | Convert accepted-but-uncommitted completion into a send-retry transition | CAUGHT | Completion-exhaustion test rejected the missing stop and unexpected retry behavior |
+
+M2 and M4 initially showed that normal triggers cleaned the fixture before the
+claim function's defensive branch was exercised. Dedicated legacy/corrupt-row
+fixtures were added, and both mutations were rerun until caught.
+
+### Independent adversarial review
+
+- Code/state-machine review: APPROVE; 0 CRITICAL, 0 HIGH, 0 MEDIUM, 0 LOW.
+- Security/operations review: 0 CRITICAL and 0 HIGH; three MEDIUM design risks
+  recorded below. No HIGH/CRITICAL remediation gate remains.
+- Dry-run terminalizes claimed rows as `would_send`. The runbook now labels it
+  mutating, restricts it to synthetic/disposable rows, and states that local
+  signing does not prove Apple accepts repaired credentials.
+- The active-token uniqueness policy can deactivate the same unguessable APNs
+  token across tenants during authenticated token transfer. This inherited
+  global-token behavior prioritizes preventing delivery to a previous account;
+  token knowledge remains a denial-of-service precondition. No broader token
+  read access was introduced.
+- One backend intentionally routes each row by its stored `sandbox` or
+  `production` environment. Bundle ID is pinned by worker configuration, device
+  environment is validated at registration, and live Apple environment evidence
+  remains `NOT PASSED`; deployments that require strict environment separation
+  must use separate backends/schedulers.

@@ -7,6 +7,7 @@ export type ClaimedNotification = {
   device_token: string;
   environment: ApnsEnvironment;
   bundle_id: string;
+  apns_request_id: string;
   title: string | null;
   body: string | null;
   category: string;
@@ -14,12 +15,20 @@ export type ClaimedNotification = {
   attempt_count: number;
 };
 
+export type ApnsFailureClass =
+  | "accepted"
+  | "device"
+  | "provider"
+  | "transient"
+  | "permanent-message";
+
 export type ApnsResult = {
   status: number;
   requestId: string | null;
   reason: string | null;
   retryable: boolean;
   invalidateDevice: boolean;
+  failureClass: ApnsFailureClass;
 };
 
 const PERMANENT_DEVICE_REASONS = new Set([
@@ -28,12 +37,16 @@ const PERMANENT_DEVICE_REASONS = new Set([
   "Unregistered",
 ]);
 
-const TRANSIENT_REASONS = new Set([
+const PROVIDER_REASONS = new Set([
   "ExpiredProviderToken",
+  "InvalidProviderToken",
+  "TooManyProviderTokenUpdates",
+]);
+
+const TRANSIENT_REASONS = new Set([
   "InternalServerError",
   "ServiceUnavailable",
   "Shutdown",
-  "TooManyProviderTokenUpdates",
   "TooManyRequests",
 ]);
 
@@ -108,19 +121,36 @@ export function classifyApnsResponse(
       reason: null,
       retryable: false,
       invalidateDevice: false,
+      failureClass: "accepted",
     };
   }
 
   const invalidateDevice = status === 410 ||
     (reason ? PERMANENT_DEVICE_REASONS.has(reason) : false);
-  const retryable = !invalidateDevice && (
+  const isProviderFailure = !invalidateDevice &&
+    (reason ? PROVIDER_REASONS.has(reason) : false);
+  const retryable = isProviderFailure || (!invalidateDevice && (
     status === 408 ||
     status === 429 ||
     status >= 500 ||
     (reason ? TRANSIENT_REASONS.has(reason) : false)
-  );
+  ));
+  const failureClass: ApnsFailureClass = invalidateDevice
+    ? "device"
+    : isProviderFailure
+    ? "provider"
+    : retryable
+    ? "transient"
+    : "permanent-message";
 
-  return { status, requestId, reason, retryable, invalidateDevice };
+  return {
+    status,
+    requestId,
+    reason,
+    retryable,
+    invalidateDevice,
+    failureClass,
+  };
 }
 
 export function retryDelaySeconds(attemptCount: number) {
@@ -194,6 +224,7 @@ export async function sendToApns(
       headers: {
         authorization: `bearer ${providerToken}`,
         "apns-topic": item.bundle_id,
+        "apns-id": item.apns_request_id,
         "apns-push-type": "alert",
         "apns-priority": "10",
         "content-type": "application/json",

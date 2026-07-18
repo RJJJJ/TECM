@@ -55,6 +55,9 @@ try {
     '/workspace/supabase/tests/000_foundation_security_fixture.sql',
     '/workspace/supabase/migrations/202607180005_foundation_security.sql',
     '/workspace/supabase/migrations/202607180005_foundation_security.sql',
+    '/workspace/supabase/tests/000_apns_outbox_reliability_legacy_fixture.sql',
+    '/workspace/supabase/migrations/202607180006_apns_outbox_reliability.sql',
+    '/workspace/supabase/migrations/202607180006_apns_outbox_reliability.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
     '/workspace/supabase/tests/002_rls_tenant_isolation.sql',
     '/workspace/supabase/tests/003_attendance_leave_makeup.sql',
@@ -62,7 +65,8 @@ try {
     '/workspace/supabase/tests/005_automation_audit.sql',
     '/workspace/supabase/tests/006_submit_attendance_rpc.sql',
     '/workspace/supabase/tests/007_parent_notifications.sql',
-    '/workspace/supabase/tests/008_foundation_security.sql'
+    '/workspace/supabase/tests/008_foundation_security.sql',
+    '/workspace/supabase/tests/009_apns_outbox_reliability.sql'
   )
 
   foreach ($file in $files) {
@@ -124,7 +128,8 @@ try {
       [string]$FirstFile,
       [string]$SecondFile,
       [int]$ExpectedFirstExit = 0,
-      [int]$ExpectedSecondExit = 0
+      [int]$ExpectedSecondExit = 0,
+      [int]$StartSecondDelayMilliseconds = 250
     )
 
     Write-Host "[RACE] $FirstFile <> $SecondFile"
@@ -136,7 +141,9 @@ try {
         [pscustomobject]@{ ExitCode = $LASTEXITCODE }
       } -ArgumentList $containerName,$database,$FirstFile
       $raceJobs += $first
-      Start-Sleep -Milliseconds 250
+      if ($StartSecondDelayMilliseconds -gt 0) {
+        Start-Sleep -Milliseconds $StartSecondDelayMilliseconds
+      }
       $second = Start-Job -Name 'race-second' -ScriptBlock {
         param($Name,$Db,$File,$Hang,$HangSeconds)
         if ($Hang) { Start-Sleep -Seconds $HangSeconds }
@@ -195,6 +202,16 @@ try {
     -f '/workspace/supabase/tests/concurrency/device_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Opposite device concurrency assertion failed.' }
 
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/outbox_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare outbox concurrency fixture.' }
+  Invoke-DatabaseRace `
+    '/workspace/supabase/tests/concurrency/outbox_worker_a.sql' `
+    '/workspace/supabase/tests/concurrency/outbox_worker_b.sql' 0 0 0
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/outbox_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Outbox claim concurrency assertion failed.' }
+
   $unsafeDatabase = 'tecm_unsafe_preflight'
   docker exec $containerName createdb -U postgres $unsafeDatabase
   if ($LASTEXITCODE -ne 0) { throw 'Could not create unsafe preflight database.' }
@@ -221,7 +238,7 @@ try {
     throw 'Blocked migration partially applied mutable DDL before preflight.'
   }
 
-  Write-Host '[PASS] repeatable migration, negative preflight, seed, RLS, eight SQL suites and both race orderings'
+  Write-Host '[PASS] repeatable migrations, negative preflight, seed, RLS, nine SQL suites, parent races and bounded outbox claim race'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity

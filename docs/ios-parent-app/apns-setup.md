@@ -1,71 +1,157 @@
-# APNs 設定與操作手冊
+# APNs setup
 
-## 1. Apple Developer 設定
+This document covers the TECM parent-app APNs worker and the credentials needed
+to run it. The database-backed reliability model is documented in
+`apns-outbox-reliability-design.md`; operator recovery steps are in
+`apns-outbox-recovery-runbook.md`.
 
-1. 在 Apple Developer portal 確認 App ID 的 Bundle ID 與 Xcode `PRODUCT_BUNDLE_IDENTIFIER` 相同（預設 `app.TECM`）。
-2. 為 App ID 啟用 Push Notifications capability。
-3. 建立 APNs token signing key；按 sandbox/production policy 選擇 team-scoped 或 topic-specific key。下載 `.p8` 只有一次。
-4. 記下 10 字元 Key ID 和 Team ID。不要把 `.p8`、certificate 或 provisioning profile 放入 repo。
-5. Xcode target 加入 Push Notifications entitlement；Debug 使用 development APNs environment，TestFlight/App Store 使用 production。
+## Apple developer setup
 
-Apple 要求 APNs provider 使用 HTTP/2 + TLS 及 ES256 token；provider token 超過一小時會失效。參考：[Token-based APNs](https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns)、[APNs responses](https://developer.apple.com/documentation/usernotifications/handling-notification-responses-from-apns)。
+1. In Apple Developer, enable Push Notifications for the TECM parent app Bundle
+   ID. The worker currently expects `APNS_BUNDLE_ID` to match every claimed
+   outbox row's `bundle_id`; mismatches are recorded as non-retryable message
+   failures without calling Apple.
+2. Create an APNs token signing key and record the 10-character Key ID and
+   10-character Team ID.
+3. Store the `.p8` private key only in the Supabase secret manager or the local
+   development environment used to run the Edge Function. Do not commit `.p8`
+   material, provisioning profiles, certificates, or exported workflow secrets.
+4. Use the APNs environment attached to the device token:
+   - Debug/development-signed apps use `sandbox`.
+   - TestFlight/App Store apps use `production`.
+5. Keep the Xcode Push Notifications entitlement aligned with the signing
+   environment before claiming any production Apple pass.
 
-## 2. Supabase secrets
+## Supabase secrets
 
-在本機未追蹤的 env 或 Dashboard secret manager 設定：
+`send-apns` requires these secrets:
 
 ```text
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+PUSH_WORKER_SECRET
 APNS_KEY_ID
 APNS_TEAM_ID
 APNS_BUNDLE_ID
 APNS_PRIVATE_KEY
-PUSH_WORKER_SECRET
 APNS_DRY_RUN=true|false
 ```
 
-`SUPABASE_URL` 和 `SUPABASE_SERVICE_ROLE_KEY` 由 hosted Edge runtime 提供。可用 `supabase secrets set` 上傳；不要把值寫入 command history、workflow JSON 或文件。參考：[Supabase Edge secrets](https://supabase.com/docs/guides/functions/secrets)。
+`PUSH_WORKER_SECRET` is accepted through either
+`Authorization: Bearer <PUSH_WORKER_SECRET>` or `x-tecm-worker-secret`.
 
-## 3. 部署與 scheduler
+`APNS_DRY_RUN=true` still validates the APNs Key ID, Team ID, private key, and
+provider-token creation before the first outbox claim. It then completes claimed
+rows as `would_send` and does not call Apple.
+
+Dry-run is not read-only. It consumes selected outbox rows as terminal
+`would_send`, so use it only with synthetic/disposable notifications in an
+isolated environment. Because it never contacts Apple, it proves local ES256
+signing but does not prove that Apple accepts the Key ID, Team ID, or key.
+
+## Credential preflight
+
+The worker creates the APNs provider JWT before calling
+`claim_notification_outbox`. A missing or malformed APNs secret stops the
+invocation before any row is claimed.
+
+Preflight validates:
+
+| Secret | Local validation |
+| --- | --- |
+| `APNS_KEY_ID` | 10 uppercase alphanumeric characters |
+| `APNS_TEAM_ID` | 10 uppercase alphanumeric characters |
+| `APNS_PRIVATE_KEY` | non-empty PKCS8 private key that can sign ES256 |
+| `APNS_BUNDLE_ID` | compared against each claimed row before Apple send |
+
+Provider responses such as `InvalidProviderToken`, `ExpiredProviderToken`, and
+`TooManyProviderTokenUpdates` are runtime provider failures. They are not fixed
+by replaying rows first; repair credentials, verify dry-run, then resume the
+scheduler.
+
+## Deploy
+
+Deploy the function without JWT verification because it uses the worker secret
+and the Supabase service-role key internally:
 
 ```powershell
 supabase functions deploy send-apns --no-verify-jwt
 ```
 
-Function 自行驗證 `Authorization: Bearer <PUSH_WORKER_SECRET>` 或 `x-tecm-worker-secret`。只讓 Supabase Cron／受信 scheduler 呼叫；不要建立公開無 secret 排程。每次只 claim 即將處理的一筆，APNs request 有 30 秒 timeout，active lease 與 notification/device unique key 防止重複排隊或並行處理。
+The repository config also pins:
 
-APNs 與 PostgreSQL 不能形成單一交易，因此 delivery 是 at-least-once：若 APNs 已接受但資料庫 completion acknowledgement 失敗，backoff retry 或 lease 到期後可能重送。attempt/APNs request id 用於偵測及調查這個模糊狀態；文件不宣稱 exactly-once。
-
-第一次部署先設 `APNS_DRY_RUN=true`。dry-run 只產生 `would_send` attempt，不標記 delivered。確認 tenant、recipient、environment 和 generic payload 後才在受控環境改為 false。
-
-## 4. Sandbox、production 與 TestFlight
-
-- Debug/development-signed build 註冊 sandbox token，送到 `api.sandbox.push.apple.com`。
-- TestFlight/App Store build 註冊 production token，送到 `api.push.apple.com`。
-- DB 保存每個 installation 的 environment；worker 逐 row 選 endpoint，不混用 token。
-- TestFlight 驗證需要 Apple Developer account、production capability/profile、APNs key 及真實 iPhone。
-
-## 5. 回應、重試與 token invalidation
-
-- `200`：delivered。
-- `429`、`500`、`503`、timeout：exponential backoff，保留 lease-safe retry。
-- `410`、`Unregistered`、`BadDeviceToken`、`DeviceTokenNotForTopic`：停用 device，不重試該 token。
-- 其他永久 4xx：dead-letter 或人工修正；不無限重試。
-- attempt log 只保留 status、APNs request id 和 sanitized reason。
-
-## 6. Key rotation
-
-1. 建立第二把 APNs key並存入 secrets。
-2. 部署/重啟 worker，確認新 key 在 sandbox 或 TestFlight 成功。
-3. 在 Apple portal 撤銷舊 key。
-4. 確認舊 provider connection 已關閉，監察 403/dead-letter。
-5. 不把舊 key 留在本機共享資料夾、Git history 或 n8n export。
-
-## 7. 本地與 simulator
-
-mock provider 和 sender unit tests不需要 Apple credential。Simulator 可用無敏感資料的 `.apns` fixture：
-
-```powershell
-xcrun simctl push booted app.TECM docs/ios-parent-app/fixtures/notification.apns
+```toml
+[functions.send-apns]
+verify_jwt = false
 ```
 
-Simulator injection 只驗證 App handling，不證明 APNs provider、entitlement、production token 或真實裝置交付。
+## Scheduler guidance
+
+This repository does not currently contain a committed Supabase Cron definition
+for `send-apns`. Configure the schedule in the Supabase dashboard or your
+deployment automation, and record the schedule owner outside the source tree.
+
+Recommended scheduler behavior:
+
+- Invoke `send-apns` with `POST` only.
+- Include `PUSH_WORKER_SECRET` in the authorization header.
+- Keep only one active schedule per environment unless operations deliberately
+  increase concurrency.
+- Disable the schedule before credential repair, production replay, or any
+  investigation where a provider failure could repeatedly claim more rows.
+- Re-enable the schedule only after a dry-run or controlled manual invocation
+  returns the expected summary.
+
+## Delivery semantics
+
+The APNs outbox is at-least-once. Each logical delivery attempt has one stable
+UUID in `notification_outbox.apns_request_id`, and every send retry for that
+logical delivery uses it as the APNs `apns-id` header. This helps correlate
+database rows, APNs responses, and attempt records. It is not an exactly-once
+guarantee because APNs can accept a request while the database completion RPC
+fails or times out.
+
+Replay of an eligible `dead_letter` row creates a new logical delivery attempt
+on the same outbox row. It preserves replay evidence and assigns a new
+`apns_request_id`.
+
+## Failure classification
+
+| Class | Examples | Worker behavior |
+| --- | --- | --- |
+| `accepted` | HTTP `200` | Retries only the completion RPC briefly; if completion still fails, stops the batch with `completion_exhausted` and leaves the lease visible for recovery. |
+| `device` | HTTP `410`, `BadDeviceToken`, `DeviceTokenNotForTopic`, `Unregistered` | Dead-letters the current row, invalidates that device generation, and cancels unfinished backlog for the same registration generation. |
+| `provider` | `InvalidProviderToken`, `ExpiredProviderToken`, `TooManyProviderTokenUpdates` | Records a retry for the current row, does not invalidate devices, and stops the batch with `provider_failure`. |
+| `transient` | network errors, HTTP `408`, HTTP `429`, APNs `5xx` | Records a bounded retry with backoff or dead-letters at the database-enforced attempt ceiling. |
+| `permanent-message` | other non-retryable APNs responses such as `PayloadTooLarge` | Dead-letters only the current row. |
+
+## Generation-bound backlog
+
+Every outbox row snapshots the target device's
+`device_registration_generation`. Token, bundle, environment, activation, or
+invalidation changes advance the device generation and cancel unfinished work
+from the old generation.
+
+Do not replay `cancelled` or `expired` rows. A new active registration receives
+only newly enqueued work.
+
+## Local and mock coverage
+
+Local/mock tests cover:
+
+- APNs provider-token construction from a generated PKCS8 key.
+- Request metadata, including `apns-topic`, stable `apns-id`, push type,
+  priority, timeout signal, and safe payload copy.
+- Response classification for `429`, `5xx`, `410`, `BadDeviceToken`,
+  provider-token failures, and network errors.
+- Dry-run completing `would_send` without calling Apple.
+- Database reliability cases in `supabase/tests/009_apns_outbox_reliability.sql`.
+
+NOT PASSED by local/mock evidence:
+
+- Real Apple sandbox delivery to a physical device.
+- TestFlight or production APNs delivery.
+- Apple Developer provisioning, entitlement, certificate, and key ownership.
+- Production scheduler behavior.
+- CI or mutation-test completion unless the current run artifacts explicitly say
+  they passed.
