@@ -55,6 +55,13 @@ try {
     '/workspace/supabase/tests/000_foundation_security_fixture.sql',
     '/workspace/supabase/migrations/202607180005_foundation_security.sql',
     '/workspace/supabase/migrations/202607180005_foundation_security.sql',
+    '/workspace/supabase/tests/000_apns_outbox_reliability_legacy_fixture.sql',
+    '/workspace/supabase/migrations/202607180006_apns_outbox_reliability.sql',
+    '/workspace/supabase/migrations/202607180006_apns_outbox_reliability.sql',
+    '/workspace/supabase/migrations/202607180007_apns_dispatch_ambiguity.sql',
+    '/workspace/supabase/migrations/202607180007_apns_dispatch_ambiguity.sql',
+    '/workspace/supabase/migrations/202607180008_apns_completion_outcome.sql',
+    '/workspace/supabase/migrations/202607180008_apns_completion_outcome.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
     '/workspace/supabase/tests/002_rls_tenant_isolation.sql',
     '/workspace/supabase/tests/003_attendance_leave_makeup.sql',
@@ -62,13 +69,28 @@ try {
     '/workspace/supabase/tests/005_automation_audit.sql',
     '/workspace/supabase/tests/006_submit_attendance_rpc.sql',
     '/workspace/supabase/tests/007_parent_notifications.sql',
-    '/workspace/supabase/tests/008_foundation_security.sql'
+    '/workspace/supabase/tests/008_foundation_security.sql',
+    '/workspace/supabase/tests/009_apns_outbox_reliability.sql',
+    '/workspace/supabase/tests/010_apns_dispatch_ambiguity.sql',
+    '/workspace/supabase/tests/011_apns_completion_outcome.sql'
   )
 
   foreach ($file in $files) {
     Write-Host "[RUN] $file"
-    docker exec $containerName sh -c "psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -f '$file'"
-    if ($LASTEXITCODE -ne 0) { throw "Database verification failed: $file" }
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      $fileOutput = @(docker exec $containerName sh -c "psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -f '$file'" 2>&1)
+      $fileExit = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorAction
+    }
+    if ($fileExit -ne 0) {
+      $fileOutput | Out-String | Write-Host
+      throw "Database verification failed: $file"
+    }
+    $passedOutput = @($fileOutput | Select-String -Pattern 'passed|PASS')
+    if ($passedOutput.Count -gt 0) { $passedOutput | Out-String | Write-Host }
   }
 
   function Wait-DatabaseRaceJobs {
@@ -124,7 +146,9 @@ try {
       [string]$FirstFile,
       [string]$SecondFile,
       [int]$ExpectedFirstExit = 0,
-      [int]$ExpectedSecondExit = 0
+      [int]$ExpectedSecondExit = 0,
+      [int]$StartSecondDelayMilliseconds = 250,
+      [switch]$ReleaseOutboxBarrier
     )
 
     Write-Host "[RACE] $FirstFile <> $SecondFile"
@@ -136,7 +160,9 @@ try {
         [pscustomobject]@{ ExitCode = $LASTEXITCODE }
       } -ArgumentList $containerName,$database,$FirstFile
       $raceJobs += $first
-      Start-Sleep -Milliseconds 250
+      if ($StartSecondDelayMilliseconds -gt 0) {
+        Start-Sleep -Milliseconds $StartSecondDelayMilliseconds
+      }
       $second = Start-Job -Name 'race-second' -ScriptBlock {
         param($Name,$Db,$File,$Hang,$HangSeconds)
         if ($Hang) { Start-Sleep -Seconds $HangSeconds }
@@ -145,14 +171,29 @@ try {
       } -ArgumentList $containerName,$database,$SecondFile,$InjectConcurrencyHang,($ConcurrencyTimeoutSeconds + 5)
       $raceJobs += $second
 
+      if ($ReleaseOutboxBarrier) {
+        $bothReady = $false
+        for ($attempt = 0; $attempt -lt 100; $attempt++) {
+          $readyCount = docker exec $containerName psql -q -U postgres -d $database -Atc `
+            "select count(*) from public.__test_outbox_claim_barrier where worker in ('outbox-worker-a','outbox-worker-b')"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect outbox claim release barrier.' }
+          if ($readyCount -eq '2') { $bothReady = $true; break }
+          Start-Sleep -Milliseconds 100
+        }
+        if (-not $bothReady) { throw 'Outbox claim workers did not reach the release barrier.' }
+        docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -c `
+          "update public.__test_outbox_claim_barrier set released_at=statement_timestamp() where worker in ('outbox-worker-a','outbox-worker-b')" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not release outbox claim workers.' }
+      }
+
       $raceResults = @(Wait-DatabaseRaceJobs -Jobs $raceJobs -TimeoutSeconds $ConcurrencyTimeoutSeconds)
       $firstOutput = ($raceResults | Where-Object Name -eq 'race-first').Output
       $secondOutput = ($raceResults | Where-Object Name -eq 'race-second').Output
       $firstExit = ($firstOutput | Where-Object { $null -ne $_.ExitCode } | Select-Object -Last 1).ExitCode
       $secondExit = ($secondOutput | Where-Object { $null -ne $_.ExitCode } | Select-Object -Last 1).ExitCode
       if ($firstExit -ne $ExpectedFirstExit -or $secondExit -ne $ExpectedSecondExit) {
-        $firstOutput | Write-Host
-        $secondOutput | Write-Host
+        Write-Host "[RACE OUTPUT] first:`n$($firstOutput | Out-String)"
+        Write-Host "[RACE OUTPUT] second:`n$($secondOutput | Out-String)"
         throw "Unexpected race exits: first=$firstExit second=$secondExit"
       }
     } finally {
@@ -195,6 +236,26 @@ try {
     -f '/workspace/supabase/tests/concurrency/device_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Opposite device concurrency assertion failed.' }
 
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/outbox_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare outbox concurrency fixture.' }
+  Invoke-DatabaseRace `
+    '/workspace/supabase/tests/concurrency/outbox_worker_a.sql' `
+    '/workspace/supabase/tests/concurrency/outbox_worker_b.sql' 0 0 0 -ReleaseOutboxBarrier
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/outbox_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Outbox claim concurrency assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/dispatch_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare dispatch concurrency fixture.' }
+  Invoke-DatabaseRace `
+    '/workspace/supabase/tests/concurrency/dispatch_worker_a.sql' `
+    '/workspace/supabase/tests/concurrency/dispatch_worker_b.sql' 0 3 250
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/dispatch_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Dispatch concurrency assertion failed.' }
+
   $unsafeDatabase = 'tecm_unsafe_preflight'
   docker exec $containerName createdb -U postgres $unsafeDatabase
   if ($LASTEXITCODE -ne 0) { throw 'Could not create unsafe preflight database.' }
@@ -221,7 +282,7 @@ try {
     throw 'Blocked migration partially applied mutable DDL before preflight.'
   }
 
-  Write-Host '[PASS] repeatable migration, negative preflight, seed, RLS, eight SQL suites and both race orderings'
+  Write-Host '[PASS] repeatable migrations, negative preflight, seed, RLS, eleven SQL suites, parent races, bounded outbox claim race and dispatch-boundary race'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity

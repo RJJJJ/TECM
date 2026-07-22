@@ -222,7 +222,7 @@ do $$ declare v_id uuid; begin
     where n.event_key='test:event:3' and o.claimed_by='worker-b';
   if public.retry_notification_delivery(v_id,'worker-b',503,'Unavailable',true,false)<>'retry' then raise exception 'retryable delivery did not enter retry'; end if;
   if (select available_at from public.notification_outbox where id=v_id)<=now() then raise exception 'retry backoff was not scheduled'; end if;
-  update public.notification_outbox set available_at=now()-interval '1 second',attempt_count=8 where id=v_id;
+  update public.notification_outbox set available_at=now()-interval '1 second',attempt_count=7 where id=v_id;
   perform public.claim_notification_outbox('worker-max',25,60);
   if public.retry_notification_delivery(v_id,'worker-max',410,'Unregistered',true,true)<>'dead_letter' then raise exception 'max-attempt delivery was not dead-lettered'; end if;
   if exists(select 1 from public.push_devices where installation_id='ios-install-a' and is_active) then

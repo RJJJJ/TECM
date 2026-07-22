@@ -112,3 +112,126 @@ push delivery, TestFlight, production deployment, or merging to `main`.
   configurable, non-zero deadline (60 seconds by default). Its test-only injected
   hang mode failed non-zero with timeout diagnostics and no remaining PowerShell
   background jobs. A normal verifier run passed all three races.
+
+## APNs outbox reliability stacked gate (2026-07-18)
+
+Branch: `fix/pr46-apns-outbox-reliability`
+
+Stack base: `feature/ios-parent-app-push-sync` at
+`4abf2c65e511ebada1d0620d057baed9b581306f`.
+
+This gate is a forward-only reliability change. It does not merge PR #46, deploy
+the Edge Function, contact Apple, alter production data, or use real credentials.
+
+### Local evidence
+
+| Gate | Status | Current-branch evidence |
+|---|---|---|
+| PostgreSQL 15 migration/state machine | PASSED | `./scripts/testing/database-verify.ps1`, exit 0: migration 006 applied twice, SQL suites 001-009, unsafe-data negative preflight, existing parent races, and bounded two-worker `FOR UPDATE SKIP LOCKED` outbox race |
+| APNs SQL reliability coverage | PASSED | Suite 009 covers attempt 8, lease recovery/crash, inactive/expired/stale-generation cleanup, invalidation/reactivation, replay success/idempotency/rejections, tenant boundaries, grants, FORCE RLS, and fixed search paths |
+| Admin install/audit | PASSED | `npm ci` and `npm audit --audit-level=high`; 0 vulnerabilities |
+| Admin lint/typecheck | PASSED | `npm run lint` and `npm run typecheck`; 0 errors |
+| Node unit tests | PASSED | `npm test`; 31/31, including 23 APNs sender/orchestrator tests |
+| Admin production build | PASSED | `npm run build`; Next.js production build and 27 static pages completed |
+| Deno worker checks | PASSED | `npx -y deno fmt --check supabase/functions/send-apns` checked 4 files; `npx -y deno check supabase/functions/send-apns/index.ts` exit 0 |
+| n8n safety | PASSED | 14 workflow JSON files parse, remain inactive, and contain no prohibited sender/secrets |
+| Repository/history safety | PASSED | 347 tracked/candidate paths and 687 reachable historical text blobs scanned; no prohibited secret/runtime artifact |
+| Diff hygiene | PASSED | `git diff --check`, exit 0; only Git line-ending conversion warnings |
+| Local Playwright E2E | NOT PASSED | Not rerun in this Windows pass; the required clean-Supabase Playwright gate is delegated to final-SHA CI |
+| Local iOS/XCTest | NOT PASSED | `xcodebuild` is unavailable on Windows; the required macOS job is delegated to final-SHA CI |
+| Apple sandbox/TestFlight/production push | NOT PASSED | No Apple credential, provisioning, physical iPhone, TestFlight, production scheduler, or live APNs request was used |
+| Production deploy/data migration | NOT PASSED by design | No deployment, production mutation, main merge, or PR #46 mutation is authorized |
+| Implementation-SHA CI | PASSED | Commit `a5802342aca173edd3b88b11d44024d7eb0b64b0`, GitHub Actions [run 29647937153](https://github.com/RJJJJ/TECM/actions/runs/29647937153): `database`, `admin-web`, `repository-safety`, `admin-e2e`, and `ios` all completed successfully |
+| Final documentation SHA CI | PENDING at report-authoring time | The documentation-only follow-up commit must pass the same five jobs; record its exact SHA/run in PR #48 and the final task report without creating an infinite self-referential evidence commit |
+
+### Mutation verification
+
+Every mutation was applied with a patch, run against the named test, then
+reversed. The migration, core sender, and orchestrator hashes matched their
+pre-mutation values after restoration.
+
+| ID | Injected defect | Result | Catch evidence |
+|---|---|---|---|
+| M1 | Let a retryable attempt at count 8 remain retryable | CAUGHT | SQL suite 009 failed at the attempt ceiling (`claimable APNs outbox exceeded attempt ceiling`) |
+| M2 | Remove inactive-device cleanup and claim eligibility checks | CAUGHT | Added depth-defense fixture failed case 13b: inactive legacy backlog survived claim cleanup |
+| M3 | Ignore notification expiry in cleanup and candidate selection | CAUGHT | SQL suite 009 failed case 11: expired notification was not terminalized |
+| M4 | Remove registration-generation cleanup and claim eligibility checks | CAUGHT | Added depth-defense fixture failed case 21b: stale-generation backlog survived claim cleanup |
+| M5 | Classify APNs provider credential failures as device failures | CAUGHT | Sender tests failed provider classification and no-invalidation assertions |
+| M6 | Create the APNs provider token only after claiming a row | CAUGHT | Worker tests failed preflight ordering and zero-claim-on-preflight-failure assertions |
+| M7 | Replace the stable database `apns_request_id` header with a random UUID | CAUGHT | Mock-provider test rejected the changed `apns-id` request header |
+| M8 | Convert accepted-but-uncommitted completion into a send-retry transition | CAUGHT | Completion-exhaustion test rejected the missing stop and unexpected retry behavior |
+
+M2 and M4 initially showed that normal triggers cleaned the fixture before the
+claim function's defensive branch was exercised. Dedicated legacy/corrupt-row
+fixtures were added, and both mutations were rerun until caught.
+
+### Independent adversarial review
+
+- Code/state-machine review: APPROVE; 0 CRITICAL, 0 HIGH, 0 MEDIUM, 0 LOW.
+- Security/operations review: 0 CRITICAL and 0 HIGH; three MEDIUM design risks
+  recorded below. No HIGH/CRITICAL remediation gate remains.
+- Dry-run terminalizes claimed rows as `would_send`. The runbook now labels it
+  mutating, restricts it to synthetic/disposable rows, and states that local
+  signing does not prove Apple accepts repaired credentials.
+- The active-token uniqueness policy can deactivate the same unguessable APNs
+  token across tenants during authenticated token transfer. This inherited
+  global-token behavior prioritizes preventing delivery to a previous account;
+  token knowledge remains a denial-of-service precondition. No broader token
+  read access was introduced.
+- One backend intentionally routes each row by its stored `sandbox` or
+  `production` environment. Bundle ID is pinned by worker configuration, device
+  environment is validated at registration, and live Apple environment evidence
+  remains `NOT PASSED`; deployments that require strict environment separation
+  must use separate backends/schedulers.
+
+## APNs dispatch ambiguity and CI provenance follow-up (2026-07-18)
+
+This follow-up closes the two remaining blockers on PR #48 without changing the
+stack base, merging either PR, deploying, contacting Apple, or using credentials.
+
+### Local evidence
+
+| Gate | Status | Current-branch evidence |
+|---|---|---|
+| PostgreSQL dispatch boundary | PASSED | `database-verify.ps1`, exit 0: migrations 005/006/007 each applied twice, SQL suites 001-010, negative preflight, controller-released two-worker claim race, and dispatch ownership race |
+| APNs worker contract | PASSED | 33/33 Node tests; the worker persists `dispatching` before Apple I/O, quarantines ambiguous outcomes as `delivery_uncertain`, and never automatically reclaims them |
+| Database depth defense | PASSED | `complete_notification_delivery(..., 'delivered')` rejects a merely `claimed` row; dry-run `would_send` remains legal without Apple I/O |
+| Admin lint/typecheck/build/audit | PASSED | both TypeScript checks exit 0; Next.js 15.5.20 builds 27 pages; `npm audit --audit-level=high` reports 0 vulnerabilities |
+| Deno worker checks | PASSED | formatter checked 4 files and `deno check` passed |
+| Repository and n8n safety | PASSED | 14 inactive workflows, 354 tracked/candidate paths, and 699 historical text blobs passed the safety scans |
+| Local Playwright | NOT PASSED | all 4 tests enumerate, but the Supabase CLI is unavailable on this Windows host; final-SHA `admin-e2e` CI is the executable gate |
+| Local iOS/XCTest | NOT PASSED | Xcode is unavailable on Windows; final-SHA macOS `ios` CI is the executable gate |
+| Real APNs/TestFlight/production | NOT PASSED by design | no Apple request, real credential, deployment, production data mutation, or merge was authorized |
+
+### New mutation verification
+
+Both mutations were applied with patches, exercised against their targeted
+contracts, reversed, and checked against the complete pre-mutation SHA-256.
+
+| ID | Injected defect | Result | Catch evidence |
+|---|---|---|---|
+| M9 | Recover an expired `dispatching` lease to automatically claimable `retry` | CAUGHT | SQL 010 case 4 failed because uncertainty evidence was not preserved |
+| M10 | Bypass `begin_notification_dispatch` before the APNs send path | CAUGHT | the targeted worker test failed because begin failure no longer prevented every send; restoration test passed |
+
+The final migration and orchestrator restore hashes were respectively
+`B139F4ECF30C90EDEEB7F6178221FE7A9CAE5366096247CB96D95C53837E064B`
+and `D6BB675BA35F7AB5BC766E090E5FE257594708E98C0A4090B1E023B2C7B265A2`
+at mutation time. Later review hardening intentionally changed the migration by
+requiring durable dispatch evidence at the completion RPC as well.
+
+### CI checkout provenance
+
+Every release-validation job now verifies the checked-out commit before any
+project command. Pull-request jobs must run the GitHub synthetic merge commit:
+`HEAD == GITHUB_SHA`, exactly two parents, first parent equal to the event base
+SHA, and second parent equal to the event head SHA. Push jobs require
+`HEAD == GITHUB_SHA`. The final commit SHA and five-job run are recorded in PR
+#48 after the remote run completes, avoiding a self-referential evidence commit.
+
+### Independent adversarial review
+
+The first review found one HIGH database depth-defense gap and one MEDIUM race
+fixture weakness. The completion RPC now requires `dispatching` evidence for a
+real delivered result, SQL 010 proves the negative path, and the claim workers
+now wait behind a controller-released barrier. Focused re-review reports 0 HIGH
+and 0 MEDIUM issues in both remediated areas.

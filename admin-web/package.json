@@ -2,6 +2,9 @@
   "name": "admin-web",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,6 +12,8 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/unit/*.test.ts",
+    "test:sharp": "node scripts/sharp-runtime-smoke.mjs",
+    "security:image-guard": "node scripts/image-processing-guard.mjs",
     "test:e2e": "playwright test",
     "test:e2e:list": "playwright test --list"
   },
@@ -32,11 +37,13 @@
     "typescript": "^5.5.3"
   },
   "overrides": {
+    "brace-expansion": "^2.1.2",
     "glob": "^10.5.0",
     "minimatch": "^9.0.7",
     "next": {
       "postcss": "^8.5.10"
     },
-    "postcss": "$postcss"
+    "postcss": "$postcss",
+    "sharp": "0.35.3"
   }
 }

@@ -1,9 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.49.8";
-import {
-  type ClaimedNotification,
-  createProviderToken,
-  sendToApns,
-} from "./core.ts";
+import { createProviderToken, sendToApns } from "./core.ts";
+import { type RpcResult, runApnsOutboxWorker } from "./orchestrator.ts";
 
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
 
@@ -55,153 +52,38 @@ export async function handleRequest(request: Request) {
       .slice(0, 200);
     const dryRun = Deno.env.get("APNS_DRY_RUN")?.toLowerCase() === "true";
     const configuredBundleId = requiredSecret("APNS_BUNDLE_ID");
+    const keyId = requiredSecret("APNS_KEY_ID");
+    const teamId = requiredSecret("APNS_TEAM_ID");
+    const privateKey = requiredSecret("APNS_PRIVATE_KEY");
     const supabase = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
-    let providerToken: string | null = null;
-    let claimed = 0;
-    let delivered = 0;
-    let wouldSend = 0;
-    let retried = 0;
-    let failed = 0;
+    const db = {
+      async rpc<T = unknown>(name: string, args: Record<string, unknown>) {
+        const result = await supabase.rpc(name, args);
+        return result as unknown as RpcResult<T>;
+      },
+    };
+    const summary = await runApnsOutboxWorker(
+      {
+        db,
+        createProviderToken,
+        send: sendToApns,
+      },
+      {
+        workerId,
+        dryRun,
+        bundleId: configuredBundleId,
+        keyId,
+        teamId,
+        privateKey,
+      },
+    );
 
-    // Claim only the row about to be sent. Claiming a batch under one lease
-    // lets later rows expire while earlier network calls are still running.
-    for (let index = 0; index < 25; index += 1) {
-      const { data, error } = await supabase.rpc("claim_notification_outbox", {
-        p_worker_id: workerId,
-        p_limit: 1,
-        p_lease_seconds: 90,
-      });
-      if (error) throw new Error(`Outbox claim failed: ${error.message}`);
-      const item = ((data ?? []) as ClaimedNotification[])[0];
-      if (!item) break;
-      claimed += 1;
-
-      if (!dryRun && providerToken === null) {
-        providerToken = await createProviderToken(
-          requiredSecret("APNS_KEY_ID"),
-          requiredSecret("APNS_TEAM_ID"),
-          requiredSecret("APNS_PRIVATE_KEY"),
-        );
-      }
-
-      if (item.bundle_id !== configuredBundleId) {
-        const { error: retryError } = await supabase.rpc(
-          "retry_notification_delivery",
-          {
-            p_outbox_id: item.outbox_id,
-            p_worker_id: workerId,
-            p_http_status: null,
-            p_error: "BundleIdMismatch",
-            p_retryable: false,
-            p_invalidate_device: false,
-          },
-        );
-        if (retryError) {
-          throw new Error(
-            `Bundle validation update failed: ${retryError.message}`,
-          );
-        }
-        failed += 1;
-        continue;
-      }
-      if (dryRun) {
-        const { error: completeError } = await supabase.rpc(
-          "complete_notification_delivery",
-          {
-            p_outbox_id: item.outbox_id,
-            p_worker_id: workerId,
-            p_provider_request_id: null,
-            p_http_status: null,
-            p_delivery_status: "would_send",
-          },
-        );
-        if (completeError) {
-          throw new Error(
-            `Dry-run completion failed: ${completeError.message}`,
-          );
-        }
-        wouldSend += 1;
-        continue;
-      }
-
-      try {
-        const result = await sendToApns(item, providerToken!);
-        if (result.status === 200) {
-          const { error: completeError } = await supabase.rpc(
-            "complete_notification_delivery",
-            {
-              p_outbox_id: item.outbox_id,
-              p_worker_id: workerId,
-              p_provider_request_id: result.requestId,
-              p_http_status: result.status,
-              p_delivery_status: "delivered",
-            },
-          );
-          if (completeError) {
-            throw new Error(
-              `Delivery completion failed: ${completeError.message}`,
-            );
-          }
-          delivered += 1;
-        } else {
-          const { error: retryError } = await supabase.rpc(
-            "retry_notification_delivery",
-            {
-              p_outbox_id: item.outbox_id,
-              p_worker_id: workerId,
-              p_http_status: result.status,
-              p_error: result.reason ?? `HTTP ${result.status}`,
-              p_retryable: result.retryable,
-              p_invalidate_device: result.invalidateDevice,
-            },
-          );
-          if (retryError) {
-            throw new Error(
-              `Delivery failure update failed: ${retryError.message}`,
-            );
-          }
-          if (result.retryable) retried += 1;
-          else failed += 1;
-        }
-      } catch (sendError) {
-        const sanitized = sendError instanceof Error
-          ? sendError.name
-          : "NetworkError";
-        const { error: retryError } = await supabase.rpc(
-          "retry_notification_delivery",
-          {
-            p_outbox_id: item.outbox_id,
-            p_worker_id: workerId,
-            p_http_status: null,
-            p_error: sanitized,
-            p_retryable: true,
-            p_invalidate_device: false,
-          },
-        );
-        if (retryError) {
-          throw new Error(
-            `Network failure update failed: ${retryError.message}`,
-          );
-        }
-        retried += 1;
-      }
-    }
-
-    return response(200, {
-      claimed,
-      delivered,
-      would_send: wouldSend,
-      retried,
-      failed,
-      dry_run: dryRun,
-    });
+    return response(200, summary);
   } catch (error) {
-    const message = error instanceof Error
-      ? error.message
-      : "Unexpected worker failure";
-    console.error("send-apns failed", { message });
+    const kind = error instanceof Error && error.name ? error.name : "Error";
+    console.error("send-apns failed", { kind });
     return response(500, { error: "worker_failed" });
   }
 }
