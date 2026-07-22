@@ -43,6 +43,9 @@ jobs:
           cache: npm
           cache-dependency-path: admin-web/package-lock.json
       - run: npm ci
+      - run: npm ls next sharp
+      - run: npm run security:image-guard
+      - run: npm run test:sharp
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
