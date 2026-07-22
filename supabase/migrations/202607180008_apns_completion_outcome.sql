@@ -1,5 +1,3 @@
-\set ON_ERROR_STOP on
-
 do $$
 declare
   v_function oid := to_regprocedure(
