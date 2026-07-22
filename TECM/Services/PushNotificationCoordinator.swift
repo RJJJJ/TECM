@@ -12,6 +12,36 @@ enum PushNotificationCleanupError: LocalizedError, Equatable {
     }
 }
 
+private enum RemoteDeactivationResult: Sendable {
+    case succeeded
+    case failed
+    case timedOut
+}
+
+private actor RemoteDeactivationRace {
+    private var result: RemoteDeactivationResult?
+    private var continuation: CheckedContinuation<RemoteDeactivationResult, Never>?
+
+    func waitForResult() async -> RemoteDeactivationResult {
+        if let result {
+            return result
+        }
+
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func resolve(_ result: RemoteDeactivationResult) {
+        guard self.result == nil else { return }
+        self.result = result
+        let continuation = continuation
+        self.continuation = nil
+        continuation?.resume(returning: result)
+    }
+}
+
+@MainActor
 final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     @Published private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
     @Published private(set) var unreadCount = 0
@@ -21,7 +51,9 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
 
     private let notificationService: NotificationServicing
     private let client: SupabaseClient
-    private let remoteDeactivationTimeoutNanoseconds: UInt64
+    private let remoteDeactivationTimeout: Duration
+    private let waitForRemoteDeactivationDeadline: @MainActor @Sendable (Duration) async -> Void
+    private let realtimeCleanupObserver: (() -> Void)?
     private var activeUserID: UUID?
     private var deviceToken: String?
     private var realtimeUserID: UUID?
@@ -38,11 +70,17 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
     init(
         notificationService: NotificationServicing,
         client: SupabaseClient,
-        remoteDeactivationTimeoutNanoseconds: UInt64 = 5_000_000_000
+        remoteDeactivationTimeout: Duration = .seconds(5),
+        waitForRemoteDeactivationDeadline: @escaping @MainActor @Sendable (Duration) async -> Void = { duration in
+            try? await ContinuousClock().sleep(for: duration)
+        },
+        realtimeCleanupObserver: (() -> Void)? = nil
     ) {
         self.notificationService = notificationService
         self.client = client
-        self.remoteDeactivationTimeoutNanoseconds = remoteDeactivationTimeoutNanoseconds
+        self.remoteDeactivationTimeout = remoteDeactivationTimeout
+        self.waitForRemoteDeactivationDeadline = waitForRemoteDeactivationDeadline
+        self.realtimeCleanupObserver = realtimeCleanupObserver
         super.init()
     }
 
@@ -196,24 +234,42 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
                 await client.removeChannel(channel)
             }
         }
+        realtimeCleanupObserver?()
     }
 
     private func deactivateRemoteInstallationWithTimeout() async throws {
         let notificationService = notificationService
         let installationID = Self.installationID
-        let timeoutNanoseconds = remoteDeactivationTimeoutNanoseconds
+        let timeout = remoteDeactivationTimeout
+        let waitForDeadline = waitForRemoteDeactivationDeadline
+        let race = RemoteDeactivationRace()
 
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
+        let remoteTask = Task { @MainActor [weak race] in
+            guard !Task.isCancelled else { return }
+            do {
                 try await notificationService.deactivatePushDevice(installationID: installationID)
+                await race?.resolve(.succeeded)
+            } catch {
+                await race?.resolve(.failed)
             }
-            group.addTask {
-                try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                throw PushNotificationCleanupError.remoteDeactivationFailed
-            }
+        }
+        let deadlineTask = Task { @MainActor [weak race] in
+            await waitForDeadline(timeout)
+            await race?.resolve(.timedOut)
+        }
 
-            defer { group.cancelAll() }
-            _ = try await group.next()
+        let result = await withTaskCancellationHandler {
+            await race.waitForResult()
+        } onCancel: {
+            Task {
+                await race.resolve(.failed)
+            }
+        }
+        remoteTask.cancel()
+        deadlineTask.cancel()
+
+        guard case .succeeded = result else {
+            throw PushNotificationCleanupError.remoteDeactivationFailed
         }
     }
 
