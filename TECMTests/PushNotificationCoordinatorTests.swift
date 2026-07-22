@@ -214,10 +214,17 @@ final class PushNotificationCoordinatorTests: XCTestCase {
         await fulfillment(of: [remoteGate.started, deadline.waitStarted], timeout: 1)
         cleanupTask.cancel()
         await fulfillment(of: [cleanupReturned], timeout: 1)
-        // Mutation-only teardown: release structured children after recording the failed bound.
+        await cleanupTask.value
+
+        XCTAssertTrue(remoteGate.isSuspended)
+        XCTAssertNil(coordinator.pendingRoute)
+        XCTAssertEqual(
+            coordinator.lastErrorMessage,
+            PushNotificationCleanupError.remoteDeactivationFailed.localizedDescription
+        )
+
         remoteGate.release()
         deadline.fire()
-        await cleanupTask.value
         await fulfillment(of: [remoteGate.finished], timeout: 1)
         await Task.yield()
     }
