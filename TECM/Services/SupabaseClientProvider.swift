@@ -8,7 +8,9 @@ enum SupabaseClientProvider {
             let config = try SupabaseConfig.load()
             return SupabaseClient(supabaseURL: config.url, supabaseKey: config.publishableKey)
         } catch {
-            assertionFailure(error.localizedDescription)
+            #if DEBUG
+            print("Supabase configuration unavailable; using the inert local fallback.")
+            #endif
             return SupabaseClient(
                 supabaseURL: URL(string: "https://invalid.supabase.co")!,
                 supabaseKey: "invalid-publishable-key"

@@ -22,6 +22,10 @@ struct ParentNotificationItem: Identifiable {
     let title: String
     let detail: String
     let isRead: Bool
+    let category: String?
+    let deepLink: String?
+    let entityType: String?
+    let entityID: UUID?
     let createdAt: Date
 
     var relativeTimeText: String {

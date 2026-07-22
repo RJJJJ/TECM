@@ -7,6 +7,7 @@ const sections: ReadonlyArray<readonly [string, string, readonly Role[]]> = [
   ['總覽', '/admin/dashboard', ['admin', 'staff', 'teacher']],
   ['學生', '/admin/students', ['admin', 'staff']],
   ['家長', '/admin/guardians', ['admin', 'staff']],
+  ['家長通知', '/admin/notifications', ['admin', 'staff']],
   ['導師', '/admin/teachers', ['admin', 'staff']],
   ['課程', '/admin/courses', ['admin', 'staff']],
   ['班別', '/admin/classes', ['admin', 'staff', 'teacher']],

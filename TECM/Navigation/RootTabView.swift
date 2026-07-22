@@ -1,9 +1,11 @@
+import Auth
 import SwiftUI
 import Combine
 
 struct RootTabView: View {
     @StateObject private var router = TabRouter()
     @EnvironmentObject private var authViewModel: AuthViewModel
+    @EnvironmentObject private var pushCoordinator: PushNotificationCoordinator
 
     var body: some View {
         TabView(selection: tabSelection) {
@@ -39,7 +41,7 @@ struct RootTabView: View {
             }
             .tag(AppTab.agent)
 
-            if authViewModel.currentRole == .teacher || authViewModel.currentRole == .admin {
+            if authViewModel.canAccessTeacherTools {
                 NavigationStack(path: $router.teacherPath) {
                     TeacherTodayClassView()
                         .navigationDestination(for: TeacherRoute.self) { route in
@@ -57,19 +59,45 @@ struct RootTabView: View {
                 .tag(AppTab.teacher)
             }
 
-            NavigationStack(path: $router.parentCenterPath) {
-                ParentCenterView()
+            if authViewModel.hasParentRole {
+                NavigationStack(path: $router.parentCenterPath) {
+                    ParentCenterView()
+                        .navigationDestination(for: ParentRoute.self) { route in
+                            switch route {
+                            case .notificationCenter(let focusID):
+                                NotificationCenterView(focusNotificationID: focusID)
+                            case .bookingDetail(let bookingID, let parentID):
+                                ParentBookingDetailView(bookingID: bookingID, parentID: parentID)
+                            case .operations:
+                                ParentOperationsView()
+                            }
+                        }
+                }
+                .tabItem {
+                    Label(AppTab.parentCenter.title, systemImage: AppTab.parentCenter.icon)
+                }
+                .badge(pushCoordinator.unreadCount)
+                .tag(AppTab.parentCenter)
             }
-            .tabItem {
-                Label(AppTab.parentCenter.title, systemImage: AppTab.parentCenter.icon)
-            }
-            .tag(AppTab.parentCenter)
         }
         .environmentObject(router)
         .tint(Theme.Colors.primary)
         .toolbarBackground(Theme.Colors.card, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
         .animation(.easeInOut(duration: 0.2), value: router.selectedTab)
+        .onReceive(pushCoordinator.$pendingRoute.compactMap { $0 }) { route in
+            Task { await navigate(to: route) }
+        }
+        .onChange(of: authViewModel.currentCapabilities) { capabilities in
+            if router.selectedTab == .parentCenter, !capabilities.hasParentRole {
+                router.select(.home)
+            } else if router.selectedTab == .teacher, !capabilities.canAccessTeacherTools {
+                router.select(.home)
+            }
+            if capabilities.hasParentRole, let route = pushCoordinator.pendingRoute {
+                Task { await navigate(to: route) }
+            }
+        }
     }
 
     private var tabSelection: Binding<AppTab> {
@@ -79,5 +107,34 @@ struct RootTabView: View {
                 router.select(tappedTab)
             }
         )
+    }
+
+    private func navigate(to route: AppDeepLinkRoute) async {
+        guard route.isReadyForParentNavigation(
+            hasParentRole: authViewModel.hasParentRole,
+            userID: authViewModel.currentUser?.id
+        ), let userID = authViewModel.currentUser?.id else { return }
+        defer { pushCoordinator.consumePendingRoute() }
+
+        router.select(.parentCenter)
+        switch route {
+        case .booking(let bookingID):
+            do {
+                let profile = try await ParentProfileService().fetchCurrentParentProfile(userID: userID)
+                router.parentCenterPath.append(
+                    ParentRoute.bookingDetail(bookingID: bookingID, parentID: profile.id)
+                )
+            } catch {
+                router.parentCenterPath.append(ParentRoute.notificationCenter(focusID: nil))
+            }
+        case .notification(let notificationID):
+            router.parentCenterPath.append(ParentRoute.notificationCenter(focusID: notificationID))
+        case .notificationCenter:
+            router.parentCenterPath.append(ParentRoute.notificationCenter(focusID: nil))
+        case .leaveRequest, .makeup, .payment, .classSession, .parentOperations:
+            router.parentCenterPath.append(ParentRoute.operations)
+        case .authCallback:
+            break
+        }
     }
 }

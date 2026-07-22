@@ -6,6 +6,7 @@ struct ParentCenterView: View {
     @StateObject private var viewModel = ParentCenterViewModel()
     @EnvironmentObject private var tabRouter: TabRouter
     @EnvironmentObject private var authViewModel: AuthViewModel
+    @EnvironmentObject private var pushCoordinator: PushNotificationCoordinator
 
     @State private var showSupportSuccess = false
     @State private var email = ""
@@ -53,6 +54,9 @@ struct ParentCenterView: View {
             Task {
                 await viewModel.load(userID: userID)
             }
+        }
+        .onChange(of: pushCoordinator.refreshSequence) { _ in
+            Task { await viewModel.load(userID: authViewModel.currentUser?.id) }
         }
     }
 
@@ -108,6 +112,15 @@ struct ParentCenterView: View {
             }
             .buttonStyle(PressableScaleStyle())
 
+            NavigationLink(value: ParentRoute.operations) {
+                QuickActionTile(
+                    title: "Parent operations",
+                    subtitle: "Classes, leave, makeups, credits, charges, and receipts",
+                    icon: "list.bullet.rectangle"
+                )
+            }
+            .buttonStyle(PressableScaleStyle())
+
             Button {
                 tabRouter.select(.agent)
             } label: {
@@ -120,6 +133,15 @@ struct ParentCenterView: View {
     private var notificationsSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             PremiumSectionHeader(title: "通知", subtitle: "僅顯示你的私人通知")
+
+            NavigationLink(destination: NotificationCenterView()) {
+                QuickActionTile(
+                    title: "通知中心",
+                    subtitle: pushCoordinator.unreadCount > 0 ? "\(pushCoordinator.unreadCount) 則未讀通知" : "查看所有通知",
+                    icon: "bell.fill"
+                )
+            }
+            .buttonStyle(PressableScaleStyle())
 
             if viewModel.notifications.isEmpty {
                 EmptyStateView(title: "目前沒有通知", message: "新預約或顧問更新時會出現在這裡。")
@@ -169,4 +191,5 @@ struct ParentCenterView: View {
     NavigationStack { ParentCenterView() }
         .environmentObject(TabRouter())
         .environmentObject(AuthViewModel())
+        .environmentObject(PushNotificationCoordinator())
 }

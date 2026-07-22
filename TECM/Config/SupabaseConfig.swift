@@ -19,17 +19,28 @@ struct SupabaseConfig {
     }
 
     static func load(from bundle: Bundle = .main) throws -> SupabaseConfig {
-        guard let urlString = bundle.object(forInfoDictionaryKey: "SUPABASE_URL") as? String,
+        try make(
+            urlString: bundle.object(forInfoDictionaryKey: "SUPABASE_URL") as? String,
+            publishableKey: bundle.object(forInfoDictionaryKey: "SUPABASE_PUBLISHABLE_KEY") as? String
+        )
+    }
+
+    static func make(urlString: String?, publishableKey: String?) throws -> SupabaseConfig {
+        guard let urlString,
               !urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ConfigError.missingValue("SUPABASE_URL")
         }
 
-        guard let publishableKey = bundle.object(forInfoDictionaryKey: "SUPABASE_PUBLISHABLE_KEY") as? String,
+        guard let publishableKey,
               !publishableKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ConfigError.missingValue("SUPABASE_PUBLISHABLE_KEY")
         }
 
-        guard let url = URL(string: urlString) else {
+        guard let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http",
+              let host = url.host,
+              !host.isEmpty else {
             throw ConfigError.invalidURL(urlString)
         }
 

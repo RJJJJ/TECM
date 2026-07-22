@@ -280,6 +280,10 @@ struct NotificationDTO: Decodable {
     let title: String
     let detail: String?
     let isRead: Bool
+    let category: String?
+    let deepLink: String?
+    let entityType: String?
+    let entityID: UUID?
     let createdAt: Date
 
     enum CodingKeys: String, CodingKey {
@@ -287,6 +291,10 @@ struct NotificationDTO: Decodable {
         case title
         case detail
         case isRead = "is_read"
+        case category
+        case deepLink = "deep_link"
+        case entityType = "entity_type"
+        case entityID = "entity_id"
         case createdAt = "created_at"
     }
 
@@ -296,8 +304,24 @@ struct NotificationDTO: Decodable {
             title: title,
             detail: detail ?? "",
             isRead: isRead,
+            category: category,
+            deepLink: deepLink,
+            entityType: entityType,
+            entityID: entityID,
             createdAt: createdAt
         )
+    }
+}
+
+struct OrganizationMembershipDTO: Decodable {
+    let organizationID: UUID
+    let role: String
+    let status: String
+
+    enum CodingKeys: String, CodingKey {
+        case organizationID = "organization_id"
+        case role
+        case status
     }
 }
 
