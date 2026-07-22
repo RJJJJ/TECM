@@ -239,11 +239,13 @@ select pg_temp.make_011_outbox('dry-cancelled');
 create temporary table tmp_011_dry_cancelled as
 select * from public.claim_notification_outbox('011-worker-dry-cancelled',1,60);
 reset role;
-set session_replication_role=replica;
-update public.push_devices
-set is_active=false,invalidated_at=statement_timestamp()
-where id='a1100000-0000-4000-8000-000000000001';
-set session_replication_role=origin;
+alter table public.push_devices disable trigger trg_push_devices_terminalize_generation;
+update public.push_devices d
+set registration_generation=d.registration_generation+1,
+    updated_at=statement_timestamp()
+from tmp_011_dry_cancelled c
+where d.id=c.device_id;
+alter table public.push_devices enable trigger trg_push_devices_terminalize_generation;
 set role service_role;
 select set_config('request.jwt.claims','{"role":"service_role"}',false);
 do $$
