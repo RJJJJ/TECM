@@ -22,6 +22,8 @@ struct AuthService: AuthServicing {
     }
 
     func signOut() async throws {
+        // Pinned supabase-swift 2.43.1 removes the default global session locally
+        // before attempting its remote logout request. Preserve the default scope.
         try await client.auth.signOut()
     }
 

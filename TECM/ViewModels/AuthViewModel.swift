@@ -13,6 +13,11 @@ final class AuthViewModel: ObservableObject {
     private let authService: AuthServicing
     private let userRoleService: UserRoleServicing
     private var signOutCleanup: (() async throws -> Void)?
+    private var sensitiveStateCleanup: (() -> Void)?
+    private var isSigningOut = false
+
+    static let incompleteRemoteLogoutMessage =
+        "You are signed out on this device. Some remote cleanup could not be completed."
 
     var currentRole: UserAppRole { currentCapabilities.primaryRole }
     var hasParentRole: Bool { currentCapabilities.hasParentRole }
@@ -20,12 +25,15 @@ final class AuthViewModel: ObservableObject {
 
     init(
         authService: AuthServicing = AuthService(),
-        userRoleService: UserRoleServicing = UserRoleService()
+        userRoleService: UserRoleServicing = UserRoleService(),
+        automaticallyRestoreSession: Bool = true
     ) {
         self.authService = authService
         self.userRoleService = userRoleService
-        Task {
-            await restoreSession()
+        if automaticallyRestoreSession {
+            Task {
+                await restoreSession()
+            }
         }
     }
 
@@ -45,19 +53,39 @@ final class AuthViewModel: ObservableObject {
     }
 
     func signOut() async {
+        guard !isSigningOut else { return }
+        guard currentUser != nil || currentCapabilities != .guest else {
+            sensitiveStateCleanup?()
+            return
+        }
+        isSigningOut = true
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            isSigningOut = false
+        }
+
+        var remoteCleanupIncomplete = false
+        if let signOutCleanup {
+            do {
+                try await signOutCleanup()
+            } catch {
+                remoteCleanupIncomplete = true
+            }
+        }
 
         do {
-            if let signOutCleanup {
-                try await signOutCleanup()
-            }
             try await authService.signOut()
-            currentUser = nil
-            currentCapabilities = .guest
         } catch {
-            errorMessage = error.localizedDescription
+            remoteCleanupIncomplete = true
+        }
+
+        currentUser = nil
+        currentCapabilities = .guest
+        sensitiveStateCleanup?()
+        if remoteCleanupIncomplete {
+            errorMessage = Self.incompleteRemoteLogoutMessage
         }
     }
 
@@ -79,6 +107,10 @@ final class AuthViewModel: ObservableObject {
 
     func configureSignOutCleanup(_ cleanup: @escaping () async throws -> Void) {
         signOutCleanup = cleanup
+    }
+
+    func configureSensitiveStateCleanup(_ cleanup: @escaping () -> Void) {
+        sensitiveStateCleanup = cleanup
     }
 
     func restoreSession() async {

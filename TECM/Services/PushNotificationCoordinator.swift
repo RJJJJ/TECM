@@ -4,6 +4,14 @@ import Supabase
 import UIKit
 import UserNotifications
 
+enum PushNotificationCleanupError: LocalizedError, Equatable {
+    case remoteDeactivationFailed
+
+    var errorDescription: String? {
+        "Push notification cleanup could not be completed."
+    }
+}
+
 final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     @Published private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
     @Published private(set) var unreadCount = 0
@@ -13,6 +21,7 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
 
     private let notificationService: NotificationServicing
     private let client: SupabaseClient
+    private let remoteDeactivationTimeoutNanoseconds: UInt64
     private var activeUserID: UUID?
     private var deviceToken: String?
     private var realtimeUserID: UUID?
@@ -26,9 +35,14 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
         self.init(notificationService: NotificationService(client: client), client: client)
     }
 
-    init(notificationService: NotificationServicing, client: SupabaseClient) {
+    init(
+        notificationService: NotificationServicing,
+        client: SupabaseClient,
+        remoteDeactivationTimeoutNanoseconds: UInt64 = 5_000_000_000
+    ) {
         self.notificationService = notificationService
         self.client = client
+        self.remoteDeactivationTimeoutNanoseconds = remoteDeactivationTimeoutNanoseconds
         super.init()
     }
 
@@ -142,19 +156,65 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
     }
 
     func deactivateCurrentInstallation() async throws {
+        await clearLocalNotificationState()
+
+        var cleanupError: PushNotificationCleanupError?
         do {
-            try await notificationService.deactivatePushDevice(installationID: Self.installationID)
+            try await deactivateRemoteInstallationWithTimeout()
         } catch {
-            lastErrorMessage = error.localizedDescription
-            throw error
+            cleanupError = .remoteDeactivationFailed
         }
+        lastErrorMessage = cleanupError?.localizedDescription
+
+        if let cleanupError {
+            throw cleanupError
+        }
+    }
+
+    private func clearLocalNotificationState() async {
         UIApplication.shared.unregisterForRemoteNotifications()
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
         activeUserID = nil
-        await stopRealtimeSubscription()
+        deviceToken = nil
+        pendingRoute = nil
+        stopRealtimeSubscriptionForLogout()
         unreadCount = 0
         await setApplicationBadge(0)
+    }
+
+    private func stopRealtimeSubscriptionForLogout() {
+        realtimeObservation?.cancel()
+        realtimeObservation = nil
+        realtimeUserID = nil
+        let channel = realtimeChannel
+        realtimeChannel = nil
+
+        if let channel {
+            let client = client
+            Task {
+                await client.removeChannel(channel)
+            }
+        }
+    }
+
+    private func deactivateRemoteInstallationWithTimeout() async throws {
+        let notificationService = notificationService
+        let installationID = Self.installationID
+        let timeoutNanoseconds = remoteDeactivationTimeoutNanoseconds
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await notificationService.deactivatePushDevice(installationID: installationID)
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                throw PushNotificationCleanupError.remoteDeactivationFailed
+            }
+
+            defer { group.cancelAll() }
+            _ = try await group.next()
+        }
     }
 
     func handle(url: URL) {

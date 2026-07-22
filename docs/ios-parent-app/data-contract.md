@@ -47,7 +47,7 @@ mark_all_notifications_read()
 get_unread_notification_count() -> bigint
 ```
 
-device registration 會驗證登入 parent 的 active account link、environment、bundle/token format，支援同帳號多裝置和 token rollover；登出只停用本 installation。若 server deactivation 失敗，App 保留登入 session 並顯示錯誤，禁止在 token 仍 active 時完成登出；成功後同時 unregister remote notifications 並清除本機通知。
+device registration 會驗證登入 parent 的 active account link、environment、bundle/token format，支援同帳號多裝置和 token rollover；登出會先嘗試停用本 installation，再一律清除本機 Supabase session、authenticated UI state、Realtime subscription、pending protected route 和敏感 cache。若 server deactivation 失敗，App 以不含 token 或個人資料的 generic notice 記錄 remote cleanup 未完成，但不會把使用者困在已登入狀態。APNs lock-screen payload 維持 generic copy，因此 stale remote registration 不會顯示學生姓名、財務內容或其他敏感正文；下一個帳號登入同一 installation 時會重新註冊目前 device generation。
 
 ## Worker RPC
 

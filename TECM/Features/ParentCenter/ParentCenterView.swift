@@ -45,6 +45,9 @@ struct ParentCenterView: View {
             actionButtons
         }
         .task {
+            authViewModel.configureSensitiveStateCleanup { [weak viewModel] in
+                viewModel?.clear()
+            }
             await viewModel.load(userID: authViewModel.currentUser?.id)
         }
         .refreshable {
@@ -173,7 +176,6 @@ struct ParentCenterView: View {
                 SecondaryCTAButton(title: "登出") {
                     Task {
                         await authViewModel.signOut()
-                        viewModel.clear()
                     }
                 }
             } else {

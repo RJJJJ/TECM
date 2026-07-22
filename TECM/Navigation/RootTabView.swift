@@ -2,6 +2,22 @@ import Auth
 import SwiftUI
 import Combine
 
+@MainActor
+func resolveParentBookingRoute(
+    bookingID: UUID,
+    loadParentID: () async throws -> UUID,
+    isSessionCurrent: () -> Bool
+) async -> ParentRoute? {
+    do {
+        let parentID = try await loadParentID()
+        guard isSessionCurrent() else { return nil }
+        return .bookingDetail(bookingID: bookingID, parentID: parentID)
+    } catch {
+        guard isSessionCurrent() else { return nil }
+        return .notificationCenter(focusID: nil)
+    }
+}
+
 struct RootTabView: View {
     @StateObject private var router = TabRouter()
     @EnvironmentObject private var authViewModel: AuthViewModel
@@ -89,9 +105,13 @@ struct RootTabView: View {
             Task { await navigate(to: route) }
         }
         .onChange(of: authViewModel.currentCapabilities) { capabilities in
-            if router.selectedTab == .parentCenter, !capabilities.hasParentRole {
-                router.select(.home)
-            } else if router.selectedTab == .teacher, !capabilities.canAccessTeacherTools {
+            if !capabilities.hasParentRole {
+                router.resetParentFlow()
+                if router.selectedTab == .parentCenter {
+                    router.select(.home)
+                }
+            }
+            if router.selectedTab == .teacher, !capabilities.canAccessTeacherTools {
                 router.select(.home)
             }
             if capabilities.hasParentRole, let route = pushCoordinator.pendingRoute {
@@ -119,13 +139,16 @@ struct RootTabView: View {
         router.select(.parentCenter)
         switch route {
         case .booking(let bookingID):
-            do {
-                let profile = try await ParentProfileService().fetchCurrentParentProfile(userID: userID)
-                router.parentCenterPath.append(
-                    ParentRoute.bookingDetail(bookingID: bookingID, parentID: profile.id)
-                )
-            } catch {
-                router.parentCenterPath.append(ParentRoute.notificationCenter(focusID: nil))
+            if let destination = await resolveParentBookingRoute(
+                bookingID: bookingID,
+                loadParentID: {
+                    try await ParentProfileService().fetchCurrentParentProfile(userID: userID).id
+                },
+                isSessionCurrent: {
+                    authViewModel.currentUser?.id == userID && authViewModel.hasParentRole
+                }
+            ) {
+                router.parentCenterPath.append(destination)
             }
         case .notification(let notificationID):
             router.parentCenterPath.append(ParentRoute.notificationCenter(focusID: notificationID))

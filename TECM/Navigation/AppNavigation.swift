@@ -68,6 +68,10 @@ final class TabRouter: ObservableObject {
         teacherPath = NavigationPath()
     }
 
+    func resetParentFlow() {
+        parentCenterPath = NavigationPath()
+    }
+
     private func resetPath(for tab: AppTab) {
         switch tab {
         case .home:
