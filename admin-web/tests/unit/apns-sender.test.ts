@@ -152,6 +152,7 @@ function workerConfig(overrides: Partial<Parameters<typeof runApnsOutboxWorker>[
 
 function makeDb(claims: ClaimedNotification[], options: {
   completeFailures?: number;
+  completeOutcome?: string | null;
   beginFailure?: string;
   uncertaintyFailure?: string;
   retryRejectsRequestId?: boolean;
@@ -178,7 +179,9 @@ function makeDb(claims: ClaimedNotification[], options: {
           completeFailures -= 1;
           return fail<T>('lease unavailable');
         }
-        return ok(null as T);
+        return ok((Object.hasOwn(options, 'completeOutcome')
+          ? options.completeOutcome
+          : args.p_delivery_status) as T);
       }
       if (
         name === 'retry_notification_delivery' &&
@@ -286,6 +289,62 @@ test('accepted APNs response completes delivery with the provider request id', a
   assert.equal(complete.args.p_provider_request_id, 'apple-request-id');
   assert.equal(complete.args.p_delivery_status, 'delivered');
 });
+
+for (const outcome of ['expired', 'cancelled'] as const) {
+  test(`accepted APNs completion outcome ${outcome} is not counted as delivered`, async () => {
+    const { db } = makeDb([{ ...item }], { completeOutcome: outcome });
+    const summary = await runApnsOutboxWorker({
+      db,
+      async createProviderToken() {
+        return 'provider-token';
+      },
+      async send() {
+        return classifyApnsResponse(200, null, 'apple-request-id');
+      }
+    }, workerConfig());
+
+    assert.equal(summary.delivered, 0);
+    assert.equal(summary[outcome], 1);
+  });
+}
+
+for (const outcome of ['expired', 'cancelled'] as const) {
+  test(`dry-run completion outcome ${outcome} is not counted as would_send`, async () => {
+    const { db } = makeDb([{ ...item }], { completeOutcome: outcome });
+    const summary = await runApnsOutboxWorker({
+      db,
+      async createProviderToken() {
+        return 'provider-token';
+      },
+      async send() {
+        throw new Error('dry run must not send');
+      }
+    }, workerConfig({ dryRun: true }));
+
+    assert.equal(summary.would_send, 0);
+    assert.equal(summary[outcome], 1);
+  });
+}
+
+for (const outcome of [null, 'unexpected'] as const) {
+  test(`invalid completion outcome ${String(outcome)} never defaults to delivered`, async () => {
+    const { db } = makeDb([{ ...item }], { completeOutcome: outcome });
+    const summary = await runApnsOutboxWorker({
+      db,
+      async createProviderToken() {
+        return 'provider-token';
+      },
+      async send() {
+        return classifyApnsResponse(200, null, 'apple-request-id');
+      },
+      async sleep() {}
+    }, workerConfig({ completionRetries: 1 }));
+
+    assert.equal(summary.delivered, 0);
+    assert.equal(summary.uncertain, 1);
+    assert.equal(summary.stop_reason, 'completion_exhausted');
+  });
+}
 
 test('accepted completion retries briefly and succeeds without retrying the send transition', async () => {
   const { db, calls } = makeDb([{ ...item }], { completeFailures: 2 });

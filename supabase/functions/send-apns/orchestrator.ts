@@ -42,6 +42,8 @@ export type ApnsWorkerSummary = {
   claimed: number;
   delivered: number;
   would_send: number;
+  expired: number;
+  cancelled: number;
   uncertain: number;
   retried: number;
   failed: number;
@@ -57,6 +59,14 @@ const DEFAULT_COMPLETION_RETRIES = 3;
 const DEFAULT_COMPLETION_RETRY_DELAY_MS = 50;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const COMPLETION_OUTCOMES = new Set([
+  "delivered",
+  "would_send",
+  "expired",
+  "cancelled",
+]);
+
+type CompletionOutcome = "delivered" | "would_send" | "expired" | "cancelled";
 
 function rpcMessage(operation: string, message: string) {
   return `${operation} failed: ${message}`;
@@ -94,14 +104,32 @@ async function completeWithBoundedRetries(
 ) {
   let lastMessage = "unknown RPC error";
   for (let attempt = 1; attempt <= config.completionRetries; attempt += 1) {
-    const result = await deps.db.rpc("complete_notification_delivery", args);
-    if (!result.error) return true;
-    lastMessage = resultError(result);
+    const result = await deps.db.rpc<unknown>(
+      "complete_notification_delivery",
+      args,
+    );
+    if (!result.error) {
+      if (
+        typeof result.data === "string" && COMPLETION_OUTCOMES.has(result.data)
+      ) {
+        return result.data as CompletionOutcome;
+      }
+      lastMessage = "invalid completion outcome";
+    } else {
+      lastMessage = resultError(result);
+    }
     if (attempt < config.completionRetries) {
       await (deps.sleep ?? defaultSleep)(config.completionRetryDelayMs);
     }
   }
   throw new Error(rpcMessage("Delivery completion", lastMessage));
+}
+
+function recordCompletionOutcome(
+  summary: ApnsWorkerSummary,
+  outcome: CompletionOutcome,
+) {
+  summary[outcome] += 1;
 }
 
 function defaultSleep(milliseconds: number) {
@@ -238,6 +266,8 @@ export async function runApnsOutboxWorker(
     claimed: 0,
     delivered: 0,
     would_send: 0,
+    expired: 0,
+    cancelled: 0,
     uncertain: 0,
     retried: 0,
     failed: 0,
@@ -286,7 +316,7 @@ export async function runApnsOutboxWorker(
     }
 
     if (config.dryRun) {
-      await completeWithBoundedRetries(
+      const outcome = await completeWithBoundedRetries(
         deps,
         {
           workerId: config.workerId,
@@ -301,7 +331,7 @@ export async function runApnsOutboxWorker(
           p_delivery_status: "would_send",
         },
       );
-      summary.would_send += 1;
+      recordCompletionOutcome(summary, outcome);
       continue;
     }
 
@@ -329,7 +359,7 @@ export async function runApnsOutboxWorker(
 
     if (result.failureClass === "accepted") {
       try {
-        await completeWithBoundedRetries(
+        const outcome = await completeWithBoundedRetries(
           deps,
           {
             workerId: config.workerId,
@@ -344,6 +374,7 @@ export async function runApnsOutboxWorker(
             p_delivery_status: "delivered",
           },
         );
+        recordCompletionOutcome(summary, outcome);
       } catch {
         try {
           await markDeliveryUncertain(
@@ -361,7 +392,6 @@ export async function runApnsOutboxWorker(
         summary.stop_reason = "completion_exhausted";
         break;
       }
-      summary.delivered += 1;
       continue;
     }
 

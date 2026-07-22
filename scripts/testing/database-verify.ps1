@@ -60,6 +60,8 @@ try {
     '/workspace/supabase/migrations/202607180006_apns_outbox_reliability.sql',
     '/workspace/supabase/migrations/202607180007_apns_dispatch_ambiguity.sql',
     '/workspace/supabase/migrations/202607180007_apns_dispatch_ambiguity.sql',
+    '/workspace/supabase/migrations/202607180008_apns_completion_outcome.sql',
+    '/workspace/supabase/migrations/202607180008_apns_completion_outcome.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
     '/workspace/supabase/tests/002_rls_tenant_isolation.sql',
     '/workspace/supabase/tests/003_attendance_leave_makeup.sql',
@@ -69,7 +71,8 @@ try {
     '/workspace/supabase/tests/007_parent_notifications.sql',
     '/workspace/supabase/tests/008_foundation_security.sql',
     '/workspace/supabase/tests/009_apns_outbox_reliability.sql',
-    '/workspace/supabase/tests/010_apns_dispatch_ambiguity.sql'
+    '/workspace/supabase/tests/010_apns_dispatch_ambiguity.sql',
+    '/workspace/supabase/tests/011_apns_completion_outcome.sql'
   )
 
   foreach ($file in $files) {
@@ -279,7 +282,7 @@ try {
     throw 'Blocked migration partially applied mutable DDL before preflight.'
   }
 
-  Write-Host '[PASS] repeatable migrations, negative preflight, seed, RLS, ten SQL suites, parent races, bounded outbox claim race and dispatch-boundary race'
+  Write-Host '[PASS] repeatable migrations, negative preflight, seed, RLS, eleven SQL suites, parent races, bounded outbox claim race and dispatch-boundary race'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity
