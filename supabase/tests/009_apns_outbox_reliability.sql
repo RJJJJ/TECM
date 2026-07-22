@@ -363,12 +363,20 @@ do $$ declare v_outbox uuid; begin
       where id=v_outbox
         and status='cancelled'
         and delivered_at is null
-        and provider_response is null) then
-    raise exception 'case 14: stale generation completion did not cancel without delivery evidence';
+        and provider_response @> jsonb_build_object(
+          'provider','apns','provider_request_id','apns-009-stale','http_status',200
+        )) then
+    raise exception 'case 14: stale generation completion did not retain cancellation evidence';
   end if;
-  if exists(select 1 from public.notification_delivery_attempts
-      where outbox_id=v_outbox and provider_request_id='apns-009-stale') then
-    raise exception 'case 14: stale generation completion wrote delivery attempt evidence';
+  if not exists(select 1 from public.notification_delivery_attempts
+      where outbox_id=v_outbox
+        and provider_request_id='apns-009-stale'
+        and http_status=200
+        and result='cancelled'
+        and provider_response @> jsonb_build_object(
+          'provider','apns','provider_request_id','apns-009-stale','http_status',200
+        )) then
+    raise exception 'case 14: stale generation completion did not write a cancelled attempt';
   end if;
 end $$;
 reset role;
