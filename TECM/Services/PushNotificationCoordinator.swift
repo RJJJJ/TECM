@@ -242,34 +242,18 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
         let installationID = Self.installationID
         let timeout = remoteDeactivationTimeout
         let waitForDeadline = waitForRemoteDeactivationDeadline
-        let race = RemoteDeactivationRace()
 
-        let remoteTask = Task { @MainActor [weak race] in
-            guard !Task.isCancelled else { return }
-            do {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
                 try await notificationService.deactivatePushDevice(installationID: installationID)
-                await race?.resolve(.succeeded)
-            } catch {
-                await race?.resolve(.failed)
             }
-        }
-        let deadlineTask = Task { @MainActor [weak race] in
-            await waitForDeadline(timeout)
-            await race?.resolve(.timedOut)
-        }
-
-        let result = await withTaskCancellationHandler {
-            await race.waitForResult()
-        } onCancel: {
-            Task {
-                await race.resolve(.failed)
+            group.addTask {
+                await waitForDeadline(timeout)
+                throw PushNotificationCleanupError.remoteDeactivationFailed
             }
-        }
-        remoteTask.cancel()
-        deadlineTask.cancel()
 
-        guard case .succeeded = result else {
-            throw PushNotificationCleanupError.remoteDeactivationFailed
+            defer { group.cancelAll() }
+            _ = try await group.next()
         }
     }
 
