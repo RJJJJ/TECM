@@ -42,9 +42,7 @@ enum AppTab: Int, CaseIterable {
         if capabilities.canAccessTeacherTools {
             tabs.append(.teacher)
         }
-        if capabilities.hasParentRole {
-            tabs.append(.parentCenter)
-        }
+        tabs.append(.parentCenter)
         return tabs
     }
 }
@@ -86,9 +84,6 @@ final class TabRouter: ObservableObject {
     func reconcileCapabilities(_ capabilities: UserRoleCapabilities) {
         if !capabilities.hasParentRole {
             resetParentFlow()
-            if selectedTab == .parentCenter {
-                select(.home)
-            }
         }
         if selectedTab == .teacher, !capabilities.canAccessTeacherTools {
             select(.home)
