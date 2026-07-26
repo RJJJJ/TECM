@@ -36,6 +36,15 @@ enum AppTab: Int, CaseIterable {
         case .parentCenter: return "person.crop.circle.fill"
         }
     }
+
+    static func visibleTabs(for capabilities: UserRoleCapabilities) -> [AppTab] {
+        var tabs: [AppTab] = [.home, .courses, .booking, .agent]
+        if capabilities.canAccessTeacherTools {
+            tabs.append(.teacher)
+        }
+        tabs.append(.parentCenter)
+        return tabs
+    }
 }
 
 @MainActor
@@ -70,6 +79,15 @@ final class TabRouter: ObservableObject {
 
     func resetParentFlow() {
         parentCenterPath = NavigationPath()
+    }
+
+    func reconcileCapabilities(_ capabilities: UserRoleCapabilities) {
+        if !capabilities.hasParentRole {
+            resetParentFlow()
+        }
+        if selectedTab == .teacher, !capabilities.canAccessTeacherTools {
+            select(.home)
+        }
     }
 
     private func resetPath(for tab: AppTab) {

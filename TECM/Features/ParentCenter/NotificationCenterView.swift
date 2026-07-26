@@ -13,6 +13,7 @@ final class NotificationCenterViewModel: ObservableObject {
     private let parentProfileService: ParentProfileServicing
     private let notificationService: NotificationServicing
     private var parentID: UUID?
+    private var loadGeneration = 0
 
     init(
         parentProfileService: ParentProfileServicing = ParentProfileService(),
@@ -22,21 +23,30 @@ final class NotificationCenterViewModel: ObservableObject {
         self.notificationService = notificationService
     }
 
-    func load(userID: UUID?) async {
-        guard let userID else {
-            notifications = []
-            parentID = nil
+    func load(userID: UUID?, hasParentRole: Bool) async {
+        loadGeneration += 1
+        let generation = loadGeneration
+        clearContent()
+
+        guard let userID, hasParentRole else {
             return
         }
 
         isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
+        defer {
+            if loadGeneration == generation {
+                isLoading = false
+            }
+        }
         do {
             let profile = try await parentProfileService.fetchCurrentParentProfile(userID: userID)
+            guard loadGeneration == generation else { return }
             parentID = profile.id
-            notifications = try await notificationService.fetchMyNotifications(parentID: profile.id)
+            let loadedNotifications = try await notificationService.fetchMyNotifications(parentID: profile.id)
+            guard loadGeneration == generation else { return }
+            notifications = loadedNotifications
         } catch {
+            guard loadGeneration == generation else { return }
             notifications = []
             errorMessage = error.localizedDescription
         }
@@ -68,6 +78,13 @@ final class NotificationCenterViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func clearContent() {
+        notifications = []
+        parentID = nil
+        isLoading = false
+        errorMessage = nil
     }
 }
 
@@ -121,6 +138,9 @@ struct NotificationCenterView: View {
         .task { await load() }
         .refreshable { await load() }
         .onChange(of: authViewModel.currentUser?.id) { _ in
+            Task { await load() }
+        }
+        .onChange(of: authViewModel.currentCapabilities) { _ in
             Task { await load() }
         }
         .onChange(of: pushCoordinator.refreshSequence) { _ in
@@ -211,7 +231,13 @@ struct NotificationCenterView: View {
     }
 
     private func load() async {
-        await viewModel.load(userID: authViewModel.currentUser?.id)
-        await pushCoordinator.refreshUnreadCount()
+        let hasParentRole = authViewModel.hasParentRole
+        await viewModel.load(
+            userID: authViewModel.currentUser?.id,
+            hasParentRole: hasParentRole
+        )
+        if hasParentRole {
+            await pushCoordinator.refreshUnreadCount()
+        }
     }
 }

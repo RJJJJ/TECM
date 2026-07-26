@@ -53,7 +53,28 @@ final class AppDeepLinkTests: XCTestCase {
 
         XCTAssertFalse(route.isReadyForParentNavigation(hasParentRole: false, userID: nil))
         XCTAssertFalse(route.isReadyForParentNavigation(hasParentRole: true, userID: nil))
+        XCTAssertFalse(route.isReadyForParentNavigation(hasParentRole: false, userID: UUID()))
         XCTAssertTrue(route.isReadyForParentNavigation(hasParentRole: true, userID: UUID()))
+    }
+
+    func testProtectedParentDeepLinksRejectGuestAndNonParentButAllowParent() {
+        let userID = UUID()
+        let routes: [AppDeepLinkRoute] = [
+            .notification(UUID()),
+            .booking(UUID()),
+            .leaveRequest(UUID()),
+            .makeup(UUID()),
+            .payment(UUID()),
+            .classSession(UUID()),
+            .parentOperations,
+            .notificationCenter
+        ]
+
+        for route in routes {
+            XCTAssertFalse(route.isReadyForParentNavigation(hasParentRole: false, userID: nil))
+            XCTAssertFalse(route.isReadyForParentNavigation(hasParentRole: false, userID: userID))
+            XCTAssertTrue(route.isReadyForParentNavigation(hasParentRole: true, userID: userID))
+        }
     }
 
     @MainActor
