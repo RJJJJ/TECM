@@ -70,10 +70,10 @@ final class ParentCenterViewModel: ObservableObject {
     func load(userID: UUID?, hasParentRole: Bool) async {
         loadGeneration &+= 1
         let generation = loadGeneration
-        requestedUserID = hasParentRole ? userID : nil
+        requestedUserID = userID
         resetContent()
 
-        guard let userID, hasParentRole else {
+        guard let userID else {
             return
         }
 
