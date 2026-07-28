@@ -163,7 +163,7 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
 
         do {
             let safetyState = try logoutSafetyFenceStorage.read(projectKey: projectKey)
-            if safetyState == .loggedOut {
+            if safetyState == .loggedOut && projectKey.isEmpty {
                 writePolicy = .invalidated
                 try? sessionStorage.remove(key: storageKey)
                 return
