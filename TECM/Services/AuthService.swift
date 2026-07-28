@@ -253,8 +253,11 @@ struct AuthService: AuthServicing {
     }
 
     func invalidateLocalSession() throws {
-        client.auth.stopAutoRefresh()
         try sessionPersistence.invalidate()
+        let auth = client.auth
+        Task {
+            await auth.stopAutoRefresh()
+        }
     }
 
     func restoreSession() async throws -> User? {
