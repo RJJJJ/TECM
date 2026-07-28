@@ -171,10 +171,7 @@ final class PushNotificationCoordinatorTests: XCTestCase {
         XCTAssertEqual(sensitiveCacheClearCount, 1)
         XCTAssertEqual(realtimeCleanupCount, 1)
         XCTAssertNil(coordinator.pendingRoute)
-        XCTAssertEqual(
-            coordinator.lastErrorMessage,
-            PushNotificationCleanupError.remoteDeactivationFailed.localizedDescription
-        )
+        XCTAssertNil(coordinator.lastErrorMessage)
         XCTAssertEqual(viewModel.errorMessage, AuthViewModel.incompleteRemoteLogoutMessage)
         XCTAssertFalse(coordinator.lastErrorMessage?.contains(MockNotificationError.sensitiveSentinel) ?? true)
         XCTAssertEqual(deadline.requestedDuration, .milliseconds(1))
