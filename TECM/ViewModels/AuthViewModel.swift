@@ -116,15 +116,6 @@ final class AuthViewModel: ObservableObject {
             remoteCleanupIncomplete = true
         }
 
-        if let remoteAuthOperation = signOutPreparation.remoteOperation {
-            let result = await runBoundedRemoteAuthSignOut(remoteAuthOperation)
-            if case .succeeded = result {
-                // Mutation: remote cleanup completes before the local privacy boundary.
-            } else {
-                remoteCleanupIncomplete = true
-            }
-        }
-
         currentUser = nil
         currentCapabilities = .guest
         sensitiveStateCleanup?()
@@ -154,6 +145,14 @@ final class AuthViewModel: ObservableObject {
             }
             : nil
 
+        if localSessionInvalidated, let remoteAuthOperation = signOutPreparation.remoteOperation {
+            let result = await runBoundedRemoteAuthSignOut(remoteAuthOperation)
+            if case .succeeded = result {
+                // The local privacy boundary is already complete.
+            } else {
+                remoteCleanupIncomplete = true
+            }
+        }
         if await appCleanupTask?.value == true {
             remoteCleanupIncomplete = true
         }
