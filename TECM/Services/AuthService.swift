@@ -238,9 +238,11 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let subject = object["sub"] as? String,
               let subjectID = UUID(uuidString: subject),
-              subjectID == session.user.id,
-              let sessionID = (object["session_id"] as? String) ?? "legacy-session",
-              !sessionID.isEmpty else {
+              subjectID == session.user.id else {
+            throw AuthSessionPersistenceError.invalidSessionLineage
+        }
+        let sessionID = (object["session_id"] as? String) ?? "legacy-session"
+        guard !sessionID.isEmpty else {
             throw AuthSessionPersistenceError.invalidSessionLineage
         }
         return SessionLineage(userID: subjectID, sessionID: sessionID)
