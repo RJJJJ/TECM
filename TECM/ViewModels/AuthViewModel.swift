@@ -267,6 +267,8 @@ final class AuthViewModel: ObservableObject {
             await race.waitForResult()
         } onCancel: {
             Task {
+                // MUTATION M9: make cancellation wait behind non-cooperative cleanup.
+                try? await ContinuousClock().sleep(for: .seconds(2))
                 await race.resolve(.failed)
             }
         }

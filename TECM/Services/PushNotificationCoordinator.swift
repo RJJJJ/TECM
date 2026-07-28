@@ -266,11 +266,15 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
             return AppSignOutCleanupPreparation(remoteOperation: nil)
         }
         let capturedContext = context
-        let remoteDeactivation = RemoteAuthSignOutOperation {
+        let remoteDeactivation = RemoteAuthSignOutOperation { [weak self] in
             try await notificationService.deactivatePushDevice(
                 installationID: installationID,
                 accessToken: capturedContext?.accessToken
             )
+            // MUTATION M9: let old remote work regain global coordinator authority.
+            guard let self else { return }
+            let lateGeneration = await self.beginStateOperation()
+            await self.clearLocalNotificationState(generation: lateGeneration)
         }
         return AppSignOutCleanupPreparation(
             remoteOperation: RemoteAuthSignOutOperation {
