@@ -6,10 +6,13 @@ import SwiftUI
 final class ParentOperationsViewModel: ObservableObject {
     @Published private(set) var snapshot: ParentOperationsSnapshot?
     @Published private(set) var isLoading = false
+    @Published private(set) var isSubmittingLeave = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var confirmationMessage: String?
 
     private let service: ParentOperationsServicing
+    private var pendingLeaveOperation: ParentLeaveOperation?
+    private var completedLeavePayloads: Set<ParentLeaveOperation.Payload> = []
 
     init(service: ParentOperationsServicing = ParentOperationsService()) {
         self.service = service
@@ -27,12 +30,34 @@ final class ParentOperationsViewModel: ObservableObject {
     }
 
     func submitLeave(studentID: UUID, sessionID: UUID, reason: String) async -> Bool {
+        guard !isSubmittingLeave else { return false }
+
+        let payload = ParentLeaveOperation.Payload(
+            studentID: studentID,
+            sessionID: sessionID,
+            reason: reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        if completedLeavePayloads.contains(payload) {
+            confirmationMessage = "This leave request was already submitted."
+            return true
+        }
+
+        let operation: ParentLeaveOperation
+        if let pendingLeaveOperation, pendingLeaveOperation.payload == payload {
+            operation = pendingLeaveOperation
+        } else {
+            operation = ParentLeaveOperation(payload: payload)
+            pendingLeaveOperation = operation
+        }
+
+        isSubmittingLeave = true
+        errorMessage = nil
+        defer { isSubmittingLeave = false }
+
         do {
-            let identifier = try await service.submitLeaveRequest(
-                studentID: studentID,
-                sessionID: sessionID,
-                reason: reason.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
+            let identifier = try await service.submitLeaveRequest(operation)
+            completedLeavePayloads.insert(payload)
+            pendingLeaveOperation = nil
             confirmationMessage = "Leave request submitted: \(identifier.uuidString.prefix(8))"
             await load()
             return true
@@ -110,7 +135,10 @@ struct ParentOperationsView: View {
                 .disabled(selectedStudentID == nil)
                 TextField("Reason", text: $reason, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
-                PrimaryCTAButton(title: "Submit leave request", isDisabled: !canSubmitLeave) {
+                PrimaryCTAButton(
+                    title: viewModel.isSubmittingLeave ? "Submitting…" : "Submit leave request",
+                    isDisabled: !canSubmitLeave || viewModel.isSubmittingLeave
+                ) {
                     guard let studentID = selectedStudentID,
                           let sessionUUID = selectedSessionID else { return }
                     Task {

@@ -2,6 +2,11 @@ import SwiftUI
 import Supabase
 import Auth
 
+private struct ParentCenterLoadIdentity: Hashable {
+    let userID: UUID?
+    let hasParentRole: Bool
+}
+
 struct ParentCenterView: View {
     @StateObject private var viewModel = ParentCenterViewModel()
     @EnvironmentObject private var tabRouter: TabRouter
@@ -16,26 +21,32 @@ struct ParentCenterView: View {
         ScreenContainer(title: "家長中心") {
             PremiumSectionHeader(eyebrow: "Personal Service Space", title: "你的專屬服務區", subtitle: "聚焦預約與顧問支援，不呈現後台式資訊噪音")
 
-            if authViewModel.currentUser == nil {
+            switch presentation {
+            case .signedOut:
                 loginCard
-            } else if viewModel.isLoading {
+            case .resolving, .loading:
                 VStack(spacing: Theme.Spacing.md) {
                     SkeletonCard()
                     SkeletonCard()
                 }
-            } else if let errorMessage = viewModel.errorMessage {
+            case .unlinkedParent:
+                EmptyStateView(
+                    title: "此帳戶未連結家長資料",
+                    message: "你目前登入的帳戶沒有家長權限。如需連結家長檔案，請聯絡中心職員。"
+                )
+            case .failure(let errorMessage):
                 EmptyStateView(title: "資料載入失敗", message: errorMessage)
                 SecondaryCTAButton(title: "重新載入") {
-                    Task { await viewModel.load(userID: authViewModel.currentUser?.id) }
+                    Task { await loadParentCenter() }
                 }
-            } else if let profile = viewModel.profile {
-                profileCard(profile)
-                ParentAttendanceSummaryView(summaries: viewModel.examSummaries)
-                ParentMakeupReminderView(summaries: viewModel.examSummaries)
-                serviceEntry
-                notificationsSection
-            } else {
-                EmptyStateView(title: "尚未綁定家長資料", message: "請使用已綁定 parent profile 的帳號登入。")
+            case .content:
+                if let profile = viewModel.profile {
+                    profileCard(profile)
+                    ParentAttendanceSummaryView(summaries: viewModel.examSummaries)
+                    ParentMakeupReminderView(summaries: viewModel.examSummaries)
+                    serviceEntry
+                    notificationsSection
+                }
             }
 
             if showSupportSuccess {
@@ -44,20 +55,43 @@ struct ParentCenterView: View {
 
             actionButtons
         }
-        .task {
-            await viewModel.load(userID: authViewModel.currentUser?.id)
+        .task(id: loadIdentity) {
+            authViewModel.configureSensitiveStateCleanup { [weak viewModel] in
+                viewModel?.clear()
+            }
+            await loadParentCenter()
         }
         .refreshable {
-            await viewModel.load(userID: authViewModel.currentUser?.id)
-        }
-        .onChange(of: authViewModel.currentUser?.id) { userID in
-            Task {
-                await viewModel.load(userID: userID)
-            }
+            await loadParentCenter()
         }
         .onChange(of: pushCoordinator.refreshSequence) { _ in
-            Task { await viewModel.load(userID: authViewModel.currentUser?.id) }
+            Task { await loadParentCenter() }
         }
+    }
+
+    private var loadIdentity: ParentCenterLoadIdentity {
+        ParentCenterLoadIdentity(
+            userID: authViewModel.currentUser?.id,
+            hasParentRole: authViewModel.hasParentRole
+        )
+    }
+
+    private var presentation: ParentCenterPresentation {
+        resolveParentCenterPresentation(
+            userID: authViewModel.currentUser?.id,
+            hasParentRole: authViewModel.hasParentRole,
+            isAuthLoading: authViewModel.isLoading,
+            isDataLoading: viewModel.isLoading,
+            hasProfile: viewModel.profile != nil,
+            errorMessage: viewModel.errorMessage
+        )
+    }
+
+    private func loadParentCenter() async {
+        await viewModel.load(
+            userID: authViewModel.currentUser?.id,
+            hasParentRole: authViewModel.hasParentRole
+        )
     }
 
     private var loginCard: some View {
@@ -107,7 +141,7 @@ struct ParentCenterView: View {
     private var serviceEntry: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             PremiumSectionHeader(title: "服務入口", subtitle: "僅保留與前期預約決策相關模組")
-            NavigationLink(destination: ParentReservationSummaryView()) {
+            NavigationLink(value: ParentRoute.reservationSummary) {
                 QuickActionTile(title: "預約摘要", subtitle: "查看目前提交與待安排的體驗需求", icon: "calendar")
             }
             .buttonStyle(PressableScaleStyle())
@@ -134,7 +168,7 @@ struct ParentCenterView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             PremiumSectionHeader(title: "通知", subtitle: "僅顯示你的私人通知")
 
-            NavigationLink(destination: NotificationCenterView()) {
+            NavigationLink(value: ParentRoute.notificationCenter(focusID: nil)) {
                 QuickActionTile(
                     title: "通知中心",
                     subtitle: pushCoordinator.unreadCount > 0 ? "\(pushCoordinator.unreadCount) 則未讀通知" : "查看所有通知",
@@ -173,7 +207,6 @@ struct ParentCenterView: View {
                 SecondaryCTAButton(title: "登出") {
                     Task {
                         await authViewModel.signOut()
-                        viewModel.clear()
                     }
                 }
             } else {

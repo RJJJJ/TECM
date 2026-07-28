@@ -1,6 +1,44 @@
 import Foundation
 import Combine
 
+enum ParentCenterPresentation: Equatable {
+    case signedOut
+    case resolving
+    case unlinkedParent
+    case loading
+    case content
+    case failure(String)
+}
+
+func resolveParentCenterPresentation(
+    userID: UUID?,
+    hasParentRole: Bool,
+    isAuthLoading: Bool,
+    isDataLoading: Bool,
+    hasProfile: Bool,
+    errorMessage: String?
+) -> ParentCenterPresentation {
+    if isAuthLoading {
+        return .resolving
+    }
+    guard userID != nil else {
+        return .signedOut
+    }
+    guard hasParentRole else {
+        return .unlinkedParent
+    }
+    if isDataLoading {
+        return .loading
+    }
+    if hasProfile {
+        return .content
+    }
+    if let errorMessage {
+        return .failure(errorMessage)
+    }
+    return .loading
+}
+
 @MainActor
 final class ParentCenterViewModel: ObservableObject {
     @Published private(set) var profile: ParentProfile?
@@ -14,6 +52,8 @@ final class ParentCenterViewModel: ObservableObject {
     private let bookingService: BookingServicing
     private let notificationService: NotificationServicing
     private let examCohortService: ExamCohortServicing
+    private var loadGeneration = 0
+    private var requestedUserID: UUID?
 
     init(
         parentProfileService: ParentProfileServicing = ParentProfileService(),
@@ -27,48 +67,78 @@ final class ParentCenterViewModel: ObservableObject {
         self.examCohortService = examCohortService
     }
 
-    func load(userID: UUID?) async {
-        guard let userID else {
-            clear()
+    func load(userID: UUID?, hasParentRole: Bool) async {
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        requestedUserID = hasParentRole ? userID : nil
+        resetContent()
+
+        guard let userID, hasParentRole else {
             return
         }
 
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        defer {
+            if isCurrentLoad(generation, userID: userID) {
+                isLoading = false
+            }
+        }
 
         do {
             let profile = try await parentProfileService.fetchCurrentParentProfile(userID: userID)
+            guard isCurrentLoad(generation, userID: userID) else { return }
             self.profile = profile
 
             do {
-                reservations = try await bookingService.fetchMyBookings(parentID: profile.id)
+                let reservations = try await bookingService.fetchMyBookings(parentID: profile.id)
+                guard isCurrentLoad(generation, userID: userID) else { return }
+                self.reservations = reservations
             } catch {
+                guard isCurrentLoad(generation, userID: userID) else { return }
                 reservations = []
             }
 
             do {
-                notifications = try await notificationService.fetchMyNotifications(parentID: profile.id)
+                let notifications = try await notificationService.fetchMyNotifications(parentID: profile.id)
+                guard isCurrentLoad(generation, userID: userID) else { return }
+                self.notifications = notifications
             } catch {
+                guard isCurrentLoad(generation, userID: userID) else { return }
                 notifications = []
             }
 
             do {
-                examSummaries = try await examCohortService.fetchParentAttendanceSummary()
+                let examSummaries = try await examCohortService.fetchParentAttendanceSummary()
+                guard isCurrentLoad(generation, userID: userID) else { return }
+                self.examSummaries = examSummaries
             } catch {
+                guard isCurrentLoad(generation, userID: userID) else { return }
                 examSummaries = []
             }
         } catch {
-            clear()
+            guard isCurrentLoad(generation, userID: userID) else { return }
+            resetContent()
             errorMessage = error.localizedDescription
         }
     }
 
     func clear() {
+        loadGeneration &+= 1
+        requestedUserID = nil
+        resetContent()
+    }
+
+    private func resetContent() {
         profile = nil
         reservations = []
         notifications = []
         examSummaries = []
+        isLoading = false
         errorMessage = nil
+    }
+
+    private func isCurrentLoad(_ generation: Int, userID: UUID) -> Bool {
+        generation == loadGeneration && requestedUserID == userID
     }
 }

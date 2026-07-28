@@ -1,7 +1,9 @@
+import Auth
 import SwiftUI
 
 struct ParentBookingDetailView: View {
     @StateObject private var viewModel: ParentBookingDetailViewModel
+    @EnvironmentObject private var authViewModel: AuthViewModel
 
     init(bookingID: UUID, parentID: UUID) {
         _viewModel = StateObject(wrappedValue: ParentBookingDetailViewModel(bookingID: bookingID, parentID: parentID))
@@ -21,7 +23,7 @@ struct ParentBookingDetailView: View {
             } else if let errorMessage = viewModel.errorMessage {
                 EmptyStateView(title: "載入失敗", message: errorMessage)
                 SecondaryCTAButton(title: "重新載入") {
-                    Task { await viewModel.refresh() }
+                    Task { await load() }
                 }
             } else if let detail = viewModel.detail {
                 detailContent(detail)
@@ -30,11 +32,21 @@ struct ParentBookingDetailView: View {
             }
         }
         .refreshable {
-            await viewModel.refresh()
+            await load()
         }
-        .task {
-            await viewModel.load()
+        .task(id: accessIdentity) {
+            await load()
         }
+    }
+
+    private var accessIdentity: String {
+        "\(authViewModel.currentUser?.id.uuidString ?? "signed-out"):\(authViewModel.hasParentRole)"
+    }
+
+    private func load() async {
+        await viewModel.load(
+            isAuthorizedParent: authViewModel.currentUser != nil && authViewModel.hasParentRole
+        )
     }
 
     private func detailContent(_ detail: ParentBookingDetail) -> some View {
@@ -83,5 +95,6 @@ struct ParentBookingDetailView: View {
 #Preview {
     NavigationStack {
         ParentBookingDetailView(bookingID: UUID(), parentID: UUID())
+            .environmentObject(AuthViewModel())
     }
 }
