@@ -45,7 +45,7 @@ final class PushNotificationCoordinatorTests: XCTestCase {
             coordinator.lastErrorMessage,
             PushNotificationCleanupError.remoteDeactivationFailed.localizedDescription
         )
-        XCTAssertFalse(coordinator.lastErrorMessage?.contains(MockNotificationError.sensitiveSentinel) ?? true)
+        XCTAssertFalse(coordinator.lastErrorMessage?.contains(MockNotificationError.sensitiveSentinel) ?? false)
     }
 
     func testLocalProtectedStateClearsBeforeRemoteDeactivationFinishes() async {
