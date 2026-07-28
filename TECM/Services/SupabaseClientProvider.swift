@@ -267,9 +267,9 @@ final class SupabaseClientLifecycle: @unchecked Sendable {
     }
 
     static func disposeOldGeneration(_ generation: Generation) {
-        generation.client.auth.stopAutoRefresh()
         generation.session.invalidateAndCancel()
         Task {
+            await generation.client.auth.stopAutoRefresh()
             await generation.client.removeAllChannels()
             generation.client.realtimeV2.disconnect()
         }
