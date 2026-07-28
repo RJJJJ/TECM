@@ -125,9 +125,6 @@ final class SupabaseClientLifecycle: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let generation = activeGeneration!
-        guard signOutTransition?.identity != generation.identity else {
-            throw LifecycleError.generationRetiring
-        }
         return generation
     }
 
@@ -136,9 +133,6 @@ final class SupabaseClientLifecycle: @unchecked Sendable {
         defer { lock.unlock() }
         guard activeGeneration === generation else {
             throw LifecycleError.staleGeneration
-        }
-        guard signOutTransition?.identity != generation.identity else {
-            throw LifecycleError.generationRetiring
         }
         try generation.sessionPersistence.activate(session)
     }
