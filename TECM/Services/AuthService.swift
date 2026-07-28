@@ -55,6 +55,73 @@ protocol AuthServicing {
     func handleAuthCallback(url: URL) async throws -> User
 }
 
+enum LogoutSafetyFenceState: Equatable, Sendable {
+    case allowsRestore
+    case loggedOut
+}
+
+protocol LogoutSafetyFenceStorage: Sendable {
+    func read(projectKey: String) throws -> LogoutSafetyFenceState
+    func markLoggedOut(projectKey: String) throws
+    func clearAfterValidatedActivation(projectKey: String) throws
+}
+
+final class UserDefaultsLogoutSafetyFenceStorage: LogoutSafetyFenceStorage, @unchecked Sendable {
+    private struct Record: Codable, Equatable {
+        let schemaVersion: Int
+        let loggedOut: Bool
+    }
+
+    private static let currentRecord = Record(schemaVersion: 1, loggedOut: true)
+    private let defaults: UserDefaults
+    private let keyPrefix: String
+
+    init(
+        defaults: UserDefaults,
+        keyPrefix: String = "tecm.auth.logout-safety-fence"
+    ) {
+        self.defaults = defaults
+        self.keyPrefix = keyPrefix
+    }
+
+    func read(projectKey: String) throws -> LogoutSafetyFenceState {
+        let key = storageKey(projectKey: projectKey)
+        guard let storedValue = defaults.object(forKey: key) else {
+            return .allowsRestore
+        }
+        guard let data = storedValue as? Data,
+              let record = try? JSONDecoder().decode(Record.self, from: data),
+              record == Self.currentRecord else {
+            throw LogoutSafetyFenceStorageError.corruptRecord
+        }
+        return .loggedOut
+    }
+
+    func markLoggedOut(projectKey: String) throws {
+        let data = try JSONEncoder().encode(Self.currentRecord)
+        defaults.set(data, forKey: storageKey(projectKey: projectKey))
+        guard defaults.synchronize() else {
+            throw LogoutSafetyFenceStorageError.persistenceFailed
+        }
+    }
+
+    func clearAfterValidatedActivation(projectKey: String) throws {
+        defaults.removeObject(forKey: storageKey(projectKey: projectKey))
+        guard defaults.synchronize() else {
+            throw LogoutSafetyFenceStorageError.persistenceFailed
+        }
+    }
+
+    private func storageKey(projectKey: String) -> String {
+        "\(keyPrefix).v1.\(projectKey)"
+    }
+}
+
+private enum LogoutSafetyFenceStorageError: Error {
+    case corruptRecord
+    case persistenceFailed
+}
+
 final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
     private struct SessionLineage: Equatable {
         let userID: UUID
@@ -67,28 +134,53 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         case acceptingSession(SessionLineage)
     }
 
-    private let underlyingStorage: any AuthLocalStorage
+    private let sessionStorage: any AuthLocalStorage
+    private let logoutSafetyFenceStorage: any LogoutSafetyFenceStorage
     private let storageKey: String
-    private let logoutFenceKey: String
+    private let projectKey: String
+    private let isProjectKeyValid: Bool
+    private let legacyLogoutFenceKey: String
     private let lock = NSLock()
     private var writePolicy: WritePolicy
 
-    init(underlyingStorage: any AuthLocalStorage, storageKey: String) {
-        self.underlyingStorage = underlyingStorage
+    init(
+        sessionStorage: any AuthLocalStorage,
+        logoutSafetyFenceStorage: any LogoutSafetyFenceStorage,
+        storageKey: String,
+        projectKey: String
+    ) {
+        self.sessionStorage = sessionStorage
+        self.logoutSafetyFenceStorage = logoutSafetyFenceStorage
         self.storageKey = storageKey
-        let logoutFenceKey = "\(storageKey).logout-fence-v1"
-        self.logoutFenceKey = logoutFenceKey
+        self.projectKey = projectKey
+        isProjectKeyValid = Self.isValidProjectKey(projectKey)
+        legacyLogoutFenceKey = "\(storageKey).logout-fence-v1"
+        writePolicy = .invalidated
+
+        guard isProjectKeyValid else {
+            return
+        }
 
         do {
-            if try underlyingStorage.retrieve(key: logoutFenceKey) == nil {
-                writePolicy = .acceptingAnySession
-            } else {
+            let safetyState = try logoutSafetyFenceStorage.read(projectKey: projectKey)
+            if safetyState == .loggedOut {
                 writePolicy = .invalidated
-                try? underlyingStorage.remove(key: storageKey)
+                try? sessionStorage.remove(key: storageKey)
+                return
             }
+
+            if try sessionStorage.retrieve(key: legacyLogoutFenceKey) != nil {
+                try logoutSafetyFenceStorage.markLoggedOut(projectKey: projectKey)
+                writePolicy = .invalidated
+                try? sessionStorage.remove(key: storageKey)
+                return
+            }
+
+            writePolicy = .acceptingAnySession
         } catch {
-            // Storage uncertainty must never make a persisted session readable.
             writePolicy = .invalidated
+            try? logoutSafetyFenceStorage.markLoggedOut(projectKey: projectKey)
+            try? sessionStorage.remove(key: storageKey)
         }
     }
 
@@ -120,22 +212,32 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
 
         writePolicy = .invalidated
 
+        guard isProjectKeyValid else {
+            throw AuthSessionPersistenceError.invalidProjectKey
+        }
+
         var fenceStored = false
         var sessionRemoved = false
         var lastError: Error?
 
         do {
-            try underlyingStorage.store(
-                key: logoutFenceKey,
-                value: Data([1])
-            )
+            try logoutSafetyFenceStorage.markLoggedOut(projectKey: projectKey)
             fenceStored = true
         } catch {
             lastError = error
         }
 
         do {
-            try underlyingStorage.remove(key: storageKey)
+            try sessionStorage.store(
+                key: legacyLogoutFenceKey,
+                value: Data([1])
+            )
+        } catch {
+            lastError = error
+        }
+
+        do {
+            try sessionStorage.remove(key: storageKey)
             sessionRemoved = true
         } catch {
             lastError = error
@@ -153,17 +255,28 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        let hasLogoutFence = try underlyingStorage.retrieve(key: logoutFenceKey) != nil
-        try underlyingStorage.store(key: storageKey, value: data)
-        if hasLogoutFence {
-            try underlyingStorage.remove(key: logoutFenceKey)
+        guard isProjectKeyValid else {
+            throw AuthSessionPersistenceError.invalidProjectKey
         }
-        writePolicy = .acceptingSession(lineage)
+
+        do {
+            try sessionStorage.store(key: storageKey, value: data)
+            try sessionStorage.remove(key: legacyLogoutFenceKey)
+            try logoutSafetyFenceStorage.clearAfterValidatedActivation(
+                projectKey: projectKey
+            )
+            writePolicy = .acceptingSession(lineage)
+        } catch {
+            writePolicy = .invalidated
+            try? logoutSafetyFenceStorage.markLoggedOut(projectKey: projectKey)
+            try? sessionStorage.remove(key: storageKey)
+            throw AuthSessionPersistenceError.activationFailed
+        }
     }
 
     func store(key: String, value: Data) throws {
         guard key == storageKey else {
-            try underlyingStorage.store(key: key, value: value)
+            try sessionStorage.store(key: key, value: value)
             return
         }
 
@@ -176,30 +289,30 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         switch writePolicy {
         case .acceptingAnySession:
             guard let lineage else { return }
-            try underlyingStorage.store(key: key, value: value)
+            try sessionStorage.store(key: key, value: value)
             writePolicy = .acceptingSession(lineage)
         case .invalidated:
             return
         case let .acceptingSession(acceptedLineage):
             guard lineage == acceptedLineage else { return }
-            try underlyingStorage.store(key: key, value: value)
+            try sessionStorage.store(key: key, value: value)
         }
     }
 
     func retrieve(key: String) throws -> Data? {
         guard key == storageKey else {
-            return try underlyingStorage.retrieve(key: key)
+            return try sessionStorage.retrieve(key: key)
         }
 
         lock.lock()
         defer { lock.unlock() }
 
         if case .invalidated = writePolicy {
-            try? underlyingStorage.remove(key: storageKey)
+            try? sessionStorage.remove(key: storageKey)
             return nil
         }
 
-        guard let data = try underlyingStorage.retrieve(key: key) else {
+        guard let data = try sessionStorage.retrieve(key: key) else {
             return nil
         }
         guard let session = try? AuthClient.Configuration.jsonDecoder
@@ -223,7 +336,7 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         if key == storageKey {
             try invalidate()
         } else {
-            try underlyingStorage.remove(key: key)
+            try sessionStorage.remove(key: key)
         }
     }
 
@@ -250,11 +363,22 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         }
         return SessionLineage(userID: subjectID, sessionID: sessionID)
     }
+
+    private static func isValidProjectKey(_ projectKey: String) -> Bool {
+        guard !projectKey.isEmpty, projectKey.count <= 128 else {
+            return false
+        }
+        return projectKey.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0) || $0 == "-"
+        }
+    }
 }
 
 private enum AuthSessionPersistenceError: Error {
     case invalidSessionLineage
     case invalidationFailed
+    case activationFailed
+    case invalidProjectKey
 }
 
 enum RemoteAuthSignOutError: LocalizedError {

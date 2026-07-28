@@ -274,9 +274,12 @@ final class AuthViewModelTests: XCTestCase {
     func testPersistedSupabaseSessionIsRemovedFromConfiguredStorage() throws {
         let storage = InMemoryAuthLocalStorage()
         let storageKey = "test-auth-session"
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
         let persistence = AuthSessionPersistence(
-            underlyingStorage: storage,
-            storageKey: storageKey
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: storageKey
         )
         let user = makeUser()
         let firstSession = Session(
@@ -312,8 +315,10 @@ final class AuthViewModelTests: XCTestCase {
         try persistence.store(key: storageKey, value: staleFirstSessionData)
 
         let relaunchedPersistence = AuthSessionPersistence(
-            underlyingStorage: storage,
-            storageKey: storageKey
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: storageKey
         )
         XCTAssertEqual(try relaunchedPersistence.accessToken(), secondSession.accessToken)
     }
@@ -321,9 +326,12 @@ final class AuthViewModelTests: XCTestCase {
     func testFailedPersistenceRemovalSurvivesImmediateRestartAndRejectsStaleStores() throws {
         let storage = InMemoryAuthLocalStorage()
         let storageKey = "retryable-auth-session"
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
         let persistence = AuthSessionPersistence(
-            underlyingStorage: storage,
-            storageKey: storageKey
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: storageKey
         )
         let user = makeUser()
         let session = Session(
@@ -343,8 +351,10 @@ final class AuthViewModelTests: XCTestCase {
         XCTAssertNotNil(try storage.retrieve(key: storageKey))
 
         let relaunchedPersistence = AuthSessionPersistence(
-            underlyingStorage: storage,
-            storageKey: storageKey
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: storageKey
         )
         XCTAssertNil(try relaunchedPersistence.accessToken())
         XCTAssertNotNil(try storage.retrieve(key: "\(storageKey).logout-fence-v1"))
@@ -353,9 +363,12 @@ final class AuthViewModelTests: XCTestCase {
     func testConcurrentAdmittedStoreCannotResurrectSessionAfterInvalidation() throws {
         let storageKey = "linearizable-auth-session"
         let storage = BlockingAuthLocalStorage(blockedKey: storageKey)
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
         let persistence = AuthSessionPersistence(
-            underlyingStorage: storage,
-            storageKey: storageKey
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: storageKey
         )
         let user = makeUser()
         let session = makeSession(user: user, sessionID: "same-session", refreshToken: "initial")
@@ -386,8 +399,10 @@ final class AuthViewModelTests: XCTestCase {
         wait(for: [storeFinished, invalidationFinished], timeout: 1)
 
         let relaunchedPersistence = AuthSessionPersistence(
-            underlyingStorage: storage,
-            storageKey: storageKey
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: storageKey
         )
         XCTAssertNil(try relaunchedPersistence.accessToken())
     }
@@ -395,9 +410,12 @@ final class AuthViewModelTests: XCTestCase {
     func testMissingMalformedAndMismatchedJWTLineageFailClosed() throws {
         let storageKey = "lineage-auth-session"
         let storage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
         let persistence = AuthSessionPersistence(
-            underlyingStorage: storage,
-            storageKey: storageKey
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: storageKey
         )
         let user = makeUser()
         let invalidTokens = [
@@ -435,9 +453,12 @@ final class AuthViewModelTests: XCTestCase {
     func testSameUserDifferentSessionCannotOverwriteAcceptedLineage() throws {
         let storageKey = "same-user-lineage"
         let storage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
         let persistence = AuthSessionPersistence(
-            underlyingStorage: storage,
-            storageKey: storageKey
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: storageKey
         )
         let user = makeUser()
         let accepted = makeSession(user: user, sessionID: "new-session", refreshToken: "new")
@@ -456,9 +477,12 @@ final class AuthViewModelTests: XCTestCase {
         let storageKey = "durable-fence-session"
         let fenceKey = "\(storageKey).logout-fence-v1"
         let storage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
         let persistence = AuthSessionPersistence(
-            underlyingStorage: storage,
-            storageKey: storageKey
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: storageKey
         )
         let user = makeUser()
         let session = makeSession(user: user, sessionID: "old-session", refreshToken: "old")
@@ -476,9 +500,12 @@ final class AuthViewModelTests: XCTestCase {
         let storageKey = "activation-clears-fence"
         let fenceKey = "\(storageKey).logout-fence-v1"
         let storage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
         let persistence = AuthSessionPersistence(
-            underlyingStorage: storage,
-            storageKey: storageKey
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: storageKey
         )
         let oldUser = makeUser()
         let oldSession = makeSession(
@@ -501,6 +528,368 @@ final class AuthViewModelTests: XCTestCase {
 
         XCTAssertNil(try storage.retrieve(key: fenceKey))
         XCTAssertEqual(try persistence.accessToken(), newSession.accessToken)
+    }
+
+    func testIndependentSafetyFenceRejectsRestoreAfterLegacyFenceAndSessionRemovalBothFail() throws {
+        let storageKey = "double-failure-session"
+        let projectKey = "project-a"
+        let legacyFenceKey = "\(storageKey).logout-fence-v1"
+        let sessionStorage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
+        let oldSession = makeSession(
+            user: makeUser(),
+            sessionID: "old-session",
+            refreshToken: "old-refresh"
+        )
+        let persistence = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+        try persistence.activate(oldSession)
+        sessionStorage.failNextStore(key: legacyFenceKey)
+        sessionStorage.removeFailuresRemaining = 1
+
+        try persistence.invalidate()
+
+        XCTAssertNotNil(try sessionStorage.retrieve(key: storageKey))
+        XCTAssertEqual(try safetyFenceStorage.read(projectKey: projectKey), .loggedOut)
+
+        let restartedPersistence = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+        XCTAssertNil(try restartedPersistence.retrieve(key: storageKey))
+        XCTAssertNil(try restartedPersistence.accessToken())
+    }
+
+    func testSafetyFenceReadFailureRejectsPersistedSession() throws {
+        let storageKey = "read-failure-session"
+        let projectKey = "project-read-failure"
+        let sessionStorage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
+        let session = makeSession(
+            user: makeUser(),
+            sessionID: "persisted-session",
+            refreshToken: "persisted-refresh"
+        )
+        try sessionStorage.store(
+            key: storageKey,
+            value: AuthClient.Configuration.jsonEncoder.encode(session)
+        )
+        safetyFenceStorage.readFailuresRemaining = 1
+
+        let persistence = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+
+        XCTAssertNil(try persistence.retrieve(key: storageKey))
+        XCTAssertEqual(try safetyFenceStorage.read(projectKey: projectKey), .loggedOut)
+    }
+
+    func testCorruptProductionSafetyFenceRejectsPersistedSession() throws {
+        let suiteName = "AuthViewModelTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let storageKey = "corrupt-fence-session"
+        let projectKey = "project-corrupt"
+        let sessionStorage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = UserDefaultsLogoutSafetyFenceStorage(defaults: defaults)
+        let session = makeSession(
+            user: makeUser(),
+            sessionID: "persisted-session",
+            refreshToken: "persisted-refresh"
+        )
+        try sessionStorage.store(
+            key: storageKey,
+            value: AuthClient.Configuration.jsonEncoder.encode(session)
+        )
+        defaults.set(
+            Data("not-a-valid-fence".utf8),
+            forKey: "tecm.auth.logout-safety-fence.v1.\(projectKey)"
+        )
+
+        let persistence = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+
+        XCTAssertNil(try persistence.retrieve(key: storageKey))
+        XCTAssertEqual(try safetyFenceStorage.read(projectKey: projectKey), .loggedOut)
+    }
+
+    func testStaleRefreshCannotClearIndependentFenceAfterDoubleFailure() throws {
+        let storageKey = "stale-double-failure-session"
+        let projectKey = "project-stale"
+        let legacyFenceKey = "\(storageKey).logout-fence-v1"
+        let sessionStorage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
+        let oldSession = makeSession(
+            user: makeUser(),
+            sessionID: "old-session",
+            refreshToken: "old-refresh"
+        )
+        let oldData = try AuthClient.Configuration.jsonEncoder.encode(oldSession)
+        let persistence = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+        try persistence.activate(oldSession)
+        sessionStorage.failNextStore(key: legacyFenceKey)
+        sessionStorage.removeFailuresRemaining = 1
+        try persistence.invalidate()
+
+        try persistence.store(key: storageKey, value: oldData)
+
+        XCTAssertEqual(try safetyFenceStorage.read(projectKey: projectKey), .loggedOut)
+        let restartedPersistence = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+        XCTAssertNil(try restartedPersistence.retrieve(key: storageKey))
+    }
+
+    func testExplicitActivationReplacesFencedSessionAndRestoresOnlyNewLineage() throws {
+        let storageKey = "explicit-new-session"
+        let projectKey = "project-explicit"
+        let sessionStorage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
+        let oldSession = makeSession(
+            user: makeUser(),
+            sessionID: "old-session",
+            refreshToken: "old-refresh"
+        )
+        try sessionStorage.store(
+            key: storageKey,
+            value: AuthClient.Configuration.jsonEncoder.encode(oldSession)
+        )
+        try safetyFenceStorage.markLoggedOut(projectKey: projectKey)
+        let persistence = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+        XCTAssertNil(try persistence.retrieve(key: storageKey))
+
+        let newSession = makeSession(
+            user: makeUser(),
+            sessionID: "new-session",
+            refreshToken: "new-refresh"
+        )
+        try persistence.activate(newSession)
+
+        XCTAssertEqual(try persistence.accessToken(), newSession.accessToken)
+        XCTAssertEqual(try safetyFenceStorage.read(projectKey: projectKey), .allowsRestore)
+        let restartedPersistence = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+        XCTAssertEqual(try restartedPersistence.accessToken(), newSession.accessToken)
+        XCTAssertNotEqual(try restartedPersistence.accessToken(), oldSession.accessToken)
+    }
+
+    func testActivationSessionWriteFailureRemainsFailClosed() throws {
+        let storageKey = "activation-write-failure"
+        let projectKey = "project-write-failure"
+        let sessionStorage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
+        try safetyFenceStorage.markLoggedOut(projectKey: projectKey)
+        let persistence = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+        sessionStorage.failNextStore(key: storageKey)
+
+        XCTAssertThrowsError(
+            try persistence.activate(
+                makeSession(
+                    user: makeUser(),
+                    sessionID: "new-session",
+                    refreshToken: "new-refresh"
+                )
+            )
+        )
+
+        XCTAssertEqual(try safetyFenceStorage.read(projectKey: projectKey), .loggedOut)
+        let restartedPersistence = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+        XCTAssertNil(try restartedPersistence.retrieve(key: storageKey))
+    }
+
+    func testActivationSafetyFenceClearFailureRemainsFailClosed() throws {
+        let storageKey = "activation-clear-failure"
+        let projectKey = "project-clear-failure"
+        let sessionStorage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
+        try safetyFenceStorage.markLoggedOut(projectKey: projectKey)
+        let persistence = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+        safetyFenceStorage.clearFailuresRemaining = 1
+
+        XCTAssertThrowsError(
+            try persistence.activate(
+                makeSession(
+                    user: makeUser(),
+                    sessionID: "new-session",
+                    refreshToken: "new-refresh"
+                )
+            )
+        )
+
+        XCTAssertEqual(try safetyFenceStorage.read(projectKey: projectKey), .loggedOut)
+        XCTAssertNil(try sessionStorage.retrieve(key: storageKey))
+    }
+
+    func testLegacyFenceMigrationFailureRemainsFailClosedAcrossRestart() throws {
+        let storageKey = "legacy-migration-failure"
+        let projectKey = "project-legacy-failure"
+        let legacyFenceKey = "\(storageKey).logout-fence-v1"
+        let sessionStorage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
+        let oldSession = makeSession(
+            user: makeUser(),
+            sessionID: "old-session",
+            refreshToken: "old-refresh"
+        )
+        try sessionStorage.store(
+            key: storageKey,
+            value: AuthClient.Configuration.jsonEncoder.encode(oldSession)
+        )
+        try sessionStorage.store(key: legacyFenceKey, value: Data([1]))
+        safetyFenceStorage.markFailuresRemaining = 2
+        sessionStorage.removeFailuresRemaining = 1
+
+        let firstUpgrade = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+        XCTAssertNil(try firstUpgrade.retrieve(key: storageKey))
+
+        let restartedUpgrade = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+        XCTAssertNil(try restartedUpgrade.retrieve(key: storageKey))
+        XCTAssertEqual(try safetyFenceStorage.read(projectKey: projectKey), .loggedOut)
+    }
+
+    func testProjectScopedFenceIsolationAndSecretFreeNamespace() throws {
+        let sessionStorage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
+        let projectA = "project-a"
+        let projectB = "project-b"
+        let storageKeyA = "session-a"
+        let storageKeyB = "session-b"
+        let sessionA = makeSession(
+            user: makeUser(),
+            sessionID: "session-a",
+            refreshToken: "refresh-a"
+        )
+        let sessionB = makeSession(
+            user: makeUser(),
+            sessionID: "session-b",
+            refreshToken: "refresh-b"
+        )
+        try sessionStorage.store(
+            key: storageKeyA,
+            value: AuthClient.Configuration.jsonEncoder.encode(sessionA)
+        )
+        try sessionStorage.store(
+            key: storageKeyB,
+            value: AuthClient.Configuration.jsonEncoder.encode(sessionB)
+        )
+        try safetyFenceStorage.markLoggedOut(projectKey: projectA)
+
+        let persistenceA = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKeyA,
+            projectKey: projectA
+        )
+        let persistenceB = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKeyB,
+            projectKey: projectB
+        )
+
+        XCTAssertNil(try persistenceA.retrieve(key: storageKeyA))
+        XCTAssertEqual(try persistenceB.accessToken(), sessionB.accessToken)
+        XCTAssertTrue(
+            safetyFenceStorage.observedProjectKeys.allSatisfy {
+                $0 == projectA || $0 == projectB
+            }
+        )
+        XCTAssertFalse(
+            safetyFenceStorage.observedProjectKeys.joined().contains(sessionA.accessToken)
+        )
+
+        let invalidSecretProjectKey = sessionA.accessToken
+        _ = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: "invalid-project-session",
+            projectKey: invalidSecretProjectKey
+        )
+        XCTAssertFalse(safetyFenceStorage.observedProjectKeys.contains(invalidSecretProjectKey))
+    }
+
+    func testLegacyLogoutFenceMigratesBeforeOldSessionCanRestore() throws {
+        let storageKey = "legacy-upgrade-session"
+        let projectKey = "project-legacy-upgrade"
+        let legacyFenceKey = "\(storageKey).logout-fence-v1"
+        let sessionStorage = InMemoryAuthLocalStorage()
+        let safetyFenceStorage = InMemoryLogoutSafetyFenceStorage()
+        let oldSession = makeSession(
+            user: makeUser(),
+            sessionID: "old-session",
+            refreshToken: "old-refresh"
+        )
+        try sessionStorage.store(
+            key: storageKey,
+            value: AuthClient.Configuration.jsonEncoder.encode(oldSession)
+        )
+        try sessionStorage.store(key: legacyFenceKey, value: Data([1]))
+
+        let upgradedPersistence = AuthSessionPersistence(
+            sessionStorage: sessionStorage,
+            logoutSafetyFenceStorage: safetyFenceStorage,
+            storageKey: storageKey,
+            projectKey: projectKey
+        )
+
+        XCTAssertNil(try upgradedPersistence.retrieve(key: storageKey))
+        XCTAssertEqual(try safetyFenceStorage.read(projectKey: projectKey), .loggedOut)
+        XCTAssertNotNil(try sessionStorage.retrieve(key: legacyFenceKey))
     }
 
     func testStaleRoleResolutionCannotRestoreSignedOutCapabilities() async {
@@ -732,11 +1121,22 @@ private final class LocalPrivacyState {
 private final class InMemoryAuthLocalStorage: AuthLocalStorage, @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: Data] = [:]
+    private var storeFailures: [String: Int] = [:]
     var removeFailuresRemaining = 0
+
+    func failNextStore(key: String) {
+        lock.lock()
+        storeFailures[key, default: 0] += 1
+        lock.unlock()
+    }
 
     func store(key: String, value: Data) throws {
         lock.lock()
         defer { lock.unlock() }
+        if storeFailures[key, default: 0] > 0 {
+            storeFailures[key, default: 0] -= 1
+            throw InMemoryStorageError.storeFailed
+        }
         values[key] = value
     }
 
@@ -754,6 +1154,63 @@ private final class InMemoryAuthLocalStorage: AuthLocalStorage, @unchecked Senda
             throw InMemoryStorageError.removeFailed
         }
         values.removeValue(forKey: key)
+    }
+}
+
+private final class InMemoryLogoutSafetyFenceStorage:
+    LogoutSafetyFenceStorage,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var loggedOutProjects: Set<String> = []
+    private var corruptProjects: Set<String> = []
+    private(set) var observedProjectKeys: [String] = []
+    var readFailuresRemaining = 0
+    var markFailuresRemaining = 0
+    var clearFailuresRemaining = 0
+
+    func read(projectKey: String) throws -> LogoutSafetyFenceState {
+        lock.lock()
+        defer { lock.unlock() }
+        observedProjectKeys.append(projectKey)
+        if readFailuresRemaining > 0 {
+            readFailuresRemaining -= 1
+            throw InMemorySafetyFenceError.readFailed
+        }
+        if corruptProjects.contains(projectKey) {
+            throw InMemorySafetyFenceError.corrupt
+        }
+        return loggedOutProjects.contains(projectKey) ? .loggedOut : .allowsRestore
+    }
+
+    func markLoggedOut(projectKey: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        observedProjectKeys.append(projectKey)
+        if markFailuresRemaining > 0 {
+            markFailuresRemaining -= 1
+            throw InMemorySafetyFenceError.markFailed
+        }
+        corruptProjects.remove(projectKey)
+        loggedOutProjects.insert(projectKey)
+    }
+
+    func clearAfterValidatedActivation(projectKey: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        observedProjectKeys.append(projectKey)
+        if clearFailuresRemaining > 0 {
+            clearFailuresRemaining -= 1
+            throw InMemorySafetyFenceError.clearFailed
+        }
+        corruptProjects.remove(projectKey)
+        loggedOutProjects.remove(projectKey)
+    }
+
+    func corrupt(projectKey: String) {
+        lock.lock()
+        corruptProjects.insert(projectKey)
+        lock.unlock()
     }
 }
 
@@ -823,7 +1280,15 @@ private final class BlockingAuthLocalStorage: AuthLocalStorage, @unchecked Senda
 }
 
 private enum InMemoryStorageError: Error {
+    case storeFailed
     case removeFailed
+}
+
+private enum InMemorySafetyFenceError: Error {
+    case readFailed
+    case markFailed
+    case clearFailed
+    case corrupt
 }
 
 private enum MockError: LocalizedError {

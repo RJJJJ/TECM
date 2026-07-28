@@ -26,8 +26,12 @@ enum SupabaseClientProvider {
         let projectReference = configuration.url.host?.split(separator: ".").first ?? "invalid"
         let authStorageKey = "sb-\(projectReference)-auth-token"
         let authSessionPersistence = AuthSessionPersistence(
-            underlyingStorage: AuthClient.Configuration.defaultLocalStorage,
-            storageKey: authStorageKey
+            sessionStorage: AuthClient.Configuration.defaultLocalStorage,
+            logoutSafetyFenceStorage: UserDefaultsLogoutSafetyFenceStorage(
+                defaults: .standard
+            ),
+            storageKey: authStorageKey,
+            projectKey: String(projectReference)
         )
         let options = SupabaseClientOptions(
             auth: .init(storage: authSessionPersistence, storageKey: authStorageKey)
