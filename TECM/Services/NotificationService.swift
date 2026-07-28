@@ -2,7 +2,7 @@ import Foundation
 import Supabase
 import Combine
 
-protocol NotificationServicing {
+protocol NotificationServicing: Sendable {
     func fetchMyNotifications(parentID: UUID) async throws -> [ParentNotificationItem]
     func markNotificationRead(notificationID: UUID) async throws
     func markAllNotificationsRead() async throws

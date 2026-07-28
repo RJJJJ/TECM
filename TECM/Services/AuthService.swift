@@ -13,9 +13,37 @@ struct RemoteAuthSignOutOperation: Sendable {
     }
 }
 
+struct SignOutCleanupContext: Sendable, Equatable {
+    let accessToken: String
+    let userID: UUID?
+    let sessionID: String?
+}
+
 struct AuthSignOutPreparation: Sendable {
-    let accessToken: String?
+    let cleanupContext: SignOutCleanupContext?
     let remoteOperation: RemoteAuthSignOutOperation?
+
+    init(
+        cleanupContext: SignOutCleanupContext?,
+        remoteOperation: RemoteAuthSignOutOperation?
+    ) {
+        self.cleanupContext = cleanupContext
+        self.remoteOperation = remoteOperation
+    }
+
+    init(
+        accessToken: String?,
+        remoteOperation: RemoteAuthSignOutOperation?
+    ) {
+        cleanupContext = accessToken.map {
+            SignOutCleanupContext(
+                accessToken: $0,
+                userID: nil,
+                sessionID: nil
+            )
+        }
+        self.remoteOperation = remoteOperation
+    }
 }
 
 protocol AuthServicing {
@@ -28,21 +56,40 @@ protocol AuthServicing {
 }
 
 final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
+    private struct SessionLineage: Equatable {
+        let userID: UUID
+        let sessionID: String
+    }
+
     private enum WritePolicy {
         case acceptingAnySession
         case invalidated
-        case acceptingSession(userID: UUID, sessionID: String?)
+        case acceptingSession(SessionLineage)
     }
 
     private let underlyingStorage: any AuthLocalStorage
     private let storageKey: String
+    private let logoutFenceKey: String
     private let lock = NSLock()
-    private var writePolicy: WritePolicy = .acceptingAnySession
-    private var persistenceRemovalCompleted = false
+    private var writePolicy: WritePolicy
 
     init(underlyingStorage: any AuthLocalStorage, storageKey: String) {
         self.underlyingStorage = underlyingStorage
         self.storageKey = storageKey
+        let logoutFenceKey = "\(storageKey).logout-fence-v1"
+        self.logoutFenceKey = logoutFenceKey
+
+        do {
+            if try underlyingStorage.retrieve(key: logoutFenceKey) == nil {
+                writePolicy = .acceptingAnySession
+            } else {
+                writePolicy = .invalidated
+                try? underlyingStorage.remove(key: storageKey)
+            }
+        } catch {
+            // Storage uncertainty must never make a persisted session readable.
+            writePolicy = .invalidated
+        }
     }
 
     func accessToken() throws -> String? {
@@ -54,31 +101,64 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
             .accessToken
     }
 
+    func signOutCleanupContext() throws -> SignOutCleanupContext? {
+        guard let data = try retrieve(key: storageKey) else {
+            return nil
+        }
+        let session = try AuthClient.Configuration.jsonDecoder.decode(Session.self, from: data)
+        let lineage = try Self.lineage(from: session)
+        return SignOutCleanupContext(
+            accessToken: session.accessToken,
+            userID: lineage.userID,
+            sessionID: lineage.sessionID
+        )
+    }
+
     func invalidate() throws {
         lock.lock()
-        writePolicy = .invalidated
-        if persistenceRemovalCompleted {
-            lock.unlock()
-            return
-        }
-        lock.unlock()
+        defer { lock.unlock() }
 
-        try underlyingStorage.remove(key: storageKey)
-        lock.lock()
-        persistenceRemovalCompleted = true
-        lock.unlock()
+        writePolicy = .invalidated
+
+        var fenceStored = false
+        var sessionRemoved = false
+        var lastError: Error?
+
+        do {
+            try underlyingStorage.store(
+                key: logoutFenceKey,
+                value: Data([1])
+            )
+            fenceStored = true
+        } catch {
+            lastError = error
+        }
+
+        do {
+            try underlyingStorage.remove(key: storageKey)
+            sessionRemoved = true
+        } catch {
+            lastError = error
+        }
+
+        guard fenceStored || sessionRemoved else {
+            throw lastError ?? AuthSessionPersistenceError.invalidationFailed
+        }
     }
 
     func activate(_ session: Session) throws {
+        let lineage = try Self.lineage(from: session)
         let data = try AuthClient.Configuration.jsonEncoder.encode(session)
+
         lock.lock()
-        writePolicy = .acceptingSession(
-            userID: session.user.id,
-            sessionID: Self.sessionID(from: session.accessToken)
-        )
-        persistenceRemovalCompleted = false
-        lock.unlock()
+        defer { lock.unlock() }
+
+        let hasLogoutFence = try underlyingStorage.retrieve(key: logoutFenceKey) != nil
         try underlyingStorage.store(key: storageKey, value: data)
+        if hasLogoutFence {
+            try underlyingStorage.remove(key: logoutFenceKey)
+        }
+        writePolicy = .acceptingSession(lineage)
     }
 
     func store(key: String, value: Data) throws {
@@ -87,41 +167,56 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
             return
         }
 
-        lock.lock()
-        let writePolicy = writePolicy
-        lock.unlock()
+        let session = try? AuthClient.Configuration.jsonDecoder
+            .decode(Session.self, from: value)
+        let lineage = session.flatMap { try? Self.lineage(from: $0) }
 
+        lock.lock()
+        defer { lock.unlock() }
         switch writePolicy {
         case .acceptingAnySession:
+            guard let lineage else { return }
             try underlyingStorage.store(key: key, value: value)
+            writePolicy = .acceptingSession(lineage)
         case .invalidated:
             return
-        case let .acceptingSession(userID, sessionID):
-            guard let session = try? AuthClient.Configuration.jsonDecoder
-                .decode(Session.self, from: value),
-                  session.user.id == userID,
-                  sessionID == nil || Self.sessionID(from: session.accessToken) == sessionID else {
-                return
-            }
+        case let .acceptingSession(acceptedLineage):
+            guard lineage == acceptedLineage else { return }
             try underlyingStorage.store(key: key, value: value)
         }
     }
 
     func retrieve(key: String) throws -> Data? {
-        if key == storageKey {
-            lock.lock()
-            let isInvalidated: Bool
-            if case .invalidated = writePolicy {
-                isInvalidated = true
-            } else {
-                isInvalidated = false
-            }
-            lock.unlock()
-            if isInvalidated {
-                return nil
-            }
+        guard key == storageKey else {
+            return try underlyingStorage.retrieve(key: key)
         }
-        return try underlyingStorage.retrieve(key: key)
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        if case .invalidated = writePolicy {
+            try? underlyingStorage.remove(key: storageKey)
+            return nil
+        }
+
+        guard let data = try underlyingStorage.retrieve(key: key) else {
+            return nil
+        }
+        guard let session = try? AuthClient.Configuration.jsonDecoder
+            .decode(Session.self, from: data),
+              let lineage = try? Self.lineage(from: session) else {
+            return nil
+        }
+
+        switch writePolicy {
+        case .acceptingAnySession:
+            writePolicy = .acceptingSession(lineage)
+            return data
+        case let .acceptingSession(acceptedLineage):
+            return lineage == acceptedLineage ? data : nil
+        case .invalidated:
+            return nil
+        }
     }
 
     func remove(key: String) throws {
@@ -132,9 +227,11 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         }
     }
 
-    private static func sessionID(from accessToken: String) -> String? {
-        let segments = accessToken.split(separator: ".")
-        guard segments.count > 1 else { return nil }
+    private static func lineage(from session: Session) throws -> SessionLineage {
+        let segments = session.accessToken.split(separator: ".")
+        guard segments.count == 3 else {
+            throw AuthSessionPersistenceError.invalidSessionLineage
+        }
         var payload = String(segments[1])
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
@@ -143,11 +240,21 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
             payload.append(String(repeating: "=", count: 4 - padding))
         }
         guard let data = Data(base64Encoded: payload),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let subject = object["sub"] as? String,
+              let subjectID = UUID(uuidString: subject),
+              subjectID == session.user.id,
+              let sessionID = object["session_id"] as? String,
+              !sessionID.isEmpty else {
+            throw AuthSessionPersistenceError.invalidSessionLineage
         }
-        return object["session_id"] as? String
+        return SessionLineage(userID: subjectID, sessionID: sessionID)
     }
+}
+
+private enum AuthSessionPersistenceError: Error {
+    case invalidSessionLineage
+    case invalidationFailed
 }
 
 enum RemoteAuthSignOutError: LocalizedError {
@@ -240,14 +347,14 @@ struct AuthService: AuthServicing {
     }
 
     func prepareSignOut() throws -> AuthSignOutPreparation {
-        guard let accessToken = try sessionPersistence.accessToken() else {
-            return AuthSignOutPreparation(accessToken: nil, remoteOperation: nil)
+        guard let cleanupContext = try sessionPersistence.signOutCleanupContext() else {
+            return AuthSignOutPreparation(cleanupContext: nil, remoteOperation: nil)
         }
         let remoteRevoker = remoteRevoker
         return AuthSignOutPreparation(
-            accessToken: accessToken,
+            cleanupContext: cleanupContext,
             remoteOperation: RemoteAuthSignOutOperation {
-                try await remoteRevoker.revoke(accessToken: accessToken)
+                try await remoteRevoker.revoke(accessToken: cleanupContext.accessToken)
             }
         )
     }

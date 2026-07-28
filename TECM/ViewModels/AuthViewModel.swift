@@ -31,6 +31,10 @@ private actor RemoteAuthSignOutRace {
     }
 }
 
+struct AppSignOutCleanupPreparation: Sendable {
+    let remoteOperation: RemoteAuthSignOutOperation?
+}
+
 @MainActor
 final class AuthViewModel: ObservableObject {
     @Published private(set) var currentUser: User?
@@ -40,7 +44,7 @@ final class AuthViewModel: ObservableObject {
 
     private let authService: AuthServicing
     private let userRoleService: UserRoleServicing
-    private var signOutCleanup: ((String?) async throws -> Void)?
+    private var signOutCleanup: ((SignOutCleanupContext?) async -> AppSignOutCleanupPreparation)?
     private var sensitiveStateCleanup: (() -> Void)?
     private var isSigningOut = false
     private var authenticationGeneration: UInt64 = 0
@@ -130,20 +134,14 @@ final class AuthViewModel: ObservableObject {
 
         let shouldRunAppCleanup =
             hadAuthenticatedState || signOutPreparation.remoteOperation != nil
-        let appCleanupAccessToken =
-            localSessionInvalidated ? signOutPreparation.accessToken : nil
-        let appCleanupTask: Task<Bool, Never>? = shouldRunAppCleanup
-            ? signOutCleanup.map { cleanup in
-                Task { @MainActor in
-                    do {
-                        try await cleanup(appCleanupAccessToken)
-                        return false
-                    } catch {
-                        return true
-                    }
-                }
-            }
-            : nil
+        let appCleanupContext =
+            localSessionInvalidated ? signOutPreparation.cleanupContext : nil
+        let appCleanupPreparation: AppSignOutCleanupPreparation?
+        if shouldRunAppCleanup, let signOutCleanup {
+            appCleanupPreparation = await signOutCleanup(appCleanupContext)
+        } else {
+            appCleanupPreparation = nil
+        }
 
         if localSessionInvalidated, let remoteAuthOperation = signOutPreparation.remoteOperation {
             let result = await runBoundedRemoteAuthSignOut(remoteAuthOperation)
@@ -153,8 +151,13 @@ final class AuthViewModel: ObservableObject {
                 remoteCleanupIncomplete = true
             }
         }
-        if await appCleanupTask?.value == true {
-            remoteCleanupIncomplete = true
+        if let remoteAppCleanup = appCleanupPreparation?.remoteOperation {
+            let result = await runBoundedRemoteAuthSignOut(remoteAppCleanup)
+            if case .succeeded = result {
+                // The operation owns no local mutation authority.
+            } else {
+                remoteCleanupIncomplete = true
+            }
         }
 
         isSigningOut = false
@@ -186,7 +189,9 @@ final class AuthViewModel: ObservableObject {
         }
     }
 
-    func configureSignOutCleanup(_ cleanup: @escaping (String?) async throws -> Void) {
+    func configureSignOutCleanup(
+        _ cleanup: @escaping (SignOutCleanupContext?) async -> AppSignOutCleanupPreparation
+    ) {
         signOutCleanup = cleanup
     }
 
@@ -238,6 +243,8 @@ final class AuthViewModel: ObservableObject {
     private func runBoundedRemoteAuthSignOut(
         _ operation: RemoteAuthSignOutOperation
     ) async -> RemoteAuthSignOutResult {
+        guard !Task.isCancelled else { return .failed }
+
         let timeout = remoteAuthSignOutTimeout
         let waitForDeadline = waitForRemoteAuthSignOutDeadline
         let race = RemoteAuthSignOutRace()

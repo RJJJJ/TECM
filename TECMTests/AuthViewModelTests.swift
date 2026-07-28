@@ -20,7 +20,10 @@ final class AuthViewModelTests: XCTestCase {
         )
         let localState = LocalPrivacyState()
         viewModel.configureSensitiveStateCleanup { localState.clearSensitiveState() }
-        viewModel.configureSignOutCleanup { _ in localState.clearProtectedAppState() }
+        viewModel.configureSignOutCleanup { _ in
+            localState.clearProtectedAppState()
+            return AppSignOutCleanupPreparation(remoteOperation: nil)
+        }
 
         let logoutReturned = expectation(description: "logout returned")
         let logoutTask = Task {
@@ -74,7 +77,10 @@ final class AuthViewModelTests: XCTestCase {
         )
         let localState = LocalPrivacyState()
         viewModel.configureSensitiveStateCleanup { localState.clearSensitiveState() }
-        viewModel.configureSignOutCleanup { _ in localState.clearProtectedAppState() }
+        viewModel.configureSignOutCleanup { _ in
+            localState.clearProtectedAppState()
+            return AppSignOutCleanupPreparation(remoteOperation: nil)
+        }
 
         let logoutTask = Task { await viewModel.signOut() }
         await fulfillment(of: [remoteGate.started, deadline.waitStarted], timeout: 1)
@@ -125,9 +131,10 @@ final class AuthViewModelTests: XCTestCase {
         var appStateCleared = false
         var cleanupAccessToken: String?
         viewModel.configureSensitiveStateCleanup { sensitiveStateCleared = true }
-        viewModel.configureSignOutCleanup { accessToken in
-            cleanupAccessToken = accessToken
+        viewModel.configureSignOutCleanup { context in
+            cleanupAccessToken = context?.accessToken
             appStateCleared = true
+            return AppSignOutCleanupPreparation(remoteOperation: nil)
         }
 
         await viewModel.signOut()
@@ -174,6 +181,55 @@ final class AuthViewModelTests: XCTestCase {
         await Task.yield()
     }
 
+    func testCancellationReturnsBeforeNonCooperativeAppCleanupAndProtectsNextUser() async {
+        let appCleanupGate = NonCooperativeAuthSignOutGate(testCase: self)
+        let deadline = ManualAuthSignOutDeadline(testCase: self)
+        let firstUser = makeUser()
+        let secondUser = makeUser()
+        let authService = MockAuthService(user: firstUser)
+        authService.includesRemoteSignOutOperation = false
+        let viewModel = await makeSignedInViewModel(
+            authService: authService,
+            deadline: deadline
+        )
+        let localState = LocalPrivacyState()
+        viewModel.configureSignOutCleanup { _ in
+            localState.clearProtectedAppState()
+            return AppSignOutCleanupPreparation(
+                remoteOperation: RemoteAuthSignOutOperation {
+                    await appCleanupGate.suspendIgnoringCancellation()
+                }
+            )
+        }
+
+        let logoutReturned = expectation(description: "cancelled app-cleanup logout returned")
+        let logoutTask = Task {
+            await viewModel.signOut()
+            logoutReturned.fulfill()
+        }
+        await fulfillment(of: [appCleanupGate.started, deadline.waitStarted], timeout: 1)
+
+        XCTAssertNil(viewModel.currentUser)
+        XCTAssertTrue(localState.protectedRoutesCleared)
+        logoutTask.cancel()
+        await fulfillment(of: [logoutReturned], timeout: 1)
+        await logoutTask.value
+        XCTAssertTrue(appCleanupGate.isSuspended)
+
+        authService.user = secondUser
+        await viewModel.signIn(email: "second@example.invalid", password: "unused")
+        localState.establishProtectedStateForNewUser()
+        appCleanupGate.release()
+        deadline.fire()
+        await fulfillment(of: [appCleanupGate.finished], timeout: 1)
+        await Task.yield()
+
+        XCTAssertEqual(viewModel.currentUser?.id, secondUser.id)
+        XCTAssertTrue(viewModel.hasParentRole)
+        XCTAssertTrue(localState.hasNewUserProtectedState)
+        XCTAssertEqual(localState.sensitiveCacheClearCount, 0)
+    }
+
     func testConcurrentAndRepeatedLogoutAreIdempotent() async {
         let remoteGate = NonCooperativeAuthSignOutGate(testCase: self)
         let deadline = ManualAuthSignOutDeadline(testCase: self)
@@ -186,7 +242,10 @@ final class AuthViewModelTests: XCTestCase {
             deadline: deadline
         )
         var appCleanupCount = 0
-        viewModel.configureSignOutCleanup { _ in appCleanupCount += 1 }
+        viewModel.configureSignOutCleanup { _ in
+            appCleanupCount += 1
+            return AppSignOutCleanupPreparation(remoteOperation: nil)
+        }
 
         let firstLogout = Task { await viewModel.signOut() }
         await fulfillment(of: [remoteGate.started, deadline.waitStarted], timeout: 1)
@@ -221,7 +280,7 @@ final class AuthViewModelTests: XCTestCase {
         )
         let user = makeUser()
         let firstSession = Session(
-            accessToken: makeTestJWT(sessionID: "old-session"),
+            accessToken: makeTestJWT(sessionID: "old-session", userID: user.id),
             tokenType: "bearer",
             expiresIn: 3_600,
             expiresAt: Date().addingTimeInterval(3_600).timeIntervalSince1970,
@@ -231,6 +290,10 @@ final class AuthViewModelTests: XCTestCase {
         try persistence.activate(firstSession)
 
         XCTAssertEqual(try persistence.accessToken(), firstSession.accessToken)
+        let cleanupContext = try XCTUnwrap(persistence.signOutCleanupContext())
+        XCTAssertEqual(cleanupContext.userID, user.id)
+        XCTAssertEqual(cleanupContext.sessionID, "old-session")
+        XCTAssertEqual(cleanupContext.accessToken, firstSession.accessToken)
         try persistence.invalidate()
 
         let staleFirstSessionData = try AuthClient.Configuration.jsonEncoder.encode(firstSession)
@@ -238,7 +301,7 @@ final class AuthViewModelTests: XCTestCase {
         XCTAssertNil(try storage.retrieve(key: storageKey))
 
         let secondSession = Session(
-            accessToken: makeTestJWT(sessionID: "new-session"),
+            accessToken: makeTestJWT(sessionID: "new-session", userID: user.id),
             tokenType: "bearer",
             expiresIn: 3_600,
             expiresAt: Date().addingTimeInterval(3_600).timeIntervalSince1970,
@@ -255,35 +318,189 @@ final class AuthViewModelTests: XCTestCase {
         XCTAssertEqual(try relaunchedPersistence.accessToken(), secondSession.accessToken)
     }
 
-    func testFailedPersistenceRemovalRemainsRetryableAndRejectsStaleStores() throws {
+    func testFailedPersistenceRemovalSurvivesImmediateRestartAndRejectsStaleStores() throws {
         let storage = InMemoryAuthLocalStorage()
-        storage.removeFailuresRemaining = 1
         let storageKey = "retryable-auth-session"
         let persistence = AuthSessionPersistence(
             underlyingStorage: storage,
             storageKey: storageKey
         )
+        let user = makeUser()
         let session = Session(
-            accessToken: makeTestJWT(sessionID: "old-session"),
+            accessToken: makeTestJWT(sessionID: "old-session", userID: user.id),
             tokenType: "bearer",
             expiresIn: 3_600,
             expiresAt: Date().addingTimeInterval(3_600).timeIntervalSince1970,
             refreshToken: "old-refresh-token",
-            user: makeUser()
+            user: user
         )
         try persistence.activate(session)
         let staleData = try AuthClient.Configuration.jsonEncoder.encode(session)
+        storage.removeFailuresRemaining = 1
 
-        XCTAssertThrowsError(try persistence.invalidate())
+        try persistence.invalidate()
         try persistence.store(key: storageKey, value: staleData)
         XCTAssertNotNil(try storage.retrieve(key: storageKey))
 
-        try persistence.invalidate()
         let relaunchedPersistence = AuthSessionPersistence(
             underlyingStorage: storage,
             storageKey: storageKey
         )
         XCTAssertNil(try relaunchedPersistence.accessToken())
+        XCTAssertNotNil(try storage.retrieve(key: "\(storageKey).logout-fence-v1"))
+    }
+
+    func testConcurrentAdmittedStoreCannotResurrectSessionAfterInvalidation() throws {
+        let storageKey = "linearizable-auth-session"
+        let storage = BlockingAuthLocalStorage(blockedKey: storageKey)
+        let persistence = AuthSessionPersistence(
+            underlyingStorage: storage,
+            storageKey: storageKey
+        )
+        let user = makeUser()
+        let session = makeSession(user: user, sessionID: "same-session", refreshToken: "initial")
+        try persistence.activate(session)
+        let refreshedSession = makeSession(
+            user: user,
+            sessionID: "same-session",
+            refreshToken: "refreshed"
+        )
+        let refreshedData = try AuthClient.Configuration.jsonEncoder.encode(refreshedSession)
+
+        storage.blockNextStore()
+        let storeFinished = expectation(description: "admitted store finished")
+        DispatchQueue.global().async {
+            try? persistence.store(key: storageKey, value: refreshedData)
+            storeFinished.fulfill()
+        }
+        XCTAssertTrue(storage.waitUntilStoreIsBlocked())
+
+        let invalidationFinished = expectation(description: "invalidation finished")
+        DispatchQueue.global().async {
+            try? persistence.invalidate()
+            invalidationFinished.fulfill()
+        }
+
+        XCTAssertFalse(storage.waitUntilRemovalStarts(timeout: 0.1))
+        storage.releaseBlockedStore()
+        wait(for: [storeFinished, invalidationFinished], timeout: 1)
+
+        let relaunchedPersistence = AuthSessionPersistence(
+            underlyingStorage: storage,
+            storageKey: storageKey
+        )
+        XCTAssertNil(try relaunchedPersistence.accessToken())
+    }
+
+    func testMissingMalformedAndMismatchedJWTLineageFailClosed() throws {
+        let storageKey = "lineage-auth-session"
+        let storage = InMemoryAuthLocalStorage()
+        let persistence = AuthSessionPersistence(
+            underlyingStorage: storage,
+            storageKey: storageKey
+        )
+        let user = makeUser()
+        let invalidTokens = [
+            "malformed-token",
+            makeTestJWT(claims: ["sub": user.id.uuidString]),
+            makeTestJWT(claims: ["session_id": "missing-sub"]),
+            makeTestJWT(
+                claims: [
+                    "sub": UUID().uuidString,
+                    "session_id": "mismatched-sub",
+                ]
+            ),
+            makeTestJWT(
+                claims: [
+                    "sub": user.id.uuidString,
+                    "session_id": 42,
+                ]
+            ),
+        ]
+
+        for token in invalidTokens {
+            let session = makeSession(
+                user: user,
+                sessionID: "unused",
+                refreshToken: "invalid",
+                accessToken: token
+            )
+            XCTAssertThrowsError(try persistence.activate(session))
+            let data = try AuthClient.Configuration.jsonEncoder.encode(session)
+            try persistence.store(key: storageKey, value: data)
+            XCTAssertNil(try storage.retrieve(key: storageKey))
+        }
+    }
+
+    func testSameUserDifferentSessionCannotOverwriteAcceptedLineage() throws {
+        let storageKey = "same-user-lineage"
+        let storage = InMemoryAuthLocalStorage()
+        let persistence = AuthSessionPersistence(
+            underlyingStorage: storage,
+            storageKey: storageKey
+        )
+        let user = makeUser()
+        let accepted = makeSession(user: user, sessionID: "new-session", refreshToken: "new")
+        let stale = makeSession(user: user, sessionID: "old-session", refreshToken: "old")
+
+        try persistence.activate(accepted)
+        try persistence.store(
+            key: storageKey,
+            value: AuthClient.Configuration.jsonEncoder.encode(stale)
+        )
+
+        XCTAssertEqual(try persistence.accessToken(), accepted.accessToken)
+    }
+
+    func testStaleStoreCannotClearDurableLogoutFence() throws {
+        let storageKey = "durable-fence-session"
+        let fenceKey = "\(storageKey).logout-fence-v1"
+        let storage = InMemoryAuthLocalStorage()
+        let persistence = AuthSessionPersistence(
+            underlyingStorage: storage,
+            storageKey: storageKey
+        )
+        let user = makeUser()
+        let session = makeSession(user: user, sessionID: "old-session", refreshToken: "old")
+        let data = try AuthClient.Configuration.jsonEncoder.encode(session)
+        try persistence.activate(session)
+
+        try persistence.invalidate()
+        try persistence.store(key: storageKey, value: data)
+
+        XCTAssertNotNil(try storage.retrieve(key: fenceKey))
+        XCTAssertNil(try persistence.retrieve(key: storageKey))
+    }
+
+    func testExplicitValidActivationClearsFenceWithoutPersistingSecretsInIt() throws {
+        let storageKey = "activation-clears-fence"
+        let fenceKey = "\(storageKey).logout-fence-v1"
+        let storage = InMemoryAuthLocalStorage()
+        let persistence = AuthSessionPersistence(
+            underlyingStorage: storage,
+            storageKey: storageKey
+        )
+        let oldUser = makeUser()
+        let oldSession = makeSession(
+            user: oldUser,
+            sessionID: "private-session-sentinel",
+            refreshToken: "private-refresh-sentinel"
+        )
+        try persistence.activate(oldSession)
+        try persistence.invalidate()
+
+        let fence = try XCTUnwrap(storage.retrieve(key: fenceKey))
+        let fenceText = String(decoding: fence, as: UTF8.self)
+        XCTAssertFalse(fenceText.contains("private-session-sentinel"))
+        XCTAssertFalse(fenceText.contains("private-refresh-sentinel"))
+        XCTAssertFalse(fenceText.contains(oldUser.id.uuidString))
+
+        let newUser = makeUser()
+        let newSession = makeSession(user: newUser, sessionID: "new-session", refreshToken: "new")
+        try persistence.activate(newSession)
+
+        XCTAssertNil(try storage.retrieve(key: fenceKey))
+        XCTAssertEqual(try persistence.accessToken(), newSession.accessToken)
     }
 
     func testStaleRoleResolutionCannotRestoreSignedOutCapabilities() async {
@@ -334,6 +551,7 @@ final class AuthViewModelTests: XCTestCase {
 private final class MockAuthService: AuthServicing {
     var user: User
     var remoteSignOut: (() async throws -> Void)?
+    var includesRemoteSignOutOperation = true
     var localInvalidationError: Error?
     private(set) var prepareRemoteSignOutCallCount = 0
     private(set) var remoteSignOutCallCount = 0
@@ -353,6 +571,12 @@ private final class MockAuthService: AuthServicing {
         prepareRemoteSignOutCallCount += 1
         guard !localSessionInvalidated else {
             return AuthSignOutPreparation(accessToken: nil, remoteOperation: nil)
+        }
+        guard includesRemoteSignOutOperation else {
+            return AuthSignOutPreparation(
+                accessToken: "synthetic-access-token",
+                remoteOperation: nil
+            )
         }
         return AuthSignOutPreparation(
             accessToken: "synthetic-access-token",
@@ -533,6 +757,71 @@ private final class InMemoryAuthLocalStorage: AuthLocalStorage, @unchecked Senda
     }
 }
 
+private final class BlockingAuthLocalStorage: AuthLocalStorage, @unchecked Sendable {
+    private let lock = NSLock()
+    private let blockedKey: String
+    private let storeBlocked = DispatchSemaphore(value: 0)
+    private let releaseStore = DispatchSemaphore(value: 0)
+    private let removalStarted = DispatchSemaphore(value: 0)
+    private var values: [String: Data] = [:]
+    private var shouldBlockNextStore = false
+
+    init(blockedKey: String) {
+        self.blockedKey = blockedKey
+    }
+
+    func blockNextStore() {
+        lock.lock()
+        shouldBlockNextStore = true
+        lock.unlock()
+    }
+
+    func waitUntilStoreIsBlocked() -> Bool {
+        storeBlocked.wait(timeout: .now() + 1) == .success
+    }
+
+    func releaseBlockedStore() {
+        releaseStore.signal()
+    }
+
+    func waitUntilRemovalStarts(timeout: TimeInterval) -> Bool {
+        removalStarted.wait(timeout: .now() + timeout) == .success
+    }
+
+    func store(key: String, value: Data) throws {
+        lock.lock()
+        let shouldBlock = key == blockedKey && shouldBlockNextStore
+        if shouldBlock {
+            shouldBlockNextStore = false
+        }
+        lock.unlock()
+
+        if shouldBlock {
+            storeBlocked.signal()
+            releaseStore.wait()
+        }
+
+        lock.lock()
+        values[key] = value
+        lock.unlock()
+    }
+
+    func retrieve(key: String) throws -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return values[key]
+    }
+
+    func remove(key: String) throws {
+        if key == blockedKey {
+            removalStarted.signal()
+        }
+        lock.lock()
+        values.removeValue(forKey: key)
+        lock.unlock()
+    }
+}
+
 private enum InMemoryStorageError: Error {
     case removeFailed
 }
@@ -558,9 +847,34 @@ private func makeUser(id: UUID = UUID()) -> User {
     )
 }
 
-private func makeTestJWT(sessionID: String) -> String {
+private func makeSession(
+    user: User,
+    sessionID: String,
+    refreshToken: String,
+    accessToken: String? = nil
+) -> Session {
+    Session(
+        accessToken: accessToken ?? makeTestJWT(sessionID: sessionID, userID: user.id),
+        tokenType: "bearer",
+        expiresIn: 3_600,
+        expiresAt: Date().addingTimeInterval(3_600).timeIntervalSince1970,
+        refreshToken: refreshToken,
+        user: user
+    )
+}
+
+private func makeTestJWT(sessionID: String, userID: UUID) -> String {
+    makeTestJWT(
+        claims: [
+            "session_id": sessionID,
+            "sub": userID.uuidString.lowercased(),
+        ]
+    )
+}
+
+private func makeTestJWT(claims: [String: Any]) -> String {
     let payload = try! JSONSerialization.data(
-        withJSONObject: ["session_id": sessionID],
+        withJSONObject: claims,
         options: [.sortedKeys]
     )
     let encodedPayload = payload

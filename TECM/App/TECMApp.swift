@@ -13,10 +13,9 @@ struct TECMApp: App {
                 .environmentObject(authViewModel)
                 .environmentObject(pushCoordinator)
                 .task {
-                    authViewModel.configureSignOutCleanup { [weak pushCoordinator] accessToken in
-                        try await pushCoordinator?.deactivateCurrentInstallation(
-                            accessToken: accessToken
-                        )
+                    authViewModel.configureSignOutCleanup { [weak pushCoordinator] context in
+                        await pushCoordinator?.prepareSignOutCleanup(context: context)
+                            ?? AppSignOutCleanupPreparation(remoteOperation: nil)
                     }
                     await pushCoordinator.updateAuthenticatedUser(
                         authViewModel.currentUser?.id,

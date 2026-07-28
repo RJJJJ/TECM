@@ -139,8 +139,8 @@ final class PushNotificationCoordinatorTests: XCTestCase {
         )
         var sensitiveCacheClearCount = 0
         viewModel.configureSensitiveStateCleanup { sensitiveCacheClearCount += 1 }
-        viewModel.configureSignOutCleanup { accessToken in
-            try await coordinator.deactivateCurrentInstallation(accessToken: accessToken)
+        viewModel.configureSignOutCleanup { context in
+            await coordinator.prepareSignOutCleanup(context: context)
         }
         await viewModel.signIn(email: "first@example.invalid", password: "unused")
 
@@ -181,6 +181,13 @@ final class PushNotificationCoordinatorTests: XCTestCase {
 
         authService.user = secondUser
         await viewModel.signIn(email: "second@example.invalid", password: "unused")
+        let secondUserRoute = AppDeepLinkRoute.notification(UUID())
+        switch secondUserRoute {
+        case let .notification(notificationID):
+            coordinator.handle(url: URL(string: "tecm://notifications/\(notificationID.uuidString)")!)
+        default:
+            XCTFail("Expected notification route")
+        }
         remoteGate.release()
         await fulfillment(of: [remoteGate.finished], timeout: 1)
         await Task.yield()
@@ -188,7 +195,7 @@ final class PushNotificationCoordinatorTests: XCTestCase {
         XCTAssertEqual(viewModel.currentUser?.id, secondUser.id)
         XCTAssertNotEqual(viewModel.currentUser?.id, firstUser.id)
         XCTAssertTrue(viewModel.hasParentRole)
-        XCTAssertNil(coordinator.pendingRoute)
+        XCTAssertEqual(coordinator.pendingRoute, secondUserRoute)
         XCTAssertEqual(sensitiveCacheClearCount, 1)
     }
 
