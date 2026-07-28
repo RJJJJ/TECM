@@ -79,8 +79,17 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         let logoutFenceKey = "\(storageKey).logout-fence-v1"
         self.logoutFenceKey = logoutFenceKey
 
-        // MUTATION M8: ignore durable logout evidence on restart.
-        writePolicy = .acceptingAnySession
+        do {
+            if try underlyingStorage.retrieve(key: logoutFenceKey) == nil {
+                writePolicy = .acceptingAnySession
+            } else {
+                writePolicy = .invalidated
+                try? underlyingStorage.remove(key: storageKey)
+            }
+        } catch {
+            // Storage uncertainty must never make a persisted session readable.
+            writePolicy = .invalidated
+        }
     }
 
     func accessToken() throws -> String? {
@@ -162,19 +171,15 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
             .decode(Session.self, from: value)
         let lineage = session.flatMap { try? Self.lineage(from: $0) }
 
-        // MUTATION M8: admit under the lock, then write after releasing it.
         lock.lock()
-        let admittedPolicy = writePolicy
-        lock.unlock()
-        switch admittedPolicy {
+        defer { lock.unlock() }
+        switch writePolicy {
         case .acceptingAnySession:
             guard let lineage else { return }
             try underlyingStorage.store(key: key, value: value)
             writePolicy = .acceptingSession(lineage)
         case .invalidated:
-            // MUTATION M8: let stale storage callbacks clear the logout fence.
-            try underlyingStorage.store(key: key, value: value)
-            try? underlyingStorage.remove(key: logoutFenceKey)
+            return
         case let .acceptingSession(acceptedLineage):
             guard lineage == acceptedLineage else { return }
             try underlyingStorage.store(key: key, value: value)
@@ -238,11 +243,9 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let subject = object["sub"] as? String,
               let subjectID = UUID(uuidString: subject),
-              subjectID == session.user.id else {
-            throw AuthSessionPersistenceError.invalidSessionLineage
-        }
-        let sessionID = (object["session_id"] as? String) ?? "legacy-session"
-        guard !sessionID.isEmpty else {
+              subjectID == session.user.id,
+              let sessionID = object["session_id"] as? String,
+              !sessionID.isEmpty else {
             throw AuthSessionPersistenceError.invalidSessionLineage
         }
         return SessionLineage(userID: subjectID, sessionID: sessionID)
