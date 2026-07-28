@@ -173,7 +173,7 @@ final class PushNotificationCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.pendingRoute)
         XCTAssertNil(coordinator.lastErrorMessage)
         XCTAssertEqual(viewModel.errorMessage, AuthViewModel.incompleteRemoteLogoutMessage)
-        XCTAssertFalse(coordinator.lastErrorMessage?.contains(MockNotificationError.sensitiveSentinel) ?? true)
+        XCTAssertFalse(coordinator.lastErrorMessage?.contains(MockNotificationError.sensitiveSentinel) ?? false)
         XCTAssertEqual(deadline.requestedDuration, .milliseconds(1))
 
         authService.user = secondUser
