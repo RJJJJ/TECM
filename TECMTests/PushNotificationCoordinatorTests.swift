@@ -181,13 +181,11 @@ final class PushNotificationCoordinatorTests: XCTestCase {
 
         authService.user = secondUser
         await viewModel.signIn(email: "second@example.invalid", password: "unused")
-        let secondUserRoute = AppDeepLinkRoute.notification(UUID())
-        switch secondUserRoute {
-        case let .notification(notificationID):
-            coordinator.handle(url: URL(string: "tecm://notifications/\(notificationID.uuidString)")!)
-        default:
-            XCTFail("Expected notification route")
-        }
+        let secondUserNotificationID = UUID()
+        let secondUserRoute = AppDeepLinkRoute.notification(secondUserNotificationID)
+        coordinator.handle(
+            url: URL(string: "tecm://notifications/\(secondUserNotificationID.uuidString)")!
+        )
         remoteGate.release()
         await fulfillment(of: [remoteGate.finished], timeout: 1)
         await Task.yield()
