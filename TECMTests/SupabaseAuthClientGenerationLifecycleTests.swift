@@ -254,7 +254,9 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
         let gate = GatedSDKSignOutObserver(testCase: self)
         let fixture = makeFixture()
         let lifecycle = fixture.makeLifecycle(
-            observeSignOutEvent: gate.observe,
+            observeSignOutEvent: { auth, onSignedOut in
+                await gate.observe(auth: auth, onSignedOut: onSignedOut)
+            },
             disposeGeneration: { _ in }
         )
         let old = lifecycle.current
@@ -306,7 +308,8 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
         XCTAssertEqual(try fixture.fence.read(projectKey: fixture.projectKey), .loggedOut)
 
         gate.release()
-        XCTAssertEqual(try await logoutTask.value, .signedOutEventObserved)
+        let logoutResult = try await logoutTask.value
+        XCTAssertEqual(logoutResult, .signedOutEventObserved)
         XCTAssertEqual(lifecycle.current.identity, old.identity + 1)
         XCTAssertFalse(lifecycle.current === old)
         XCTAssertNil(lifecycle.current.client.auth.currentSession)
@@ -316,7 +319,9 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
         let gate = GatedSDKSignOutObserver(testCase: self)
         let fixture = makeFixture()
         let lifecycle = fixture.makeLifecycle(
-            observeSignOutEvent: gate.observe,
+            observeSignOutEvent: { auth, onSignedOut in
+                await gate.observe(auth: auth, onSignedOut: onSignedOut)
+            },
             disposeGeneration: { _ in }
         )
         let old = lifecycle.current
@@ -356,7 +361,8 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
         XCTAssertEqual(try fixture.fence.read(projectKey: fixture.projectKey), .loggedOut)
 
         gate.release()
-        XCTAssertEqual(try await logoutTask.value, .signedOutEventObserved)
+        let logoutResult = try await logoutTask.value
+        XCTAssertEqual(logoutResult, .signedOutEventObserved)
         let fresh = lifecycle.current
         XCTAssertEqual(fresh.identity, old.identity + 1)
 
@@ -391,7 +397,9 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
         let gate = GatedSDKSignOutObserver(testCase: self)
         let fixture = makeFixture()
         let lifecycle = fixture.makeLifecycle(
-            observeSignOutEvent: gate.observe,
+            observeSignOutEvent: { auth, onSignedOut in
+                await gate.observe(auth: auth, onSignedOut: onSignedOut)
+            },
             disposeGeneration: { _ in }
         )
         let old = lifecycle.current
@@ -439,7 +447,8 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
         XCTAssertEqual(try fixture.fence.read(projectKey: fixture.projectKey), .loggedOut)
 
         gate.release()
-        XCTAssertEqual(try await logoutTask.value, .signedOutEventObserved)
+        let logoutResult = try await logoutTask.value
+        XCTAssertEqual(logoutResult, .signedOutEventObserved)
         let fresh = lifecycle.current
         XCTAssertEqual(fresh.identity, old.identity + 1)
 
@@ -480,7 +489,9 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
         let disposedGenerationCount = GenerationAtomicCounter()
         let fixture = makeFixture()
         let lifecycle = fixture.makeLifecycle(
-            observeSignOutEvent: gate.observe,
+            observeSignOutEvent: { auth, onSignedOut in
+                await gate.observe(auth: auth, onSignedOut: onSignedOut)
+            },
             disposeGeneration: { _ in disposedGenerationCount.increment() }
         )
         let old = lifecycle.current
@@ -512,7 +523,8 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
         }
         await fulfillment(of: [gate.observerRegistered, gate.genuineEventObserved], timeout: 1)
         gate.release()
-        XCTAssertEqual(try await logoutTask.value, .signedOutEventObserved)
+        let logoutResult = try await logoutTask.value
+        XCTAssertEqual(logoutResult, .signedOutEventObserved)
         XCTAssertEqual(disposedGenerationCount.value, 1)
 
         let fresh = lifecycle.current
@@ -574,7 +586,9 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
         let disposedGenerationCount = GenerationAtomicCounter()
         let fixture = makeFixture()
         let lifecycle = fixture.makeLifecycle(
-            observeSignOutEvent: gate.observe,
+            observeSignOutEvent: { auth, onSignedOut in
+                await gate.observe(auth: auth, onSignedOut: onSignedOut)
+            },
             disposeGeneration: { _ in disposedGenerationCount.increment() }
         )
         let old = lifecycle.current
@@ -787,7 +801,7 @@ private final class GenerationURLProtocol: URLProtocol {
     ) {
         lock.lock()
         let matching = pending.enumerated().filter {
-            $0.request.url?.path.hasSuffix(pathSuffix) == true
+            $0.element.request.url?.path.hasSuffix(pathSuffix) == true
         }
         let selected: [GenerationURLProtocol]
         if let occurrence {
@@ -800,7 +814,7 @@ private final class GenerationURLProtocol: URLProtocol {
                 selected.contains { $0 === protocolInstance }
             }
         } else {
-            selected = matching.map(\.element)
+            selected = matching.map { $0.element }
             pending.removeAll {
                 $0.request.url?.path.hasSuffix(pathSuffix) == true
             }
@@ -959,7 +973,10 @@ private final class GenerationRoleService: UserRoleServicing, @unchecked Sendabl
 
     func resolveCapabilities(userID: UUID) async throws -> UserRoleCapabilities {
         counter.increment()
-        UserRoleCapabilities.resolve(organizationRoleNames: [], hasParentProfile: true)
+        return UserRoleCapabilities.resolve(
+            organizationRoleNames: [],
+            hasParentProfile: true
+        )
     }
 }
 
