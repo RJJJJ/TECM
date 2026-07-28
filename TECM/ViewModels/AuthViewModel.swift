@@ -238,33 +238,11 @@ final class AuthViewModel: ObservableObject {
     private func runBoundedRemoteAuthSignOut(
         _ operation: RemoteAuthSignOutOperation
     ) async -> RemoteAuthSignOutResult {
-        let timeout = remoteAuthSignOutTimeout
-        let waitForDeadline = waitForRemoteAuthSignOutDeadline
-        let race = RemoteAuthSignOutRace()
-
-        let remoteTask = Task { [weak race] in
-            guard !Task.isCancelled else { return }
-            do {
-                try await operation.run()
-                await race?.resolve(.succeeded)
-            } catch {
-                await race?.resolve(.failed)
-            }
+        do {
+            try await operation.run()
+            return .succeeded
+        } catch {
+            return .failed
         }
-        let deadlineTask = Task { @MainActor [weak race] in
-            await waitForDeadline(timeout)
-            await race?.resolve(.timedOut)
-        }
-
-        let result = await withTaskCancellationHandler {
-            await race.waitForResult()
-        } onCancel: {
-            Task {
-                await race.resolve(.failed)
-            }
-        }
-        remoteTask.cancel()
-        deadlineTask.cancel()
-        return result
     }
 }
