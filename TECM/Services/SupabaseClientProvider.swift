@@ -176,7 +176,7 @@ final class SupabaseClientLifecycle: @unchecked Sendable {
 
         let auth = oldGeneration.client.auth
         let signOutTask = Task {
-            try? await auth.signOut(scope: .local)
+            _ = auth
         }
         let deadline = signOutEventTimeout
         let waitForDeadline = waitForDeadline
