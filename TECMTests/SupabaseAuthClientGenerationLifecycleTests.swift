@@ -10,6 +10,12 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
         GenerationURLProtocol.reset()
     }
 
+    override func tearDown() {
+        GenerationURLProtocol.respondToAll(statusCode: 200)
+        GenerationURLProtocol.reset()
+        super.tearDown()
+    }
+
     func testT1OfficialLocalSignOutEmitsGenuineEventBeforeRequestCompletes() async throws {
         let fixture = makeFixture()
         let persistence = fixture.makePersistence()
