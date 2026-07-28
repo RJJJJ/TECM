@@ -139,8 +139,8 @@ final class PushNotificationCoordinatorTests: XCTestCase {
         )
         var sensitiveCacheClearCount = 0
         viewModel.configureSensitiveStateCleanup { sensitiveCacheClearCount += 1 }
-        viewModel.configureSignOutCleanup {
-            try await coordinator.deactivateCurrentInstallation()
+        viewModel.configureSignOutCleanup { accessToken in
+            try await coordinator.deactivateCurrentInstallation(accessToken: accessToken)
         }
         await viewModel.signIn(email: "first@example.invalid", password: "unused")
 
@@ -162,6 +162,7 @@ final class PushNotificationCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(returnedBeforeRemoteRelease)
         XCTAssertEqual(service.deactivationCallCount, 1)
+        XCTAssertEqual(service.lastDeactivationAccessToken, "synthetic-access-token")
         XCTAssertTrue(remoteGate.isSuspended)
         XCTAssertEqual(authService.signOutCallCount, 1)
         XCTAssertTrue(authService.localSessionInvalidated)
@@ -262,6 +263,7 @@ private final class MockNotificationService: NotificationServicing {
     let onDeactivationCancelled: (() -> Void)?
     let nonCooperativeGate: NonCooperativeDeactivationGate?
     private(set) var deactivationCallCount = 0
+    private(set) var lastDeactivationAccessToken: String?
 
     init(
         deactivationError: Error? = nil,
@@ -283,8 +285,9 @@ private final class MockNotificationService: NotificationServicing {
     func fetchUnreadNotificationCount() async throws -> Int { 0 }
     func registerPushDevice(_ registration: PushDeviceRegistration) async throws {}
 
-    func deactivatePushDevice(installationID: String) async throws {
+    func deactivatePushDevice(installationID: String, accessToken: String?) async throws {
         deactivationCallCount += 1
+        lastDeactivationAccessToken = accessToken
         onDeactivationStarted?()
         if let nonCooperativeGate {
             await nonCooperativeGate.suspendIgnoringCancellation()
@@ -368,8 +371,19 @@ private final class PushTestAuthService: AuthServicing {
         return user
     }
 
-    func signOut() async throws {
-        signOutCallCount += 1
+    func prepareSignOut() throws -> AuthSignOutPreparation {
+        guard !localSessionInvalidated else {
+            return AuthSignOutPreparation(accessToken: nil, remoteOperation: nil)
+        }
+        return AuthSignOutPreparation(
+            accessToken: "synthetic-access-token",
+            remoteOperation: RemoteAuthSignOutOperation { @MainActor [weak self] in
+                self?.signOutCallCount += 1
+            }
+        )
+    }
+
+    func invalidateLocalSession() throws {
         localSessionInvalidated = true
     }
 

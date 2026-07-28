@@ -3,18 +3,51 @@ import Supabase
 import Combine
 
 enum SupabaseClientProvider {
-    static let shared: SupabaseClient = {
+    private struct Context {
+        let client: SupabaseClient
+        let configuration: SupabaseConfig
+        let authSessionPersistence: AuthSessionPersistence
+    }
+
+    private static let context: Context = {
+        let configuration: SupabaseConfig
         do {
-            let config = try SupabaseConfig.load()
-            return SupabaseClient(supabaseURL: config.url, supabaseKey: config.publishableKey)
+            configuration = try SupabaseConfig.load()
         } catch {
             #if DEBUG
             print("Supabase configuration unavailable; using the inert local fallback.")
             #endif
-            return SupabaseClient(
-                supabaseURL: URL(string: "https://invalid.supabase.co")!,
-                supabaseKey: "invalid-publishable-key"
+            configuration = SupabaseConfig(
+                url: URL(string: "https://invalid.supabase.co")!,
+                publishableKey: "invalid-publishable-key"
             )
         }
+
+        let projectReference = configuration.url.host?.split(separator: ".").first ?? "invalid"
+        let authStorageKey = "sb-\(projectReference)-auth-token"
+        let authSessionPersistence = AuthSessionPersistence(
+            underlyingStorage: AuthClient.Configuration.defaultLocalStorage,
+            storageKey: authStorageKey
+        )
+        let options = SupabaseClientOptions(
+            auth: .init(storage: authSessionPersistence, storageKey: authStorageKey)
+        )
+        let client = SupabaseClient(
+            supabaseURL: configuration.url,
+            supabaseKey: configuration.publishableKey,
+            options: options
+        )
+
+        return Context(
+            client: client,
+            configuration: configuration,
+            authSessionPersistence: authSessionPersistence
+        )
     }()
+
+    static var shared: SupabaseClient { context.client }
+    static var configuration: SupabaseConfig { context.configuration }
+    static var authSessionPersistence: AuthSessionPersistence {
+        context.authSessionPersistence
+    }
 }

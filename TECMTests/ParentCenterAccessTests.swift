@@ -371,7 +371,7 @@ private final class ParentNotificationServiceMock: NotificationServicing {
     func markAllNotificationsRead() async throws {}
     func fetchUnreadNotificationCount() async throws -> Int { 0 }
     func registerPushDevice(_ registration: PushDeviceRegistration) async throws {}
-    func deactivatePushDevice(installationID: String) async throws {}
+    func deactivatePushDevice(installationID: String, accessToken: String?) async throws {}
 }
 
 @MainActor

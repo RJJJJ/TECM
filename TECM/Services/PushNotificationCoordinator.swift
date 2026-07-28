@@ -193,12 +193,12 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
         }
     }
 
-    func deactivateCurrentInstallation() async throws {
+    func deactivateCurrentInstallation(accessToken: String? = nil) async throws {
         await clearLocalNotificationState()
 
         var cleanupError: PushNotificationCleanupError?
         do {
-            try await deactivateRemoteInstallationWithTimeout()
+            try await deactivateRemoteInstallationWithTimeout(accessToken: accessToken)
         } catch {
             cleanupError = .remoteDeactivationFailed
         }
@@ -237,7 +237,7 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
         realtimeCleanupObserver?()
     }
 
-    private func deactivateRemoteInstallationWithTimeout() async throws {
+    private func deactivateRemoteInstallationWithTimeout(accessToken: String?) async throws {
         let notificationService = notificationService
         let installationID = Self.installationID
         let timeout = remoteDeactivationTimeout
@@ -247,7 +247,10 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
         let remoteTask = Task { @MainActor [weak race] in
             guard !Task.isCancelled else { return }
             do {
-                try await notificationService.deactivatePushDevice(installationID: installationID)
+                try await notificationService.deactivatePushDevice(
+                    installationID: installationID,
+                    accessToken: accessToken
+                )
                 await race?.resolve(.succeeded)
             } catch {
                 await race?.resolve(.failed)
