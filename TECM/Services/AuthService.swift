@@ -631,7 +631,7 @@ struct AuthService: AuthServicing {
     }
 
     func signIn(email: String, password: String) async throws -> User {
-        let generation = lifecycle.current
+        let generation = try lifecycle.generationForAuthentication()
         let session = try await generation.client.auth.signIn(email: email, password: password)
         try lifecycle.activate(session, in: generation)
         return session.user
@@ -660,7 +660,7 @@ struct AuthService: AuthServicing {
     }
 
     func currentUser() async throws -> User? {
-        let generation = lifecycle.current
+        let generation = try lifecycle.generationForAuthentication()
         do {
             let session = try await generation.client.auth.session
             return session.user
@@ -670,7 +670,7 @@ struct AuthService: AuthServicing {
     }
 
     func handleAuthCallback(url: URL) async throws -> User {
-        let generation = lifecycle.current
+        let generation = try lifecycle.generationForAuthentication()
         let session = try await generation.client.auth.session(from: url)
         try lifecycle.activate(session, in: generation)
         return session.user

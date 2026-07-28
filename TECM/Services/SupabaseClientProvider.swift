@@ -30,8 +30,13 @@ private actor LocalSDKSignOutRace {
 }
 
 final class SupabaseClientLifecycle: @unchecked Sendable {
-    enum LifecycleError: Error {
+    enum LifecycleError: LocalizedError, Equatable {
         case staleGeneration
+        case generationRetiring
+
+        var errorDescription: String? {
+            "Authentication changed. Please try again."
+        }
     }
 
     final class Generation: @unchecked Sendable {
@@ -116,11 +121,24 @@ final class SupabaseClientLifecycle: @unchecked Sendable {
         return activeGeneration
     }
 
+    func generationForAuthentication() throws -> Generation {
+        lock.lock()
+        defer { lock.unlock() }
+        let generation = activeGeneration!
+        guard signOutTransition?.identity != generation.identity else {
+            throw LifecycleError.generationRetiring
+        }
+        return generation
+    }
+
     func activate(_ session: Session, in generation: Generation) throws {
         lock.lock()
         defer { lock.unlock() }
         guard activeGeneration === generation else {
             throw LifecycleError.staleGeneration
+        }
+        guard signOutTransition?.identity != generation.identity else {
+            throw LifecycleError.generationRetiring
         }
         try generation.sessionPersistence.activate(session)
     }
