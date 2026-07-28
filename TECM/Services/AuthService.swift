@@ -49,7 +49,7 @@ struct AuthSignOutPreparation: Sendable {
 protocol AuthServicing {
     func signIn(email: String, password: String) async throws -> User
     func prepareSignOut() throws -> AuthSignOutPreparation
-    func invalidateLocalSession() throws
+    func invalidateLocalSession() async throws -> LocalSDKSignOutResult
     func restoreSession() async throws -> User?
     func currentUser() async throws -> User?
     func handleAuthCallback(url: URL) async throws -> User
@@ -122,6 +122,33 @@ private enum LogoutSafetyFenceStorageError: Error {
     case persistenceFailed
 }
 
+final class AuthSessionGenerationAuthority: @unchecked Sendable {
+    private let lock = NSLock()
+    private var currentIdentity: UInt64
+
+    init(initialIdentity: UInt64) {
+        currentIdentity = initialIdentity
+    }
+
+    func withCurrent<T>(
+        _ identity: UInt64,
+        operation: () throws -> T
+    ) rethrows -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard currentIdentity == identity else { return nil }
+        return try operation()
+    }
+
+    func advance(from oldIdentity: UInt64, to newIdentity: UInt64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard currentIdentity == oldIdentity else { return false }
+        currentIdentity = newIdentity
+        return true
+    }
+}
+
 final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
     private struct SessionLineage: Equatable {
         let userID: UUID
@@ -132,6 +159,7 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         case acceptingAnySession
         case invalidated
         case acceptingSession(SessionLineage)
+        case loggingOut(SessionLineage)
     }
 
     private let sessionStorage: any AuthLocalStorage
@@ -140,6 +168,8 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
     private let projectKey: String
     private let isProjectKeyValid: Bool
     private let legacyLogoutFenceKey: String
+    private let generationAuthority: AuthSessionGenerationAuthority?
+    private let generationIdentity: UInt64?
     private let lock = NSLock()
     private var writePolicy: WritePolicy
 
@@ -147,7 +177,9 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         sessionStorage: any AuthLocalStorage,
         logoutSafetyFenceStorage: any LogoutSafetyFenceStorage,
         storageKey: String,
-        projectKey: String
+        projectKey: String,
+        generationAuthority: AuthSessionGenerationAuthority? = nil,
+        generationIdentity: UInt64? = nil
     ) {
         self.sessionStorage = sessionStorage
         self.logoutSafetyFenceStorage = logoutSafetyFenceStorage
@@ -155,6 +187,8 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         self.projectKey = projectKey
         isProjectKeyValid = Self.isValidProjectKey(projectKey)
         legacyLogoutFenceKey = "\(storageKey).logout-fence-v1"
+        self.generationAuthority = generationAuthority
+        self.generationIdentity = generationIdentity
         writePolicy = .invalidated
 
         guard isProjectKeyValid else {
@@ -207,6 +241,21 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
     }
 
     func invalidate() throws {
+        if let generationAuthority, let generationIdentity {
+            let performed: Void? = try generationAuthority.withCurrent(generationIdentity) {
+                try invalidateAuthorized()
+            }
+            if performed == nil {
+                lock.lock()
+                writePolicy = .invalidated
+                lock.unlock()
+            }
+            return
+        }
+        try invalidateAuthorized()
+    }
+
+    private func invalidateAuthorized() throws {
         lock.lock()
         defer { lock.unlock() }
 
@@ -248,7 +297,91 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         }
     }
 
+    func beginSDKSignOut() throws {
+        if let generationAuthority, let generationIdentity {
+            let performed: Void? = try generationAuthority.withCurrent(generationIdentity) {
+                try beginSDKSignOutAuthorized()
+            }
+            guard performed != nil else {
+                throw AuthSessionPersistenceError.staleGeneration
+            }
+            return
+        }
+        try beginSDKSignOutAuthorized()
+    }
+
+    private func beginSDKSignOutAuthorized() throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard isProjectKeyValid else {
+            writePolicy = .invalidated
+            throw AuthSessionPersistenceError.invalidProjectKey
+        }
+
+        guard let data = try sessionStorage.retrieve(key: storageKey),
+              let session = try? AuthClient.Configuration.jsonDecoder.decode(Session.self, from: data),
+              let lineage = try? Self.lineage(from: session) else {
+            writePolicy = .invalidated
+            var durableFenceStored = false
+            var lastError: Error?
+            do {
+                try logoutSafetyFenceStorage.markLoggedOut(projectKey: projectKey)
+                durableFenceStored = true
+            } catch {
+                lastError = error
+            }
+            do {
+                try sessionStorage.store(key: legacyLogoutFenceKey, value: Data([1]))
+                durableFenceStored = true
+            } catch {
+                lastError = error
+            }
+            try? sessionStorage.remove(key: storageKey)
+            guard durableFenceStored else {
+                throw lastError ?? AuthSessionPersistenceError.invalidationFailed
+            }
+            return
+        }
+
+        // Reject refresh writes immediately, while leaving the exact old
+        // session readable for AuthClient.signOut's currentSession guard.
+        writePolicy = .loggingOut(lineage)
+        var durableFenceStored = false
+        var lastError: Error?
+        do {
+            try logoutSafetyFenceStorage.markLoggedOut(projectKey: projectKey)
+            durableFenceStored = true
+        } catch {
+            lastError = error
+        }
+        do {
+            try sessionStorage.store(key: legacyLogoutFenceKey, value: Data([1]))
+            durableFenceStored = true
+        } catch {
+            lastError = error
+        }
+        guard durableFenceStored else {
+            writePolicy = .invalidated
+            try? sessionStorage.remove(key: storageKey)
+            throw lastError ?? AuthSessionPersistenceError.invalidationFailed
+        }
+    }
+
     func activate(_ session: Session) throws {
+        if let generationAuthority, let generationIdentity {
+            let performed: Void? = try generationAuthority.withCurrent(generationIdentity) {
+                try activateAuthorized(session)
+            }
+            guard performed != nil else {
+                throw AuthSessionPersistenceError.staleGeneration
+            }
+            return
+        }
+        try activateAuthorized(session)
+    }
+
+    private func activateAuthorized(_ session: Session) throws {
         let lineage = try Self.lineage(from: session)
         let data = try AuthClient.Configuration.jsonEncoder.encode(session)
 
@@ -275,6 +408,19 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
     }
 
     func store(key: String, value: Data) throws {
+        if let generationAuthority, let generationIdentity {
+            let performed: Void? = try generationAuthority.withCurrent(generationIdentity) {
+                try storeAuthorized(key: key, value: value)
+            }
+            if performed == nil {
+                return
+            }
+            return
+        }
+        try storeAuthorized(key: key, value: value)
+    }
+
+    private func storeAuthorized(key: String, value: Data) throws {
         guard key == storageKey else {
             try sessionStorage.store(key: key, value: value)
             return
@@ -293,6 +439,8 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
             writePolicy = .acceptingSession(lineage)
         case .invalidated:
             return
+        case .loggingOut:
+            return
         case let .acceptingSession(acceptedLineage):
             guard lineage == acceptedLineage else { return }
             try sessionStorage.store(key: key, value: value)
@@ -300,6 +448,16 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
     }
 
     func retrieve(key: String) throws -> Data? {
+        if let generationAuthority, let generationIdentity {
+            let performed: Data?? = try generationAuthority.withCurrent(generationIdentity) {
+                try retrieveAuthorized(key: key)
+            }
+            return performed ?? nil
+        }
+        return try retrieveAuthorized(key: key)
+    }
+
+    private func retrieveAuthorized(key: String) throws -> Data? {
         guard key == storageKey else {
             return try sessionStorage.retrieve(key: key)
         }
@@ -326,6 +484,8 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
             writePolicy = .acceptingSession(lineage)
             return data
         case let .acceptingSession(acceptedLineage):
+            return lineage == acceptedLineage ? data : nil
+        case let .loggingOut(acceptedLineage):
             return lineage == acceptedLineage ? data : nil
         case .invalidated:
             return nil
@@ -379,6 +539,7 @@ private enum AuthSessionPersistenceError: Error {
     case invalidationFailed
     case activationFailed
     case invalidProjectKey
+    case staleGeneration
 }
 
 enum RemoteAuthSignOutError: LocalizedError {
@@ -447,31 +608,30 @@ struct SupabaseRemoteAuthRevoker: Sendable {
 }
 
 struct AuthService: AuthServicing {
-    private let client: SupabaseClient
-    private let sessionPersistence: AuthSessionPersistence
+    private let lifecycle: SupabaseClientLifecycle
     private let remoteRevoker: SupabaseRemoteAuthRevoker
 
     init(
-        client: SupabaseClient = SupabaseClientProvider.shared,
-        sessionPersistence: AuthSessionPersistence = SupabaseClientProvider.authSessionPersistence,
+        lifecycle: SupabaseClientLifecycle = SupabaseClientProvider.lifecycle,
         remoteRevoker: SupabaseRemoteAuthRevoker = SupabaseRemoteAuthRevoker(
             supabaseURL: SupabaseClientProvider.configuration.url,
             publishableKey: SupabaseClientProvider.configuration.publishableKey
         )
     ) {
-        self.client = client
-        self.sessionPersistence = sessionPersistence
+        self.lifecycle = lifecycle
         self.remoteRevoker = remoteRevoker
     }
 
     func signIn(email: String, password: String) async throws -> User {
-        let session = try await client.auth.signIn(email: email, password: password)
-        try sessionPersistence.activate(session)
+        let generation = lifecycle.current
+        let session = try await generation.client.auth.signIn(email: email, password: password)
+        try lifecycle.activate(session, in: generation)
         return session.user
     }
 
     func prepareSignOut() throws -> AuthSignOutPreparation {
-        guard let cleanupContext = try sessionPersistence.signOutCleanupContext() else {
+        let generation = lifecycle.current
+        guard let cleanupContext = try generation.sessionPersistence.signOutCleanupContext() else {
             return AuthSignOutPreparation(cleanupContext: nil, remoteOperation: nil)
         }
         let remoteRevoker = remoteRevoker
@@ -483,12 +643,8 @@ struct AuthService: AuthServicing {
         )
     }
 
-    func invalidateLocalSession() throws {
-        try sessionPersistence.invalidate()
-        let auth = client.auth
-        Task {
-            await auth.stopAutoRefresh()
-        }
+    func invalidateLocalSession() async throws -> LocalSDKSignOutResult {
+        try await lifecycle.signOutCurrentGeneration()
     }
 
     func restoreSession() async throws -> User? {
@@ -496,8 +652,9 @@ struct AuthService: AuthServicing {
     }
 
     func currentUser() async throws -> User? {
+        let generation = lifecycle.current
         do {
-            let session = try await client.auth.session
+            let session = try await generation.client.auth.session
             return session.user
         } catch {
             return nil
@@ -505,8 +662,9 @@ struct AuthService: AuthServicing {
     }
 
     func handleAuthCallback(url: URL) async throws -> User {
-        let session = try await client.auth.session(from: url)
-        try sessionPersistence.activate(session)
+        let generation = lifecycle.current
+        let session = try await generation.client.auth.session(from: url)
+        try lifecycle.activate(session, in: generation)
         return session.user
     }
 }

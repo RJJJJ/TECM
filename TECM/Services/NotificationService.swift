@@ -21,17 +21,18 @@ struct PushDeviceRegistration {
 }
 
 struct NotificationService: NotificationServicing {
-    private let client: SupabaseClient
+    private let clientResolver: SupabaseClientResolver
+    private var client: SupabaseClient { clientResolver.client }
     private let supabaseURL: URL
     private let publishableKey: String
     private let session: URLSession
 
     init(
-        client: SupabaseClient = SupabaseClientProvider.shared,
+        client: SupabaseClient? = nil,
         configuration: SupabaseConfig = SupabaseClientProvider.configuration,
         session: URLSession? = nil
     ) {
-        self.client = client
+        clientResolver = SupabaseClientResolver(client: client)
         supabaseURL = configuration.url
         publishableKey = configuration.publishableKey
         self.session = session ?? Self.makeSignOutSession()

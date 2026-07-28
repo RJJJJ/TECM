@@ -50,7 +50,8 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
     @Published private(set) var lastErrorMessage: String?
 
     private let notificationService: NotificationServicing
-    private let client: SupabaseClient
+    private let clientResolver: SupabaseClientResolver
+    private var client: SupabaseClient { clientResolver.client }
     private let remoteDeactivationTimeout: Duration
     private let waitForRemoteDeactivationDeadline: @MainActor @Sendable (Duration) async -> Void
     private let realtimeCleanupObserver: (() -> Void)?
@@ -58,19 +59,19 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
     private var deviceToken: String?
     private var realtimeUserID: UUID?
     private var realtimeChannel: RealtimeChannelV2?
+    private var realtimeClient: SupabaseClient?
     private var realtimeObservation: RealtimeSubscription?
     private var stateGeneration: UInt64 = 0
 
     private static let installationIDKey = "tecm.push.installation-id"
 
     override convenience init() {
-        let client = SupabaseClientProvider.shared
-        self.init(notificationService: NotificationService(client: client), client: client)
+        self.init(notificationService: NotificationService(), client: nil)
     }
 
     init(
         notificationService: NotificationServicing,
-        client: SupabaseClient,
+        client: SupabaseClient?,
         remoteDeactivationTimeout: Duration = .seconds(5),
         waitForRemoteDeactivationDeadline: @escaping @MainActor @Sendable (Duration) async -> Void = { duration in
             try? await ContinuousClock().sleep(for: duration)
@@ -78,7 +79,7 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
         realtimeCleanupObserver: (() -> Void)? = nil
     ) {
         self.notificationService = notificationService
-        self.client = client
+        clientResolver = SupabaseClientResolver(client: client)
         self.remoteDeactivationTimeout = remoteDeactivationTimeout
         self.waitForRemoteDeactivationDeadline = waitForRemoteDeactivationDeadline
         self.realtimeCleanupObserver = realtimeCleanupObserver
@@ -303,12 +304,13 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
         realtimeObservation = nil
         realtimeUserID = nil
         let channel = realtimeChannel
+        let channelClient = realtimeClient
         realtimeChannel = nil
+        realtimeClient = nil
 
-        if let channel {
-            let client = client
+        if let channel, let channelClient {
             Task {
-                await client.removeChannel(channel)
+                await channelClient.removeChannel(channel)
             }
         }
         realtimeCleanupObserver?()
@@ -388,6 +390,7 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
         await stopRealtimeSubscription()
         guard isCurrent(generation), activeUserID == userID else { return }
 
+        let client = client
         let channel = client.channel("notifications:\(userID.uuidString)")
         let observation = channel.onPostgresChange(
             AnyAction.self,
@@ -407,6 +410,7 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
 
         realtimeUserID = userID
         realtimeChannel = channel
+        realtimeClient = client
         realtimeObservation = observation
         do {
             try await channel.subscribeWithError()
@@ -427,9 +431,11 @@ final class PushNotificationCoordinator: NSObject, ObservableObject, UIApplicati
         realtimeObservation = nil
         realtimeUserID = nil
         let channel = realtimeChannel
+        let channelClient = realtimeClient
         realtimeChannel = nil
-        if let channel {
-            await client.removeChannel(channel)
+        realtimeClient = nil
+        if let channel, let channelClient {
+            await channelClient.removeChannel(channel)
         }
     }
 

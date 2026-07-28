@@ -385,8 +385,9 @@ private final class PushTestAuthService: AuthServicing {
         )
     }
 
-    func invalidateLocalSession() throws {
+    func invalidateLocalSession() async throws -> LocalSDKSignOutResult {
         localSessionInvalidated = true
+        return .signedOutEventObserved
     }
 
     func restoreSession() async throws -> User? { localSessionInvalidated ? nil : user }

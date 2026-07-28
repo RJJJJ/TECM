@@ -154,14 +154,15 @@ protocol ParentOperationsServicing {
 }
 
 struct ParentOperationsService: ParentOperationsServicing {
-    private let client: SupabaseClient
+    private let clientResolver: SupabaseClientResolver
+    private var client: SupabaseClient { clientResolver.client }
     private let examCohortService: ExamCohortServicing
 
     init(
-        client: SupabaseClient = SupabaseClientProvider.shared,
+        client: SupabaseClient? = nil,
         examCohortService: ExamCohortServicing = ExamCohortService()
     ) {
-        self.client = client
+        clientResolver = SupabaseClientResolver(client: client)
         self.examCohortService = examCohortService
     }
 

@@ -126,8 +126,11 @@ final class AuthViewModel: ObservableObject {
 
         var localSessionInvalidated = false
         do {
-            try authService.invalidateLocalSession()
+            let sdkSignOutResult = try await authService.invalidateLocalSession()
             localSessionInvalidated = true
+            if sdkSignOutResult == .eventMissing {
+                remoteCleanupIncomplete = true
+            }
         } catch {
             remoteCleanupIncomplete = true
         }

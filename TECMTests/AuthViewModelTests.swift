@@ -977,12 +977,13 @@ private final class MockAuthService: AuthServicing {
         )
     }
 
-    func invalidateLocalSession() throws {
+    func invalidateLocalSession() async throws -> LocalSDKSignOutResult {
         localInvalidationCallCount += 1
         if let localInvalidationError {
             throw localInvalidationError
         }
         localSessionInvalidated = true
+        return .signedOutEventObserved
     }
 
     func restoreSession() async throws -> User? {
