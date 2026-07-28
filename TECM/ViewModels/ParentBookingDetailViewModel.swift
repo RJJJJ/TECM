@@ -10,7 +10,6 @@ final class ParentBookingDetailViewModel: ObservableObject {
     private let bookingID: UUID
     private let parentID: UUID
     private let bookingService: BookingServicing
-    private var loadGeneration = 0
 
     init(
         bookingID: UUID,
@@ -22,33 +21,20 @@ final class ParentBookingDetailViewModel: ObservableObject {
         self.bookingService = bookingService
     }
 
-    func load(isAuthorizedParent: Bool) async {
-        loadGeneration += 1
-        let generation = loadGeneration
-        detail = nil
-        isLoading = false
-        errorMessage = nil
-
-        guard isAuthorizedParent else { return }
-
+    func load() async {
         isLoading = true
-        defer {
-            if loadGeneration == generation {
-                isLoading = false
-            }
-        }
+        errorMessage = nil
+        defer { isLoading = false }
 
         do {
-            let loadedDetail = try await bookingService.fetchBookingDetail(
-                bookingID: bookingID,
-                parentID: parentID
-            )
-            guard loadGeneration == generation else { return }
-            detail = loadedDetail
+            detail = try await bookingService.fetchBookingDetail(bookingID: bookingID, parentID: parentID)
         } catch {
-            guard loadGeneration == generation else { return }
             detail = nil
             errorMessage = error.localizedDescription
         }
+    }
+
+    func refresh() async {
+        await load()
     }
 }

@@ -3,38 +3,6 @@ import Foundation
 import Supabase
 import Combine
 
-private enum RemoteAuthSignOutResult: Sendable {
-    case succeeded
-    case failed
-    case timedOut
-}
-
-private actor RemoteAuthSignOutRace {
-    private var result: RemoteAuthSignOutResult?
-    private var continuation: CheckedContinuation<RemoteAuthSignOutResult, Never>?
-
-    func waitForResult() async -> RemoteAuthSignOutResult {
-        if let result {
-            return result
-        }
-        return await withCheckedContinuation { continuation in
-            self.continuation = continuation
-        }
-    }
-
-    func resolve(_ result: RemoteAuthSignOutResult) {
-        guard self.result == nil else { return }
-        self.result = result
-        let continuation = continuation
-        self.continuation = nil
-        continuation?.resume(returning: result)
-    }
-}
-
-struct AppSignOutCleanupPreparation: Sendable {
-    let remoteOperation: RemoteAuthSignOutOperation?
-}
-
 @MainActor
 final class AuthViewModel: ObservableObject {
     @Published private(set) var currentUser: User?
@@ -44,15 +12,7 @@ final class AuthViewModel: ObservableObject {
 
     private let authService: AuthServicing
     private let userRoleService: UserRoleServicing
-    private var signOutCleanup: ((SignOutCleanupContext?) async -> AppSignOutCleanupPreparation)?
-    private var sensitiveStateCleanup: (() -> Void)?
-    private var isSigningOut = false
-    private var authenticationGeneration: UInt64 = 0
-    private let remoteAuthSignOutTimeout: Duration
-    private let waitForRemoteAuthSignOutDeadline: @MainActor @Sendable (Duration) async -> Void
-
-    static let incompleteRemoteLogoutMessage =
-        "You are signed out on this device. Some remote cleanup could not be completed."
+    private var signOutCleanup: (() async throws -> Void)?
 
     var currentRole: UserAppRole { currentCapabilities.primaryRole }
     var hasParentRole: Bool { currentCapabilities.hasParentRole }
@@ -60,218 +20,89 @@ final class AuthViewModel: ObservableObject {
 
     init(
         authService: AuthServicing = AuthService(),
-        userRoleService: UserRoleServicing = UserRoleService(),
-        automaticallyRestoreSession: Bool = true,
-        remoteAuthSignOutTimeout: Duration = .seconds(5),
-        waitForRemoteAuthSignOutDeadline: @escaping @MainActor @Sendable (Duration) async -> Void = { duration in
-            try? await ContinuousClock().sleep(for: duration)
-        }
+        userRoleService: UserRoleServicing = UserRoleService()
     ) {
         self.authService = authService
         self.userRoleService = userRoleService
-        self.remoteAuthSignOutTimeout = remoteAuthSignOutTimeout
-        self.waitForRemoteAuthSignOutDeadline = waitForRemoteAuthSignOutDeadline
-        if automaticallyRestoreSession {
-            Task {
-                await restoreSession()
-            }
+        Task {
+            await restoreSession()
         }
     }
 
     func signIn(email: String, password: String) async {
-        let generation = beginAuthenticationOperation()
         isLoading = true
         errorMessage = nil
+        defer { isLoading = false }
 
         do {
-            let user = try await authService.signIn(email: email, password: password)
-            guard isCurrent(generation) else { return }
-            currentUser = user
-            currentCapabilities = .guest
-            await resolveRole(for: user, generation: generation)
+            currentUser = try await authService.signIn(email: email, password: password)
+            await resolveRole()
         } catch {
-            guard isCurrent(generation) else { return }
             currentUser = nil
             currentCapabilities = .guest
             errorMessage = error.localizedDescription
         }
-        if isCurrent(generation) {
-            isLoading = false
-        }
     }
 
     func signOut() async {
-        guard !isSigningOut else { return }
-        isSigningOut = true
-        let generation = beginAuthenticationOperation()
-        let hadAuthenticatedState = currentUser != nil || currentCapabilities != .guest
+        isLoading = true
         errorMessage = nil
-        isLoading = false
+        defer { isLoading = false }
 
-        var remoteCleanupIncomplete = false
-        let signOutPreparation: AuthSignOutPreparation
         do {
-            signOutPreparation = try authService.prepareSignOut()
-        } catch {
-            signOutPreparation = AuthSignOutPreparation(
-                accessToken: nil,
-                remoteOperation: nil
-            )
-            remoteCleanupIncomplete = true
-        }
-
-        currentUser = nil
-        currentCapabilities = .guest
-        sensitiveStateCleanup?()
-
-        var localSessionInvalidated = false
-        do {
-            try authService.invalidateLocalSession()
-            localSessionInvalidated = true
-        } catch {
-            remoteCleanupIncomplete = true
-        }
-
-        let shouldRunAppCleanup =
-            hadAuthenticatedState || signOutPreparation.remoteOperation != nil
-        let appCleanupContext =
-            localSessionInvalidated ? signOutPreparation.cleanupContext : nil
-        let appCleanupPreparation: AppSignOutCleanupPreparation?
-        if shouldRunAppCleanup, let signOutCleanup {
-            appCleanupPreparation = await signOutCleanup(appCleanupContext)
-        } else {
-            appCleanupPreparation = nil
-        }
-
-        if localSessionInvalidated, let remoteAuthOperation = signOutPreparation.remoteOperation {
-            let result = await runBoundedRemoteAuthSignOut(remoteAuthOperation)
-            if case .succeeded = result {
-                // The local privacy boundary is already complete.
-            } else {
-                remoteCleanupIncomplete = true
+            if let signOutCleanup {
+                try await signOutCleanup()
             }
-        }
-        if let remoteAppCleanup = appCleanupPreparation?.remoteOperation {
-            let result = await runBoundedRemoteAuthSignOut(remoteAppCleanup)
-            if case .succeeded = result {
-                // The operation owns no local mutation authority.
-            } else {
-                remoteCleanupIncomplete = true
-            }
-        }
-
-        isSigningOut = false
-        if isCurrent(generation), currentUser == nil, remoteCleanupIncomplete {
-            errorMessage = Self.incompleteRemoteLogoutMessage
+            try await authService.signOut()
+            currentUser = nil
+            currentCapabilities = .guest
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
     func handleAuthCallback(url: URL) async {
         guard AppDeepLinkRoute.parse(url) == .authCallback else { return }
-        let generation = beginAuthenticationOperation()
         isLoading = true
         errorMessage = nil
+        defer { isLoading = false }
 
         do {
-            let user = try await authService.handleAuthCallback(url: url)
-            guard isCurrent(generation) else { return }
-            currentUser = user
-            currentCapabilities = .guest
-            await resolveRole(for: user, generation: generation)
+            currentUser = try await authService.handleAuthCallback(url: url)
+            await resolveRole()
         } catch {
-            guard isCurrent(generation) else { return }
             currentUser = nil
             currentCapabilities = .guest
             errorMessage = error.localizedDescription
         }
-        if isCurrent(generation) {
-            isLoading = false
-        }
     }
 
-    func configureSignOutCleanup(
-        _ cleanup: @escaping (SignOutCleanupContext?) async -> AppSignOutCleanupPreparation
-    ) {
+    func configureSignOutCleanup(_ cleanup: @escaping () async throws -> Void) {
         signOutCleanup = cleanup
     }
 
-    func configureSensitiveStateCleanup(_ cleanup: @escaping () -> Void) {
-        sensitiveStateCleanup = cleanup
-    }
-
     func restoreSession() async {
-        let generation = beginAuthenticationOperation()
         isLoading = true
+        defer { isLoading = false }
         do {
-            let user = try await authService.restoreSession()
-            guard isCurrent(generation) else { return }
-            currentUser = user
-            currentCapabilities = .guest
-            if let user {
-                await resolveRole(for: user, generation: generation)
-            }
+            currentUser = try await authService.restoreSession()
+            await resolveRole()
         } catch {
-            guard isCurrent(generation) else { return }
             currentUser = nil
             currentCapabilities = .guest
         }
-        if isCurrent(generation) {
-            isLoading = false
-        }
     }
 
-    private func resolveRole(for user: User, generation: UInt64) async {
+    func resolveRole() async {
+        guard let userID = currentUser?.id else {
+            currentCapabilities = .guest
+            return
+        }
+
         do {
-            let capabilities = try await userRoleService.resolveCapabilities(userID: user.id)
-            guard isCurrent(generation), currentUser?.id == user.id else { return }
-            currentCapabilities = capabilities
+            currentCapabilities = try await userRoleService.resolveCapabilities(userID: userID)
         } catch {
-            guard isCurrent(generation), currentUser?.id == user.id else { return }
             currentCapabilities = .guest
         }
-    }
-
-    private func beginAuthenticationOperation() -> UInt64 {
-        authenticationGeneration &+= 1
-        return authenticationGeneration
-    }
-
-    private func isCurrent(_ generation: UInt64) -> Bool {
-        authenticationGeneration == generation
-    }
-
-    private func runBoundedRemoteAuthSignOut(
-        _ operation: RemoteAuthSignOutOperation
-    ) async -> RemoteAuthSignOutResult {
-        guard !Task.isCancelled else { return .failed }
-
-        let timeout = remoteAuthSignOutTimeout
-        let waitForDeadline = waitForRemoteAuthSignOutDeadline
-        let race = RemoteAuthSignOutRace()
-
-        let remoteTask = Task { [weak race] in
-            guard !Task.isCancelled else { return }
-            do {
-                try await operation.run()
-                await race?.resolve(.succeeded)
-            } catch {
-                await race?.resolve(.failed)
-            }
-        }
-        let deadlineTask = Task { @MainActor [weak race] in
-            await waitForDeadline(timeout)
-            await race?.resolve(.timedOut)
-        }
-
-        let result = await withTaskCancellationHandler {
-            await race.waitForResult()
-        } onCancel: {
-            Task {
-                await race.resolve(.failed)
-            }
-        }
-        remoteTask.cancel()
-        deadlineTask.cancel()
-        return result
     }
 }

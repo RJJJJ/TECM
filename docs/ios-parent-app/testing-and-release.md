@@ -113,26 +113,6 @@ xcrun simctl push booted app.TECM docs/ios-parent-app/fixtures/notification.apns
 It does not verify APNs provider auth, device-token registration, Apple network
 delivery, entitlement correctness, or production endpoint behavior.
 
-## iOS logout and leave-operation lifecycle
-
-Logout immediately clears local notification, protected-route, badge, and
-Realtime state, then gives remote push-device deactivation a bounded five-second
-attempt before continuing to Supabase logout. Remote cleanup, network, or
-Supabase logout errors cannot retain authenticated UI state. The app also clears
-the local session and parent cache. Any incomplete remote cleanup is reported
-with generic copy that contains no account, child, session, or device-token data.
-The APNs sender's generic lock-screen payload remains the privacy boundary for a
-stale remote registration.
-
-One in-memory `ParentLeaveOperation` owns the idempotency key for a logical
-student/session/reason submission. An uncertain retry reuses that operation;
-parallel taps are rejected; success closes it and prevents the same payload
-from being submitted again during that view-model lifetime. A changed payload
-starts a new operation with a new key. Pending operations are intentionally not
-persisted because the reason and student/session association are sensitive.
-View recreation or app relaunch therefore never auto-replays a leave request;
-the parent must reload server state before starting another submission.
-
 ## Release checklist
 
 - Database migration and APNs SQL suite passed for the current commit.

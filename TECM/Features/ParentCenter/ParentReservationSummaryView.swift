@@ -45,24 +45,14 @@ struct ParentReservationSummaryView: View {
         }
         .tecmDetailTabBar()
         .refreshable {
-            await load()
+            await viewModel.load(userID: authViewModel.currentUser?.id)
         }
         .task {
-            await load()
+            await viewModel.load(userID: authViewModel.currentUser?.id)
         }
-        .onChange(of: authViewModel.currentUser?.id) { _ in
-            Task { await load() }
+        .onChange(of: authViewModel.currentUser?.id) { userID in
+            Task { await viewModel.load(userID: userID) }
         }
-        .onChange(of: authViewModel.currentCapabilities) { _ in
-            Task { await load() }
-        }
-    }
-
-    private func load() async {
-        await viewModel.load(
-            userID: authViewModel.currentUser?.id,
-            hasParentRole: authViewModel.hasParentRole
-        )
     }
 
     private var filterChips: some View {
@@ -85,7 +75,7 @@ struct ParentReservationSummaryView: View {
     @ViewBuilder
     private func reservationNavigationCard(_ item: ParentReservationSummaryItem) -> some View {
         if let parentID = viewModel.profile?.id {
-            NavigationLink(value: ParentRoute.bookingDetail(bookingID: item.id, parentID: parentID)) {
+            NavigationLink(destination: ParentBookingDetailView(bookingID: item.id, parentID: parentID)) {
                 reservationCard(item)
             }
             .buttonStyle(.plain)
