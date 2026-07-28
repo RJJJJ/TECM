@@ -222,16 +222,19 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         guard let data = try retrieve(key: storageKey) else {
             return nil
         }
-        return try AuthClient.Configuration.jsonDecoder
-            .decode(Session.self, from: data)
-            .accessToken
+        guard let session = Self.decodeStoredSession(data) else {
+            return nil
+        }
+        return session.accessToken
     }
 
     func signOutCleanupContext() throws -> SignOutCleanupContext? {
         guard let data = try retrieve(key: storageKey) else {
             return nil
         }
-        let session = try AuthClient.Configuration.jsonDecoder.decode(Session.self, from: data)
+        guard let session = Self.decodeStoredSession(data) else {
+            throw AuthSessionPersistenceError.invalidSessionLineage
+        }
         let lineage = try Self.lineage(from: session)
         return SignOutCleanupContext(
             accessToken: session.accessToken,
@@ -320,7 +323,7 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         }
 
         guard let data = try sessionStorage.retrieve(key: storageKey),
-              let session = try? AuthClient.Configuration.jsonDecoder.decode(Session.self, from: data),
+              let session = Self.decodeStoredSession(data),
               let lineage = try? Self.lineage(from: session) else {
             writePolicy = .invalidated
             var durableFenceStored = false
@@ -383,7 +386,7 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
 
     private func activateAuthorized(_ session: Session) throws {
         let lineage = try Self.lineage(from: session)
-        let data = try AuthClient.Configuration.jsonEncoder.encode(session)
+        let data = try JSONEncoder().encode(session)
 
         lock.lock()
         defer { lock.unlock() }
@@ -426,8 +429,7 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
             return
         }
 
-        let session = try? AuthClient.Configuration.jsonDecoder
-            .decode(Session.self, from: value)
+        let session = Self.decodeStoredSession(value)
         let lineage = session.flatMap { try? Self.lineage(from: $0) }
 
         lock.lock()
@@ -473,8 +475,7 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
         guard let data = try sessionStorage.retrieve(key: key) else {
             return nil
         }
-        guard let session = try? AuthClient.Configuration.jsonDecoder
-            .decode(Session.self, from: data),
+        guard let session = Self.decodeStoredSession(data),
               let lineage = try? Self.lineage(from: session) else {
             return nil
         }
@@ -522,6 +523,13 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
             throw AuthSessionPersistenceError.invalidSessionLineage
         }
         return SessionLineage(userID: subjectID, sessionID: sessionID)
+    }
+
+    private static func decodeStoredSession(_ data: Data) -> Session? {
+        if let session = try? JSONDecoder().decode(Session.self, from: data) {
+            return session
+        }
+        return try? AuthClient.Configuration.jsonDecoder.decode(Session.self, from: data)
     }
 
     private static func isValidProjectKey(_ projectKey: String) -> Bool {
