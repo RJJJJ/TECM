@@ -448,7 +448,9 @@ private final class GenerationURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {
-        // Intentionally non-cooperative. Tests decide if and when to respond.
+        Self.lock.lock()
+        Self.pending.removeAll { $0 === self }
+        Self.lock.unlock()
     }
 }
 

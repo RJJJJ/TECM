@@ -321,8 +321,7 @@ struct SupabaseClientResolver: Sendable {
     private let resolve: @Sendable () -> SupabaseClient
 
     init(resolve: @escaping @Sendable () -> SupabaseClient) {
-        let client = resolve()
-        self.resolve = { client }
+        self.resolve = resolve
     }
 
     init(client: SupabaseClient? = nil) {
