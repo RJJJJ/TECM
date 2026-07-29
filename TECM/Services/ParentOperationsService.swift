@@ -132,20 +132,37 @@ struct ParentOperationsSnapshot {
     let receipts: [ParentReceiptItem]
 }
 
+struct ParentLeaveOperation: Equatable {
+    struct Payload: Hashable {
+        let studentID: UUID
+        let sessionID: UUID
+        let reason: String
+    }
+
+    let payload: Payload
+    let idempotencyKey: String
+
+    init(payload: Payload, operationID: UUID = UUID()) {
+        self.payload = payload
+        idempotencyKey = "ios:\(operationID.uuidString.lowercased())"
+    }
+}
+
 protocol ParentOperationsServicing {
     func fetchSnapshot() async throws -> ParentOperationsSnapshot
-    func submitLeaveRequest(studentID: UUID, sessionID: UUID, reason: String) async throws -> UUID
+    func submitLeaveRequest(_ operation: ParentLeaveOperation) async throws -> UUID
 }
 
 struct ParentOperationsService: ParentOperationsServicing {
-    private let client: SupabaseClient
+    private let clientResolver: SupabaseClientResolver
+    private var client: SupabaseClient { clientResolver.client }
     private let examCohortService: ExamCohortServicing
 
     init(
-        client: SupabaseClient = SupabaseClientProvider.shared,
+        client: SupabaseClient? = nil,
         examCohortService: ExamCohortServicing = ExamCohortService()
     ) {
-        self.client = client
+        clientResolver = SupabaseClientResolver(client: client)
         self.examCohortService = examCohortService
     }
 
@@ -209,7 +226,7 @@ struct ParentOperationsService: ParentOperationsServicing {
         )
     }
 
-    func submitLeaveRequest(studentID: UUID, sessionID: UUID, reason: String) async throws -> UUID {
+    func submitLeaveRequest(_ operation: ParentLeaveOperation) async throws -> UUID {
         struct Parameters: Encodable {
             let studentID: UUID
             let sessionID: UUID
@@ -227,10 +244,10 @@ struct ParentOperationsService: ParentOperationsServicing {
         return try await client.rpc(
             "submit_parent_leave_request",
             params: Parameters(
-                studentID: studentID,
-                sessionID: sessionID,
-                reason: reason,
-                idempotencyKey: "ios:\(UUID().uuidString)"
+                studentID: operation.payload.studentID,
+                sessionID: operation.payload.sessionID,
+                reason: operation.payload.reason,
+                idempotencyKey: operation.idempotencyKey
             )
         ).execute().value
     }

@@ -8,10 +8,11 @@ protocol BookingServicing {
 }
 
 struct BookingService: BookingServicing {
-    private let client: SupabaseClient
+    private let clientResolver: SupabaseClientResolver
+    private var client: SupabaseClient { clientResolver.client }
 
-    init(client: SupabaseClient = SupabaseClientProvider.shared) {
-        self.client = client
+    init(client: SupabaseClient? = nil) {
+        clientResolver = SupabaseClientResolver(client: client)
     }
 
     func submitBooking(input: BookingFormInput, profile: ParentProfile) async throws -> BookingRecord {

@@ -2,13 +2,13 @@ import Foundation
 import Supabase
 import Combine
 
-protocol NotificationServicing {
+protocol NotificationServicing: Sendable {
     func fetchMyNotifications(parentID: UUID) async throws -> [ParentNotificationItem]
     func markNotificationRead(notificationID: UUID) async throws
     func markAllNotificationsRead() async throws
     func fetchUnreadNotificationCount() async throws -> Int
     func registerPushDevice(_ registration: PushDeviceRegistration) async throws
-    func deactivatePushDevice(installationID: String) async throws
+    func deactivatePushDevice(installationID: String, accessToken: String?) async throws
 }
 
 struct PushDeviceRegistration {
@@ -21,10 +21,21 @@ struct PushDeviceRegistration {
 }
 
 struct NotificationService: NotificationServicing {
-    private let client: SupabaseClient
+    private let clientResolver: SupabaseClientResolver
+    private var client: SupabaseClient { clientResolver.client }
+    private let supabaseURL: URL
+    private let publishableKey: String
+    private let session: URLSession
 
-    init(client: SupabaseClient = SupabaseClientProvider.shared) {
-        self.client = client
+    init(
+        client: SupabaseClient? = nil,
+        configuration: SupabaseConfig = SupabaseClientProvider.configuration,
+        session: URLSession? = nil
+    ) {
+        clientResolver = SupabaseClientResolver(client: client)
+        supabaseURL = configuration.url
+        publishableKey = configuration.publishableKey
+        self.session = session ?? Self.makeSignOutSession()
     }
 
     func fetchMyNotifications(parentID: UUID) async throws -> [ParentNotificationItem] {
@@ -75,11 +86,47 @@ struct NotificationService: NotificationServicing {
             .execute()
     }
 
-    func deactivatePushDevice(installationID: String) async throws {
-        try await client
-            .rpc("deactivate_push_device", params: DeactivatePushDeviceParams(installationID: installationID))
-            .execute()
+    func deactivatePushDevice(installationID: String, accessToken: String?) async throws {
+        guard let accessToken else {
+            throw NotificationSignOutCleanupError.failed
+        }
+        let url = supabaseURL
+            .appendingPathComponent("rest")
+            .appendingPathComponent("v1")
+            .appendingPathComponent("rpc")
+            .appendingPathComponent("deactivate_push_device")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = try JSONEncoder().encode(
+            DeactivatePushDeviceParams(installationID: installationID)
+        )
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(publishableKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("public", forHTTPHeaderField: "Content-Profile")
+        request.setValue(
+            PostgrestClient.Configuration.defaultHeaders["X-Client-Info"],
+            forHTTPHeaderField: "X-Client-Info"
+        )
+
+        let (_, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse,
+              (200..<300).contains(response.statusCode) else {
+            throw NotificationSignOutCleanupError.failed
+        }
     }
+
+    private static func makeSignOutSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 10
+        configuration.timeoutIntervalForResource = 10
+        configuration.waitsForConnectivity = false
+        return URLSession(configuration: configuration)
+    }
+}
+
+private enum NotificationSignOutCleanupError: Error {
+    case failed
 }
 
 private struct MarkNotificationReadParams: Encodable {

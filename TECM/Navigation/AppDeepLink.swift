@@ -58,6 +58,7 @@ enum AppDeepLinkRoute: Equatable {
 }
 
 enum ParentRoute: Hashable {
+    case reservationSummary
     case notificationCenter(focusID: UUID?)
     case bookingDetail(bookingID: UUID, parentID: UUID)
     case operations
