@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { updateCourseAction, type UpdateCourseFormState } from './actions';
 
 type CampusOption = {
@@ -59,7 +60,7 @@ function clientValidate(formData: FormData) {
 
 export default function CourseEditForm({ course, campuses }: Props) {
   const formAction = updateCourseAction.bind(null, course.id);
-  const [state, action] = useFormState(formAction, initialState);
+  const [state, action] = useActionState(formAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [showSavedHint, setShowSavedHint] = useState(false);
 

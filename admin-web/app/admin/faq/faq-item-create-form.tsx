@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState, useEffect, useState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { createFaqItemAction, type CreateFaqItemFormState } from './actions';
 
 type TopicOption = {
@@ -48,7 +48,7 @@ function clientValidate(formData: FormData) {
 }
 
 export default function FaqItemCreateForm({ topics }: Props) {
-  const [state, action] = useFormState(createFaqItemAction, initialState);
+  const [state, action] = useActionState(createFaqItemAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [showSavedHint, setShowSavedHint] = useState(false);
 

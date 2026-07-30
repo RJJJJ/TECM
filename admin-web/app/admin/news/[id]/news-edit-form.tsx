@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { updateNewsAction, type UpdateNewsFormState } from './actions';
 
 type NewsEditable = {
@@ -63,7 +64,7 @@ function clientValidate(formData: FormData) {
 
 export default function NewsEditForm({ newsItem }: Props) {
   const formAction = updateNewsAction.bind(null, newsItem.id);
-  const [state, action] = useFormState(formAction, initialState);
+  const [state, action] = useActionState(formAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [showSavedHint, setShowSavedHint] = useState(false);
 

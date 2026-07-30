@@ -1,6 +1,7 @@
 'use client';
 
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { createLessonSessionAction, type ExamCohortFormState } from '../../actions';
 
 type LessonPlanOption = {
@@ -39,7 +40,7 @@ function SubmitButton() {
 }
 
 export function LessonSessionCreateForm({ cohortId, lessons, teachers }: LessonSessionCreateFormProps) {
-  const [state, action] = useFormState(createLessonSessionAction.bind(null, cohortId), initialState);
+  const [state, action] = useActionState(createLessonSessionAction.bind(null, cohortId), initialState);
 
   return (
     <form action={action} className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-5">
