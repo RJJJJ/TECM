@@ -147,7 +147,14 @@ jobs:
           -project TECM.xcodeproj
           -scheme TECM
           -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}'
+          -derivedDataPath '${{ runner.temp }}/TECM-DerivedData'
           CODE_SIGNING_ALLOWED=NO
+      - name: Validate built launch metadata and mutation guard
+        shell: bash
+        run: |
+          app_path='${{ runner.temp }}/TECM-DerivedData/Build/Products/Debug-iphonesimulator/TECM.app'
+          bash scripts/testing/validate-ios-launch-metadata.sh "$app_path"
+          bash scripts/testing/test-ios-launch-metadata-mutation.sh "$app_path"
       - name: Run Swift tests when a test target exists
         run: >-
           xcodebuild test
