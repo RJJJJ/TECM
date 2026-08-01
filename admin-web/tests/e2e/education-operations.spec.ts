@@ -7,7 +7,8 @@ test('login renders without the deprecated ReactDOM useFormState warning', async
   });
 
   await page.goto('/login');
-  await expect(page.locator('form')).toBeVisible();
+  await expect(page.locator('form[data-hydrated="true"]')).toBeVisible();
+  await page.waitForTimeout(250);
   expect(consoleErrors).not.toContainEqual(expect.stringContaining('ReactDOM.useFormState'));
 });
 

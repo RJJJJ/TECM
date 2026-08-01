@@ -12,9 +12,10 @@ function source(path: string) {
 test('login form uses React useActionState with the existing Server Action and pending button', () => {
   const loginForm = source('app/login/login-form.tsx');
 
-  assert.match(loginForm, /import \{ useActionState \} from 'react';/);
+  assert.match(loginForm, /import \{[^}]*useActionState[^}]*\} from 'react';/);
   assert.match(loginForm, /useActionState\(loginAction, INITIAL_STATE\)/);
   assert.match(loginForm, /useFormStatus\(\)/);
+  assert.match(loginForm, /data-hydrated=\{hydrated \? 'true' : 'false'\}/);
   assert.doesNotMatch(loginForm, /useFormState/);
 });
 
