@@ -1,5 +1,17 @@
 import { expect, test } from '@playwright/test';
 
+test('login renders without the deprecated ReactDOM useFormState warning', async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+
+  await page.goto('/login');
+  await expect(page.locator('form[data-hydrated="true"]')).toBeVisible();
+  await page.waitForTimeout(250);
+  expect(consoleErrors).not.toContainEqual(expect.stringContaining('ReactDOM.useFormState'));
+});
+
 const email = process.env.PLAYWRIGHT_ADMIN_EMAIL;
 const password = process.env.PLAYWRIGHT_ADMIN_PASSWORD;
 

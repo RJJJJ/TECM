@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState, useEffect, useState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { createNewsAction, type CreateNewsFormState } from './actions';
 
 const initialState: CreateNewsFormState = {
@@ -36,7 +36,7 @@ function clientValidate(formData: FormData) {
 }
 
 export default function NewsCreateForm() {
-  const [state, action] = useFormState(createNewsAction, initialState);
+  const [state, action] = useActionState(createNewsAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [showSavedHint, setShowSavedHint] = useState(false);
 

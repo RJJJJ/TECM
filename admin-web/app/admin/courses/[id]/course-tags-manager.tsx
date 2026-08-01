@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState, useTransition } from 'react';
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { addCourseTagAction, deleteCourseTagAction, type CourseTagFormState } from './actions';
 
 type CourseTag = {
@@ -36,7 +37,7 @@ function AddTagButton() {
 
 export default function CourseTagsManager({ courseId, tags }: Props) {
   const formAction = addCourseTagAction.bind(null, courseId);
-  const [state, action] = useFormState(formAction, initialState);
+  const [state, action] = useActionState(formAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [deleteMessage, setDeleteMessage] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);

@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { updateBookingAction, type UpdateFormState } from './actions';
 
 type BookingEditable = {
@@ -58,7 +59,7 @@ function clientValidate(formData: FormData) {
 
 export default function BookingUpdateForm({ booking }: Props) {
   const formAction = updateBookingAction.bind(null, booking.id);
-  const [state, action] = useFormState(formAction, initialState);
+  const [state, action] = useActionState(formAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [showSavedHint, setShowSavedHint] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState(booking.status ?? 'pending');
