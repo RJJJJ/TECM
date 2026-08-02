@@ -71,7 +71,7 @@ export default async function FaqItemDetailPage({
   if (topics.length === 0) {
     return (
       <section className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-700">
-        目前沒有可用 FAQ topic，請先回 FAQ 管理頁建立 topic。
+        目前沒有可用 FAQ 分類，請先回 FAQ 管理頁建立分類。
       </section>
     );
   }
@@ -83,7 +83,7 @@ export default async function FaqItemDetailPage({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">常見問題詳情</h2>
-          <p className="mt-1 text-sm text-slate-600">問題編號：{item.id}</p>
+          <p className="mt-1 text-sm text-slate-600">管理問題內容、分類及顯示狀態。</p>
         </div>
         <Link
           href="/admin/faq"

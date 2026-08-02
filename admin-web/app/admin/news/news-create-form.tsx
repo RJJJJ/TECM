@@ -103,7 +103,7 @@ export default function NewsCreateForm() {
             type="text"
             required
             maxLength={160}
-            placeholder="請輸入 news title"
+            placeholder="請輸入新聞標題"
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
           />
         </div>
@@ -153,7 +153,7 @@ export default function NewsCreateForm() {
 
         <div className="md:col-span-2">
           <label htmlFor="image_url" className="mb-1 block text-sm font-medium text-slate-700">
-            Image URL
+            圖片網址
           </label>
           <input
             id="image_url"

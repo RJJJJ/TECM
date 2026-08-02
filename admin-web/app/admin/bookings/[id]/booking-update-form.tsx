@@ -50,8 +50,8 @@ function clientValidate(formData: FormData) {
     return '請完整填寫預約日期、開始時間及結束時間。';
   }
 
-  if (startTime > endTime) {
-    return '開始時間不可晚於結束時間。';
+  if (startTime >= endTime) {
+    return '開始時間必須早於結束時間。';
   }
 
   return null;

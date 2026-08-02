@@ -86,6 +86,36 @@ test('admin integrity migration makes teacher linking atomic and leave creation 
   assert.match(migration, /revoke insert, update, delete on public\.leave_requests from authenticated/);
 });
 
+test('makeup detail actions use the canonical RPCs and guarded completion UI', () => {
+  const actions = source('app/admin/makeup/actions.ts');
+  const form = source('app/admin/makeup/makeup-session-forms.tsx');
+  assert.match(actions, /rpc\('book_makeup_session'/);
+  assert.match(actions, /rpc\('complete_makeup_task'/);
+  assert.doesNotMatch(actions, /from\('makeup_sessions'\)\.insert|from\('makeup_tasks'\)\.update/);
+  assert.match(form, /window\.confirm/);
+  assert.match(form, /useFormStatus/);
+});
+
+test('booking equality is rejected in both client and Server Action validation', () => {
+  const serverAction = source('app/admin/bookings/[id]/actions.ts');
+  const clientForm = source('app/admin/bookings/[id]/booking-update-form.tsx');
+  assert.match(serverAction, /startTime >= endTime/);
+  assert.match(clientForm, /startTime >= endTime/);
+  assert.match(serverAction, /開始時間必須早於結束時間/);
+  assert.match(clientForm, /開始時間必須早於結束時間/);
+});
+
+test('normal operator pages do not render raw identity UUIDs', () => {
+  assert.doesNotMatch(source('app/admin/teachers/page.tsx'), /使用者 ID|>\s*\{?teacher\.user_id\}?/);
+  assert.doesNotMatch(source('app/admin/settings/page.tsx'), /organizationId\}|>\s*\{?member\.user_id\}?/);
+  for (const path of [
+    'app/admin/courses/[id]/page.tsx',
+    'app/admin/news/[id]/page.tsx',
+    'app/admin/faq/topics/[id]/page.tsx',
+    'app/admin/faq/items/[id]/page.tsx'
+  ]) assert.doesNotMatch(source(path), /編號：/);
+});
+
 test('operator-facing statuses and setup validation use Traditional Chinese labels', async () => {
   const { statusLabel } = await import('../../lib/operations/labels.ts');
   assert.equal(statusLabel('attendance_deduction'), '出席扣堂');

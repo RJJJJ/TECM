@@ -1,7 +1,7 @@
 import { Badge, DataTable, EmptyState, ErrorState, PageHeader } from '@/components/operations-ui';
 import { getOperationsContext } from '@/lib/operations/context';
 import { userFacingError } from '@/lib/operations/errors';
-import { disableGuardianAction, inviteGuardianAction } from './actions';
+import { GuardianDisableForm, GuardianInviteForm, GuardianRecoverForm } from './guardian-account-actions';
 
 const sevenDays = 7 * 86400000;
 
@@ -9,7 +9,7 @@ export default async function GuardiansPage() {
   const { supabase, organizationId, role } = await getOperationsContext();
   if (!['admin', 'staff'].includes(role)) throw userFacingError('未獲授權管理家長帳戶。');
   const [profiles, invitations] = await Promise.all([
-    supabase.from('parent_profiles').select('id,full_name,phone,email,user_id,account_status,created_at').eq('organization_id', organizationId).order('full_name'),
+    supabase.from('parent_profiles').select('id,full_name,phone,email,account_status,created_at').eq('organization_id', organizationId).order('full_name'),
     supabase.from('parent_account_invitations').select('id,parent_profile_id,status,sent_at,created_at').eq('organization_id', organizationId).order('created_at', { ascending: false })
   ]);
   const latest = new Map<string, NonNullable<typeof invitations.data>[number]>();
@@ -26,14 +26,10 @@ export default async function GuardiansPage() {
         return <tr key={profile.id}>
           <td className="px-4 py-3 font-medium">{profile.full_name}</td>
           <td className="px-4 py-3"><div>{profile.email || '未設定電郵'}</div><div className="text-xs text-slate-500">{profile.phone || '未設定電話'}</div></td>
-          <td className="px-4 py-3"><Badge tone={tone}>{state}</Badge></td>
+          <td className="px-4 py-3"><Badge tone={tone}><span>{state}</span></Badge></td>
           <td className="px-4 py-3">
-            {profile.account_status !== 'disabled' && profile.account_status !== 'active' ? <form action={inviteGuardianAction} className="flex min-w-72 flex-wrap gap-2">
-              <input type="hidden" name="parent_profile_id" value={profile.id} /><input type="hidden" name="idempotency_key" value={crypto.randomUUID()} />
-              <input name="email" type="email" required defaultValue={profile.email ?? ''} placeholder="parent@example.com" className="min-w-48 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              <button className="rounded-lg bg-teal-700 px-3 py-2 text-sm font-semibold text-white">{invitation ? '重發邀請' : '發送邀請'}</button>
-            </form> : null}
-            {profile.account_status !== 'disabled' ? <form action={disableGuardianAction} className="mt-2"><input type="hidden" name="parent_profile_id" value={profile.id} /><button className="text-xs font-semibold text-rose-700 hover:underline">停用帳戶及裝置</button></form> : null}
+            {profile.account_status !== 'disabled' && profile.account_status !== 'active' ? <GuardianInviteForm profileId={profile.id} email={profile.email ?? ''} idempotencyKey={crypto.randomUUID()} invitationLabel={invitation ? '重發邀請' : '發送邀請'} /> : null}
+            {profile.account_status === 'disabled' ? <GuardianRecoverForm profileId={profile.id} /> : profile.account_status !== 'active' ? <GuardianDisableForm profileId={profile.id} /> : null}
           </td>
         </tr>;
       })}

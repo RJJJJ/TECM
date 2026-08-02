@@ -111,3 +111,20 @@ export async function disableGuardianAction(form: FormData): Promise<void> {
     throw safeActionError(error, '停用家長帳戶失敗，請稍後再試。', 'disable-guardian');
   }
 }
+
+export async function recoverGuardianAction(form: FormData): Promise<void> {
+  try {
+    const context = await requireGuardianManager();
+    const parentProfileId = text(form, 'parent_profile_id');
+    if (!parentProfileId) throw userFacingError('缺少家長帳戶。');
+    const { data, error } = await context.supabase.rpc('recover_parent_account', {
+      p_organization_id: context.organizationId,
+      p_parent_profile_id: parentProfileId
+    });
+    if (error) throw error;
+    if (data !== true) throw userFacingError('無法恢復家長帳戶。');
+    revalidatePath('/admin/guardians');
+  } catch (error) {
+    throw safeActionError(error, '恢復家長帳戶失敗，請稍後再試。', 'recover-guardian');
+  }
+}

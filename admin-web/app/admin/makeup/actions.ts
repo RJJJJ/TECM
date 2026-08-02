@@ -21,35 +21,30 @@ function normalizeMacauDateTime(value: string) {
 
 export async function scheduleMakeupSessionAction(makeupTaskId: string, studentId: string, _prevState: MakeupFormState, formData: FormData): Promise<MakeupFormState> {
   const scheduledAt = String(formData.get('scheduled_at') ?? '').trim();
-  const teacherId = String(formData.get('teacher_id') ?? '').trim() || null;
+  const teacherId = String(formData.get('teacher_id') ?? '').trim();
+  const idempotencyKey = String(formData.get('idempotency_key') ?? '').trim();
   if (!scheduledAt) return { status: 'error', message: '補課時間為必填。' };
+  if (!teacherId) return { status: 'error', message: '請先選擇補課導師。' };
+  if (!idempotencyKey) return { status: 'error', message: '補課操作識別碼遺失，請重新載入頁面再試。' };
 
   try {
     const context = await requireManager();
-    const [{ data: task, error: taskError }, { data: student, error: studentError }, teacherResult] = await Promise.all([
+    const [{ data: task, error: taskError }, { data: student, error: studentError }] = await Promise.all([
       context.supabase.from('makeup_tasks').select('id,student_id,entitlement_id').eq('id', makeupTaskId).eq('organization_id', context.organizationId).maybeSingle(),
-      context.supabase.from('students').select('id').eq('id', studentId).eq('organization_id', context.organizationId).maybeSingle(),
-      teacherId ? context.supabase.from('teacher_profiles').select('id').eq('id', teacherId).eq('organization_id', context.organizationId).eq('is_active', true).maybeSingle() : Promise.resolve({ data: null, error: null })
+      context.supabase.from('students').select('id').eq('id', studentId).eq('organization_id', context.organizationId).maybeSingle()
     ]);
-    if (taskError || studentError || teacherResult.error) throw taskError ?? studentError ?? teacherResult.error;
+    if (taskError || studentError) throw taskError ?? studentError;
     if (!task || !student || task.student_id !== studentId) throw userFacingError('所選補課或學生已不存在，或不屬於目前機構，請重新選擇。');
-    if (teacherId && !teacherResult.data) throw userFacingError('所選導師未啟用或不屬於目前機構，請重新選擇。');
+    if (!task.entitlement_id) throw userFacingError('此補課沒有可用補課額，請先重新核對請假或出席資料。');
 
-    const { error: sessionError } = await context.supabase.from('makeup_sessions').insert({
-      organization_id: context.organizationId,
-      makeup_task_id: makeupTaskId,
-      entitlement_id: task.entitlement_id,
-      student_id: studentId,
-      teacher_id: teacherId,
-      scheduled_at: normalizeMacauDateTime(scheduledAt),
-      status: 'scheduled',
-      created_by: context.user.id,
-      idempotency_key: String(formData.get('idempotency_key') ?? '').trim() || crypto.randomUUID()
+    const { error: bookingError } = await context.supabase.rpc('book_makeup_session', {
+      target_organization_id: context.organizationId,
+      target_entitlement_id: task.entitlement_id,
+      target_teacher_id: teacherId,
+      target_scheduled_at: normalizeMacauDateTime(scheduledAt),
+      target_idempotency_key: idempotencyKey
     });
-    if (sessionError) throw sessionError;
-
-    const { error: updateError } = await context.supabase.from('makeup_tasks').update({ status: 'scheduled' }).eq('id', makeupTaskId).eq('organization_id', context.organizationId);
-    if (updateError) throw updateError;
+    if (bookingError) throw bookingError;
 
     revalidatePath('/admin/makeup');
     revalidatePath(`/admin/makeup/${makeupTaskId}`);
@@ -60,14 +55,14 @@ export async function scheduleMakeupSessionAction(makeupTaskId: string, studentI
   }
 }
 
-export async function completeMakeupTaskAction(makeupTaskId: string): Promise<void> {
-  const context = await requireManager();
-  const { data: task, error: taskError } = await context.supabase.from('makeup_tasks').select('id').eq('id', makeupTaskId).eq('organization_id', context.organizationId).maybeSingle();
-  if (taskError || !task) throw taskError ?? userFacingError('所選補課已不存在或不屬於目前機構。');
-  const { error: taskUpdateError } = await context.supabase.from('makeup_tasks').update({ status: 'completed' }).eq('id', makeupTaskId).eq('organization_id', context.organizationId);
-  if (taskUpdateError) throw taskUpdateError;
-  const { error: sessionUpdateError } = await context.supabase.from('makeup_sessions').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('makeup_task_id', makeupTaskId).eq('organization_id', context.organizationId).eq('status', 'scheduled');
-  if (sessionUpdateError) throw sessionUpdateError;
-  revalidatePath('/admin/makeup');
-  revalidatePath(`/admin/makeup/${makeupTaskId}`);
+export async function completeMakeupTaskAction(makeupTaskId: string, _prevState: MakeupFormState, _formData: FormData): Promise<MakeupFormState> {
+  try {
+    const context = await requireManager();
+    const { data, error } = await context.supabase.rpc('complete_makeup_task', { target_makeup_task_id: makeupTaskId });
+    if (error) throw error;
+    if (!data) throw userFacingError('補課完成操作沒有回傳結果。');
+    return { status: 'success', message: data.status === 'existing' ? '補課已完成，重複提交沒有重複扣除補課額。' : '補課已完成，補課額已一次扣除。' };
+  } catch (error) {
+    return { status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '完成補課失敗，請稍後再試。', 'complete-makeup') };
+  }
 }

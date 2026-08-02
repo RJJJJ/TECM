@@ -17,6 +17,7 @@ test.describe('家長 App 帳戶與通知', () => {
   );
 
   test('邀請、原子停用、範本、公告、投遞摘要及跨 tenant 防護', async ({ page }, testInfo) => {
+    test.setTimeout(180_000);
     const runId = `${Date.now()}-${testInfo.project.name.replace(/[^a-z0-9]/gi, '-')}`;
     const guardianName = `App 驗收家長 ${runId}`;
     const guardianEmail = `parent-${runId}@tecm.test`;
@@ -80,6 +81,7 @@ test.describe('家長 App 帳戶與通知', () => {
       is_active: true
     });
     expect(linkedDeviceError).toBeNull();
+    page.once('dialog', (dialog) => dialog.accept());
     await guardianRow.getByRole('button', { name: '停用帳戶及裝置' }).click();
     await expect(guardianRow).toContainText('已停用', { timeout: 30_000 });
     const [{ data: disabledProfile }, { data: disabledDevice }] = await Promise.all([

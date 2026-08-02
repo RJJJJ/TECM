@@ -50,7 +50,7 @@ export default async function NotificationsPage() {
     </div>
     <div className="mt-5"><Panel title="最近發送">
       {announcements.error ? <ErrorState error={announcements.error} fallback="讀取通知紀錄失敗，請稍後再試。" /> : !announcements.data?.length ? <EmptyState>尚未發送通知。</EmptyState> : <DataTable headers={['標題', '類別', '收件人', '狀態', '發送時間']}>
-        {announcements.data.map((item) => <tr key={item.id}><td className="px-4 py-3 font-medium">{item.title}</td><td className="px-4 py-3">{statusLabel(item.category)}</td><td className="px-4 py-3">{item.recipient_count}</td><td className="px-4 py-3"><Badge tone={item.status === 'sent' ? 'green' : 'slate'}>{statusLabel(item.status)}</Badge></td><td className="px-4 py-3">{formatMacauDateTime(item.sent_at ?? item.created_at)}</td></tr>)}
+        {announcements.data.map((item) => <tr key={item.id}><td className="px-4 py-3 font-medium">{item.title}</td><td className="px-4 py-3">{statusLabel(item.category)}</td><td className="px-4 py-3">{item.recipient_count}</td><td className="px-4 py-3"><Badge tone={item.status === 'sent' ? 'green' : 'slate'}>{item.status}</Badge></td><td className="px-4 py-3">{formatMacauDateTime(item.sent_at ?? item.created_at)}</td></tr>)}
       </DataTable>}
     </Panel></div>
     <div className="mt-5 grid gap-5 xl:grid-cols-2">

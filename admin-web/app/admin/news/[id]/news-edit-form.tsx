@@ -189,7 +189,7 @@ export default function NewsEditForm({ newsItem }: Props) {
 
           <div className="md:col-span-2">
             <label htmlFor="image_url" className="mb-1 block text-sm font-medium text-slate-700">
-              Image URL
+              圖片網址
             </label>
             <input
               id="image_url"

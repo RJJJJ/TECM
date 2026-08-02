@@ -1,7 +1,9 @@
 import { getOperationsContext } from '@/lib/operations/context';
 import { DataTable, EmptyState, ErrorState, PageHeader, Panel } from '@/components/operations-ui';
 import TeacherCreateForm from './teacher-create-form';
+import TeacherReactivateForm from './teacher-reactivate-form';
 import { statusLabel } from '@/lib/operations/labels';
+import { loadAdminUserDirectory } from '@/lib/admin-user-directory';
 
 type Teacher = {
   id: string;
@@ -20,6 +22,12 @@ export default async function TeachersPage() {
     .order('display_name');
 
   const teachers = (data ?? []) as Teacher[];
+  let userDirectory = new Map<string, string>();
+  try {
+    userDirectory = await loadAdminUserDirectory();
+  } catch {
+    // The table remains usable if the server-side Auth directory is briefly unavailable.
+  }
 
   return <>
     <PageHeader title="導師" description="查看導師帳戶及啟用狀態；導師只可存取獲指派的班別與課堂。" />
@@ -34,8 +42,8 @@ export default async function TeachersPage() {
       </div>
       <TeacherCreateForm />
     </Panel> : null}
-    <div className="mt-5">{error ? <ErrorState error={error} fallback="讀取導師失敗，請稍後再試。" /> : teachers.length === 0 ? <EmptyState>尚未有導師資料。</EmptyState> : <DataTable headers={['姓名', '電話', '使用者 ID', '狀態']}>
-      {teachers.map((teacher) => <tr key={teacher.id}><td className="px-4 py-3 font-medium">{teacher.display_name}</td><td className="px-4 py-3">{teacher.phone ?? '—'}</td><td className="px-4 py-3 font-mono text-xs">{teacher.user_id}</td><td className="px-4 py-3">{statusLabel(teacher.is_active ? 'active' : 'inactive')}</td></tr>)}
+    <div className="mt-5">{error ? <ErrorState error={error} fallback="讀取導師失敗，請稍後再試。" /> : teachers.length === 0 ? <EmptyState>尚未有導師資料。</EmptyState> : <DataTable headers={['姓名', '登入電郵', '電話', '狀態', '操作']}>
+      {teachers.map((teacher) => <tr key={teacher.id}><td className="px-4 py-3 font-medium">{teacher.display_name}</td><td className="px-4 py-3">{userDirectory.get(teacher.user_id) ?? '未取得登入電郵'}</td><td className="px-4 py-3">{teacher.phone ?? '—'}</td><td className="px-4 py-3">{statusLabel(teacher.is_active ? 'active' : 'inactive')}</td><td className="px-4 py-3">{!teacher.is_active && role === 'admin' && userDirectory.has(teacher.user_id) ? <TeacherReactivateForm email={userDirectory.get(teacher.user_id)!} displayName={teacher.display_name} phone={teacher.phone} /> : '—'}</td></tr>)}
     </DataTable>}</div>
   </>;
 }

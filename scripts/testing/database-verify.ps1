@@ -64,6 +64,8 @@ try {
     '/workspace/supabase/migrations/202607180008_apns_completion_outcome.sql',
     '/workspace/supabase/migrations/202608020009_admin_operations_integrity.sql',
     '/workspace/supabase/migrations/202608020009_admin_operations_integrity.sql',
+    '/workspace/supabase/migrations/202608020010_admin_operations_release_gate.sql',
+    '/workspace/supabase/migrations/202608020010_admin_operations_release_gate.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
     '/workspace/supabase/tests/002_rls_tenant_isolation.sql',
     '/workspace/supabase/tests/003_attendance_leave_makeup.sql',
@@ -75,7 +77,8 @@ try {
     '/workspace/supabase/tests/009_apns_outbox_reliability.sql',
     '/workspace/supabase/tests/010_apns_dispatch_ambiguity.sql',
     '/workspace/supabase/tests/011_apns_completion_outcome.sql',
-    '/workspace/supabase/tests/012_admin_operations_integrity.sql'
+    '/workspace/supabase/tests/012_admin_operations_integrity.sql',
+    '/workspace/supabase/tests/013_admin_operations_release_gate.sql'
   )
 
   foreach ($file in $files) {
@@ -259,6 +262,30 @@ try {
     -f '/workspace/supabase/tests/concurrency/dispatch_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Dispatch concurrency assertion failed.' }
 
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/admin_ops_race_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare Admin operations race fixtures.' }
+  Invoke-DatabaseRace `
+    '/workspace/supabase/tests/concurrency/teacher_link_first.sql' `
+    '/workspace/supabase/tests/concurrency/teacher_link_second.sql' 0 3
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_link_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Teacher link concurrency assertion failed.' }
+
+  Invoke-DatabaseRace `
+    '/workspace/supabase/tests/concurrency/makeup_booking_first.sql' `
+    '/workspace/supabase/tests/concurrency/makeup_booking_second.sql' 0 0 0
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/makeup_booking_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Makeup booking concurrency assertion failed.' }
+
+  Invoke-DatabaseRace `
+    '/workspace/supabase/tests/concurrency/makeup_complete_first.sql' `
+    '/workspace/supabase/tests/concurrency/makeup_complete_second.sql' 0 0 0
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/makeup_complete_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Makeup completion concurrency assertion failed.' }
+
   $unsafeDatabase = 'tecm_unsafe_preflight'
   docker exec $containerName createdb -U postgres $unsafeDatabase
   if ($LASTEXITCODE -ne 0) { throw 'Could not create unsafe preflight database.' }
@@ -285,7 +312,7 @@ try {
     throw 'Blocked migration partially applied mutable DDL before preflight.'
   }
 
-  Write-Host '[PASS] repeatable migrations, negative preflight, seed, RLS, eleven SQL suites, parent races, bounded outbox claim race and dispatch-boundary race'
+  Write-Host '[PASS] repeatable migrations, negative preflight, seed, RLS, thirteen SQL suites, parent races, Admin operations races, bounded outbox claim race and dispatch-boundary race'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity

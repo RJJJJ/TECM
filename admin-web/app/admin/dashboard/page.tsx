@@ -8,7 +8,7 @@ export default async function DashboardPage() {
   const monthStart = `${today.slice(0, 7)}-01T00:00:00+08:00`;
   const dayStart = `${today}T00:00:00+08:00`;
   const dayEnd = `${today}T23:59:59+08:00`;
-  const [sessions, attendance, leaves, makeups, ledgers, charges, payments, bookings, campuses, teachers, courses, students, cohorts, lessonPlans, futureSessions] = await Promise.all([
+  const [sessions, attendance, leaves, makeups, ledgers, charges, payments, bookings, campuses, teachers, courses, students, cohorts, lessonPlans, futureSessions, feePlans, parentProfiles, activeTeachers, coherentCohorts, activeEnrollments, cohortLessonPlans, coherentFutureSessions, activePackages] = await Promise.all([
     supabase.from('lesson_sessions').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).gte('starts_at', dayStart).lt('starts_at', dayEnd),
     supabase.from('attendance_records').select('status').eq('organization_id', organizationId).gte('recorded_at', dayStart).lt('recorded_at', dayEnd),
     supabase.from('leave_requests').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'pending'),
@@ -23,7 +23,15 @@ export default async function DashboardPage() {
     supabase.from('students').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'active'),
     supabase.from('exam_cohorts').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).in('status', ['draft', 'active']),
     supabase.from('lesson_plans').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId),
-    supabase.from('lesson_sessions').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).gte('starts_at', new Date().toISOString())
+    supabase.from('lesson_sessions').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).gte('starts_at', new Date().toISOString()),
+    supabase.from('fee_plans').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('is_active', true),
+    supabase.from('parent_profiles').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).in('account_status', ['unlinked', 'invited', 'active']),
+    supabase.from('organization_members').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('role', 'teacher').eq('status', 'active'),
+    supabase.from('exam_cohorts').select('id,courses!inner(id),campuses!inner(id)', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'active').eq('courses.is_active', true).eq('campuses.is_active', true),
+    supabase.from('cohort_students').select('id,exam_cohorts!inner(id),students!inner(id)', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'active').eq('is_active_membership', true).eq('exam_cohorts.status', 'active').eq('students.status', 'active'),
+    supabase.from('lesson_plans').select('id,exam_cohorts!inner(id)', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('exam_cohorts.status', 'active'),
+    supabase.from('lesson_sessions').select('id,exam_cohorts!inner(id),lesson_plans!inner(id)', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'scheduled').gt('starts_at', new Date().toISOString()).eq('exam_cohorts.status', 'active'),
+    supabase.from('student_packages').select('id,fee_plans!inner(id)', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('status', 'active').eq('fee_plans.is_active', true)
   ]);
   const present = (attendance.data ?? []).filter(row => row.status === 'present' || row.status === 'makeup_completed').length;
   const absent = (attendance.data ?? []).filter(row => row.status === 'absent').length;
@@ -33,13 +41,18 @@ export default async function DashboardPage() {
   const exhaustedCredits = Array.from(packageBalances.values()).filter(balance => balance <= 0).length;
   const overdueMinor = (charges.data ?? []).reduce((total, row: any) => total + Math.max(0, Number(row.amount_minor) - (row.payment_allocations ?? []).reduce((paid: number, allocation: any) => paid + Number(allocation.amount_minor), 0)), 0);
   const monthlyIncome = (payments.data ?? []).reduce((total, row) => total + Number(row.amount_minor || 0), 0);
-  const results = [sessions, attendance, leaves, makeups, ledgers, charges, payments, bookings, campuses, teachers, courses, students, cohorts, lessonPlans, futureSessions];
+  const results = [sessions, attendance, leaves, makeups, ledgers, charges, payments, bookings, campuses, teachers, courses, students, cohorts, lessonPlans, futureSessions, feePlans, parentProfiles, activeTeachers, coherentCohorts, activeEnrollments, cohortLessonPlans, coherentFutureSessions, activePackages];
   const onboarding = [
-    { label: '建立第一個校區', href: '/admin/settings#campus-settings', ready: (campuses.count ?? 0) > 0 },
-    { label: '連結導師登入帳戶', href: '/admin/teachers', ready: (teachers.count ?? 0) > 0 },
-    { label: '建立課程', href: '/admin/courses', ready: (courses.count ?? 0) > 0 },
-    { label: '建立班別及學生', href: '/admin/exam-cohorts', ready: (cohorts.count ?? 0) > 0 && (students.count ?? 0) > 0 },
-    { label: '建立教案及未來課堂', href: '/admin/exam-cohorts', ready: (lessonPlans.count ?? 0) > 0 && (futureSessions.count ?? 0) > 0 }
+    { label: '建立有效校區', href: '/admin/settings#campus-settings', ready: (campuses.count ?? 0) > 0 },
+    { label: '建立隸屬校區的有效課程', href: '/admin/courses', ready: (courses.count ?? 0) > 0 },
+    { label: '建立有效收費套票', href: '/admin/packages', ready: (feePlans.count ?? 0) > 0 },
+    { label: '連結或重新啟用導師', href: '/admin/teachers', ready: (activeTeachers.count ?? 0) > 0 },
+    { label: '建立隸屬課程及校區的有效班別', href: '/admin/exam-cohorts', ready: (coherentCohorts.count ?? 0) > 0 },
+    { label: '建立學生及家長資料', href: '/admin/students', ready: (students.count ?? 0) > 0 && (parentProfiles.count ?? 0) > 0 },
+    { label: '建立有效班別報讀', href: '/admin/exam-cohorts', ready: (activeEnrollments.count ?? 0) > 0 },
+    { label: '為有效班別建立教案', href: '/admin/exam-cohorts', ready: (cohortLessonPlans.count ?? 0) > 0 },
+    { label: '建立未來課堂', href: '/admin/exam-cohorts', ready: (coherentFutureSessions.count ?? 0) > 0 },
+    { label: '建立學生套票或付款資料（如適用）', href: '/admin/packages', ready: (activePackages.count ?? 0) > 0 }
   ];
 
   return <>

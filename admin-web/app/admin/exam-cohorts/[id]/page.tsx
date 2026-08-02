@@ -134,13 +134,13 @@ export default async function ExamCohortDetailPage({ params }: { params: Promise
 
         <Panel title="報讀學生">
           {students.length === 0 ? (
-            <EmptyState>尚未有學生報讀此班別。</EmptyState>
+            <EmptyState>尚未有學生報讀此班別。請先<Link className="font-medium text-teal-700 underline" href="/admin/students">建立學生及家長資料</Link>，再返回本班加入報讀。</EmptyState>
           ) : (
             <div className="space-y-2">
               {students.map((row) => (
                 <div key={row.id} className="flex justify-between rounded-lg border border-slate-200 p-3 text-sm">
                   <span>{row.students?.display_name ?? '-'}</span>
-                   <Badge>{statusLabel(row.status)}</Badge>
+                   <Badge>{row.status}</Badge>
                 </div>
               ))}
             </div>

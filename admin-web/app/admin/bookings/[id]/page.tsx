@@ -438,7 +438,7 @@ export default async function BookingDetailPage({
                   </div>
                   <div>
                     <dt className="text-xs text-slate-500">變更者</dt>
-                    <dd className="mt-1 break-all text-slate-800">{log.changed_by ?? '系統'}</dd>
+                    <dd className="mt-1 text-slate-800">{log.changed_by ? '管理員／職員' : '系統'}</dd>
                   </div>
                   <div>
                     <dt className="text-xs text-slate-500">原狀態</dt>

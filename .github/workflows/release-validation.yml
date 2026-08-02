@@ -97,6 +97,13 @@ jobs:
           docker restart "$KONG_CONTAINER" >/dev/null
           API_URL="$(supabase status -o json | jq -r .API_URL)"
           ANON_KEY="$(supabase status -o json | jq -r .ANON_KEY)"
+          SERVICE_ROLE_KEY="$(supabase status -o json | jq -r .SERVICE_ROLE_KEY)"
+          case "$API_URL" in
+            http://127.0.0.1:*) ;;
+            *) echo "Refusing non-local Supabase URL: $API_URL" >&2; exit 1 ;;
+          esac
+          test -n "$SERVICE_ROLE_KEY"
+          echo "::add-mask::$SERVICE_ROLE_KEY"
           for attempt in $(seq 1 20); do
             if curl --fail --silent --show-error --header "apikey: $ANON_KEY" "$API_URL/auth/v1/health" >/dev/null; then
               break
@@ -106,7 +113,17 @@ jobs:
           done
           echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
           echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
-          echo "SUPABASE_SERVICE_ROLE_KEY=$(supabase status -o json | jq -r .SERVICE_ROLE_KEY)" >> "$GITHUB_ENV"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY" >> "$GITHUB_ENV"
+      - name: Configure masked local E2E credentials
+        shell: bash
+        env:
+          LOCAL_E2E_PASSWORD: ${{ secrets.PLAYWRIGHT_ADMIN_PASSWORD }}
+        run: |
+          test -n "$LOCAL_E2E_PASSWORD" || { echo 'PLAYWRIGHT_ADMIN_PASSWORD repository secret is required for local E2E.' >&2; exit 1; }
+          echo "::add-mask::$LOCAL_E2E_PASSWORD"
+          echo 'PLAYWRIGHT_ADMIN_EMAIL=admin@tecm.local' >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_ADMIN_PASSWORD=$LOCAL_E2E_PASSWORD" >> "$GITHUB_ENV"
+          echo 'PLAYWRIGHT_BASE_URL=http://127.0.0.1:3000' >> "$GITHUB_ENV"
       - name: Install Admin Web and Chromium
         working-directory: admin-web
         run: |
@@ -114,9 +131,6 @@ jobs:
           npx playwright install --with-deps chromium webkit
       - name: Run live Playwright flows
         working-directory: admin-web
-        env:
-          PLAYWRIGHT_ADMIN_EMAIL: admin@tecm.local
-          PLAYWRIGHT_ADMIN_PASSWORD: LocalDemoOnly-1234
         run: npm run test:e2e
 
   ios:

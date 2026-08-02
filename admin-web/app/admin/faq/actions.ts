@@ -26,7 +26,7 @@ export async function createFaqTopicAction(_prevState: CreateFaqTopicFormState, 
   try {
     const context = await requireManager();
     const { data, error } = await context.supabase.from('faq_topics').insert({ organization_id: context.organizationId, name, sort_order: sortOrder }).select('id').single();
-    if (error || !data) throw error ?? new Error('FAQ topic insert returned no row');
+    if (error || !data) throw error ?? new Error('FAQ 分類建立後沒有回傳資料');
     revalidatePath('/admin/faq');
     return { status: 'success', message: '常見問題分類已新增。' };
   } catch (error) {

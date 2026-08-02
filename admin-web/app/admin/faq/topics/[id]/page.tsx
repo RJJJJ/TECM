@@ -56,7 +56,7 @@ export default async function FaqTopicDetailPage({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">常見問題分類詳情</h2>
-          <p className="mt-1 text-sm text-slate-600">分類編號：{topic.id}</p>
+          <p className="mt-1 text-sm text-slate-600">管理常見問題分類及排序。</p>
         </div>
         <Link
           href="/admin/faq"

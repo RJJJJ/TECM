@@ -3,7 +3,6 @@ import { LeaveForm, MakeupForm } from '@/components/operation-forms';
 import { decideLeaveRequestAction } from '@/lib/operations/actions';
 import { Badge, DataTable, EmptyState, ErrorState, PageHeader, Panel } from '@/components/operations-ui';
 import FollowUpCopyButton from '../follow-up-copy-button';
-import { statusLabel } from '@/lib/operations/labels';
 
 export default async function LeaveMakeupPage() {
   const { supabase, organizationId } = await getOperationsContext();
@@ -31,7 +30,7 @@ export default async function LeaveMakeupPage() {
             <td className="px-4 py-3">{row.students?.display_name || '—'}</td>
             <td className="px-4 py-3">{formatMacauDateTime(row.lesson_sessions?.starts_at)}</td>
             <td className="px-4 py-3">{row.reason}</td>
-            <td className="px-4 py-3"><div className="space-y-2"><Badge tone={row.status === 'approved' ? 'green' : 'amber'}>{statusLabel(row.status)}</Badge>
+            <td className="px-4 py-3"><div className="space-y-2"><Badge tone={row.status === 'approved' ? 'green' : 'amber'}>{row.status}</Badge>
               {row.status === 'pending' ? <form action={decideLeaveRequestAction} className="flex flex-wrap gap-1">
                 <input type="hidden" name="leave_request_id" value={row.id}/>
                 <button name="decision" value="approved" className="rounded bg-emerald-700 px-2 py-1 text-xs text-white">批准及建立補課額</button>
@@ -46,7 +45,7 @@ export default async function LeaveMakeupPage() {
             <td className="px-4 py-3">{row.students?.display_name || '—'}</td>
             <td className="px-4 py-3">{formatMacauDateTime(row.scheduled_at)}</td>
             <td className="px-4 py-3">{row.teacher_profiles?.display_name || '待分配'}</td>
-            <td className="px-4 py-3"><Badge tone="blue">{statusLabel(row.status)}</Badge></td>
+            <td className="px-4 py-3"><Badge tone="blue">{row.status}</Badge></td>
           </tr>)}</DataTable>}
       </Panel>
     </div>

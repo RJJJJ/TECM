@@ -1,6 +1,6 @@
 # Playwright Future Plan
 
-Playwright is not enabled yet. Do not add dependencies or modify `package.json` until auth setup, staging environment, and test data isolation are approved.
+Credentialed Playwright runs are local-only and use isolated reset data. Never point this suite at staging or production.
 
 ## What to test
 
@@ -13,14 +13,7 @@ Playwright is not enabled yet. Do not add dependencies or modify `package.json` 
 - copy button
 - mark done / dismiss
 
-## Why not enabled yet
-
-- Needs admin auth setup.
-- Needs staging env with stable URL.
-- Needs isolated test data and cleanup strategy.
-- Needs decision on whether screenshots/videos are stored as artifacts.
-
-## Future command examples
+## Local command examples
 
 ```powershell
 cd admin-web
@@ -35,7 +28,7 @@ npx playwright test --headed
 - `PLAYWRIGHT_ADMIN_PASSWORD`
 - `PLAYWRIGHT_TEST_BOOKING_ID`
 
-Do not expose credentials in public CI logs or workflow files.
+Do not expose credentials in CI logs or workflow files; CI reads the masked `PLAYWRIGHT_ADMIN_PASSWORD` secret and rejects non-local Supabase URLs.
 
 ## Test data strategy
 

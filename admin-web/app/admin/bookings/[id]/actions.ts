@@ -69,7 +69,7 @@ export async function updateBookingAction(bookingId: string, _prevState: UpdateF
   if (!bookingDate) return { status: 'error', message: '預約日期為必填。' };
   if (!startTime) return { status: 'error', message: '開始時間為必填。' };
   if (!endTime) return { status: 'error', message: '結束時間為必填。' };
-  if (startTime > endTime) return { status: 'error', message: '開始時間不可晚於結束時間。' };
+  if (startTime >= endTime) return { status: 'error', message: '開始時間必須早於結束時間。' };
 
   try {
     const context = await getOperationsContext();

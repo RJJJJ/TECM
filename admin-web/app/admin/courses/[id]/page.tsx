@@ -91,7 +91,7 @@ export default async function CourseDetailPage({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">課程詳情</h2>
-          <p className="mt-1 text-sm text-slate-600">課程編號：{course.id}</p>
+          <p className="mt-1 text-sm text-slate-600">管理課程內容、校區及標籤。</p>
         </div>
         <Link
           href="/admin/courses"

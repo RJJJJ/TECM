@@ -17,12 +17,14 @@ export async function createGuardianStudentAction(_: OperationState, form: FormD
     const ctx = await getOperationsContext();
     requireManager(ctx.role);
     const guardianName = value(form, 'guardian_name'); const phone = value(form, 'phone'); const studentName = value(form, 'student_name');
+    const idempotencyKey = value(form, 'idempotency_key');
     if (!guardianName || !phone || !studentName || !value(form, 'class_group_id') || !value(form, 'fee_plan_id')) throw userFacingError('請填寫家長、學生、班別及套票資料。');
+    if (!idempotencyKey) throw userFacingError('建立資料操作識別碼遺失，請重新載入頁面再試。');
     const { data, error } = await ctx.supabase.rpc('create_guardian_student_enrollment_package', {
       target_organization_id: ctx.organizationId, target_guardian_name: guardianName, target_guardian_phone: phone,
       target_student_name: studentName, target_school_name: value(form, 'school_name') || null,
       target_cohort_id: value(form, 'class_group_id') || null, target_fee_plan_id: value(form, 'fee_plan_id') || null,
-      target_idempotency_key: value(form, 'idempotency_key') || crypto.randomUUID()
+      target_idempotency_key: idempotencyKey
     });
     if (error) throw error; void data;
     revalidatePath('/admin/students'); revalidatePath('/admin/guardians'); revalidatePath('/admin/classes'); revalidatePath('/admin/packages');
@@ -35,7 +37,9 @@ export async function recordPaymentAction(_: OperationState, form: FormData): Pr
     const ctx = await getOperationsContext(); const chargeId = value(form, 'charge_id'); const guardianId = value(form, 'guardian_id'); const amount = Number(value(form, 'amount_minor'));
     requireManager(ctx.role);
     if (!chargeId || !Number.isInteger(amount) || amount <= 0) throw userFacingError('請選擇收費項目及輸入有效的整數金額（最小貨幣單位）。');
-    const { error } = await ctx.supabase.rpc('record_payment', { target_organization_id: ctx.organizationId, target_guardian_id: guardianId || null, target_charge_id: chargeId, target_amount_minor: amount, target_method: value(form, 'method'), target_idempotency_key: value(form, 'idempotency_key') || crypto.randomUUID() });
+    const idempotencyKey = value(form, 'idempotency_key');
+    if (!idempotencyKey) throw userFacingError('付款操作識別碼遺失，請重新載入頁面再試。');
+    const { error } = await ctx.supabase.rpc('record_payment', { target_organization_id: ctx.organizationId, target_guardian_id: guardianId || null, target_charge_id: chargeId, target_amount_minor: amount, target_method: value(form, 'method'), target_idempotency_key: idempotencyKey });
     if (error) throw error; revalidatePath('/admin/payments'); revalidatePath('/admin/packages'); return ok('付款已記錄，結餘已更新。');
   } catch (error) { return fail(error); }
 }
@@ -98,14 +102,15 @@ export async function decideLeaveRequestAction(form: FormData): Promise<void> {
 export async function createLeaveRequestAction(_: OperationState, form: FormData): Promise<OperationState> {
   try {
     const ctx = await getOperationsContext(); requireManager(ctx.role); const studentId = value(form, 'student_id'); const sessionId = value(form, 'session_id');
-    const reason = value(form, 'reason');
+    const reason = value(form, 'reason'); const idempotencyKey = value(form, 'idempotency_key');
     if (!studentId || !sessionId || !reason) throw userFacingError('請選擇學生、課堂及填寫請假原因。');
+    if (!idempotencyKey) throw userFacingError('請假操作識別碼遺失，請重新載入頁面再試。');
     const { error } = await ctx.supabase.rpc('submit_staff_leave_request', {
       target_organization_id: ctx.organizationId,
       target_student_id: studentId,
       target_session_id: sessionId,
       target_reason: reason,
-      target_idempotency_key: value(form, 'idempotency_key') || crypto.randomUUID()
+      target_idempotency_key: idempotencyKey
     });
     if (error) throw error; revalidatePath('/admin/leave-makeup'); return ok('請假申請已建立。');
   } catch (error) { return fail(error); }
@@ -116,7 +121,9 @@ export async function createMakeupBookingAction(_: OperationState, form: FormDat
     const ctx = await getOperationsContext(); const entitlementId = value(form, 'entitlement_id'); const teacherId = value(form, 'teacher_id'); const scheduledAt = value(form, 'scheduled_at');
     requireManager(ctx.role);
     if (!entitlementId || !teacherId || !scheduledAt) throw userFacingError('請選擇補課額、導師及補課時間。');
-    const { error } = await ctx.supabase.rpc('book_makeup_session', { target_organization_id: ctx.organizationId, target_entitlement_id: entitlementId, target_teacher_id: teacherId || null, target_scheduled_at: `${scheduledAt}:00+08:00`, target_idempotency_key: value(form, 'idempotency_key') || crypto.randomUUID() });
+    const idempotencyKey = value(form, 'idempotency_key');
+    if (!idempotencyKey) throw userFacingError('補課操作識別碼遺失，請重新載入頁面再試。');
+    const { error } = await ctx.supabase.rpc('book_makeup_session', { target_organization_id: ctx.organizationId, target_entitlement_id: entitlementId, target_teacher_id: teacherId || null, target_scheduled_at: `${scheduledAt}:00+08:00`, target_idempotency_key: idempotencyKey });
     if (error) throw error; revalidatePath('/admin/leave-makeup'); revalidatePath('/admin/sessions'); return ok('補課預約已建立。');
   } catch (error) { return fail(error); }
 }

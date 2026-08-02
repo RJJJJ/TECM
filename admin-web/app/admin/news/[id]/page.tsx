@@ -66,7 +66,7 @@ export default async function NewsDetailPage({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">編輯最新消息</h2>
-          <p className="mt-1 text-sm text-slate-600">消息編號：{newsItem.id}</p>
+          <p className="mt-1 text-sm text-slate-600">管理發布內容及顯示狀態。</p>
         </div>
         <Link
           href="/admin/news"
