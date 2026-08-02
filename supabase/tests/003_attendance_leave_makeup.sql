@@ -4,6 +4,28 @@ insert into public.students(id,display_name,status,organization_id)
 values ('15000000-0000-4000-8000-000000000099','Not Enrolled','active','10000000-0000-4000-8000-000000000000')
 on conflict (id) do nothing;
 
+-- The seeded session is intentionally moved to "today" for attendance/dashboard
+-- coverage. Leave submission, however, must target a future scheduled session.
+-- Keep those two fixtures independent so this suite exercises both invariants.
+insert into public.lesson_sessions(
+  id, cohort_id, lesson_plan_id, teacher_id,
+  starts_at, ends_at, status, organization_id
+)
+values (
+  '1d000000-0000-4000-8000-000000000099',
+  '1a000000-0000-4000-8000-000000000001',
+  '1c000000-0000-4000-8000-000000000001',
+  '19000000-0000-4000-8000-000000000001',
+  statement_timestamp() + interval '2 days',
+  statement_timestamp() + interval '2 days 1 hour',
+  'scheduled',
+  '10000000-0000-4000-8000-000000000000'
+)
+on conflict (id) do update set
+  starts_at = excluded.starts_at,
+  ends_at = excluded.ends_at,
+  status = excluded.status;
+
 set role authenticated;
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);
 
@@ -48,7 +70,7 @@ end $$;
 select public.submit_staff_leave_request(
   '10000000-0000-4000-8000-000000000000',
   '15000000-0000-4000-8000-000000000001',
-  '1d000000-0000-4000-8000-000000000001',
+  '1d000000-0000-4000-8000-000000000099',
   'Family leave',
   'leave-test-1'
 );
