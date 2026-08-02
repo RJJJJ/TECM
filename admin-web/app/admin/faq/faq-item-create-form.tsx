@@ -26,7 +26,7 @@ function SubmitButton() {
       disabled={pending}
       className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
     >
-      {pending ? '新增中...' : '新增 FAQ Item'}
+      {pending ? '新增中...' : '新增常見問題'}
     </button>
   );
 }
@@ -42,7 +42,7 @@ function clientValidate(formData: FormData) {
   if (!answer) return '答案為必填。';
 
   const sortOrder = Number(sortOrderRaw || '0');
-  if (!Number.isFinite(sortOrder)) return 'Sort order 必須是數字。';
+  if (!Number.isFinite(sortOrder)) return '排序必須是數字。';
 
   return null;
 }

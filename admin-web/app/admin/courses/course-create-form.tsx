@@ -97,7 +97,7 @@ export default function CourseCreateForm({ campuses }: Props) {
             name="category"
             type="text"
             maxLength={80}
-            placeholder="例如：Robotics"
+            placeholder="例如：機械人編程"
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
           />
         </div>
@@ -111,7 +111,7 @@ export default function CourseCreateForm({ campuses }: Props) {
             name="level"
             type="text"
             maxLength={80}
-            placeholder="例如：Beginner"
+            placeholder="例如：入門"
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
           />
         </div>
@@ -222,8 +222,8 @@ export default function CourseCreateForm({ campuses }: Props) {
       <div className="flex flex-wrap items-center gap-3">
         <CreateButton />
         {clientMessage && <p className="text-sm font-medium text-rose-700">{clientMessage}</p>}
-        {state.status === 'success' && <p className="text-sm font-medium text-emerald-700">{state.message}</p>}
-        {state.status === 'error' && <p className="text-sm font-medium text-rose-700">{state.message}</p>}
+        {state.status === 'success' && <p role="status" className="text-sm font-medium text-emerald-700">{state.message}</p>}
+        {state.status === 'error' && <p role="status" className="text-sm font-medium text-rose-700">{state.message}</p>}
         {showSavedHint && (
           <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">已新增</span>
         )}

@@ -62,6 +62,8 @@ try {
     '/workspace/supabase/migrations/202607180007_apns_dispatch_ambiguity.sql',
     '/workspace/supabase/migrations/202607180008_apns_completion_outcome.sql',
     '/workspace/supabase/migrations/202607180008_apns_completion_outcome.sql',
+    '/workspace/supabase/migrations/202608020009_admin_operations_integrity.sql',
+    '/workspace/supabase/migrations/202608020009_admin_operations_integrity.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
     '/workspace/supabase/tests/002_rls_tenant_isolation.sql',
     '/workspace/supabase/tests/003_attendance_leave_makeup.sql',
@@ -72,7 +74,8 @@ try {
     '/workspace/supabase/tests/008_foundation_security.sql',
     '/workspace/supabase/tests/009_apns_outbox_reliability.sql',
     '/workspace/supabase/tests/010_apns_dispatch_ambiguity.sql',
-    '/workspace/supabase/tests/011_apns_completion_outcome.sql'
+    '/workspace/supabase/tests/011_apns_completion_outcome.sql',
+    '/workspace/supabase/tests/012_admin_operations_integrity.sql'
   )
 
   foreach ($file in $files) {

@@ -100,14 +100,13 @@ export async function createLeaveRequestAction(_: OperationState, form: FormData
     const ctx = await getOperationsContext(); requireManager(ctx.role); const studentId = value(form, 'student_id'); const sessionId = value(form, 'session_id');
     const reason = value(form, 'reason');
     if (!studentId || !sessionId || !reason) throw userFacingError('請選擇學生、課堂及填寫請假原因。');
-    const [{ data: student, error: studentError }, { data: session, error: sessionError }] = await Promise.all([
-      ctx.supabase.from('students').select('id').eq('id', studentId).eq('organization_id', ctx.organizationId).maybeSingle(),
-      ctx.supabase.from('lesson_sessions').select('id,cohort_id').eq('id', sessionId).eq('organization_id', ctx.organizationId).maybeSingle()
-    ]);
-    if (studentError) throw studentError;
-    if (sessionError) throw sessionError;
-    if (!student || !session) throw userFacingError('所選學生或課堂已不存在，請重新選擇。');
-    const { error } = await ctx.supabase.from('leave_requests').insert({ organization_id: ctx.organizationId, student_id: studentId, lesson_session_id: sessionId, reason, status: 'pending', requested_by: ctx.user.id, idempotency_key: value(form, 'idempotency_key') || crypto.randomUUID() });
+    const { error } = await ctx.supabase.rpc('submit_staff_leave_request', {
+      target_organization_id: ctx.organizationId,
+      target_student_id: studentId,
+      target_session_id: sessionId,
+      target_reason: reason,
+      target_idempotency_key: value(form, 'idempotency_key') || crypto.randomUUID()
+    });
     if (error) throw error; revalidatePath('/admin/leave-makeup'); return ok('請假申請已建立。');
   } catch (error) { return fail(error); }
 }
@@ -125,7 +124,9 @@ export async function createMakeupBookingAction(_: OperationState, form: FormDat
 export async function completeFollowUpAction(_: OperationState, form: FormData): Promise<OperationState> {
   try {
     const ctx = await getOperationsContext(); requireManager(ctx.role); const id = value(form, 'follow_up_id'); if (!id) throw userFacingError('請選擇跟進事項。');
-    const { error } = await ctx.supabase.from('follow_up_tasks').update({ status: 'done', completed_at: new Date().toISOString() }).eq('organization_id', ctx.organizationId).eq('id', id);
-    if (error) throw error; revalidatePath('/admin/follow-ups'); revalidatePath('/admin/dashboard'); return ok('跟進事項已完成。');
+    const { data, error } = await ctx.supabase.from('follow_up_tasks').update({ status: 'done', completed_at: new Date().toISOString() }).eq('organization_id', ctx.organizationId).eq('id', id).select('id').maybeSingle();
+    if (error) throw error;
+    if (!data) throw userFacingError('跟進事項已不存在或不屬於目前機構。');
+    revalidatePath('/admin/follow-ups'); revalidatePath('/admin/dashboard'); return ok('跟進事項已完成。');
   } catch (error) { return fail(error); }
 }

@@ -40,7 +40,7 @@ function clientValidate(formData: FormData) {
   if (!name) return '分類名稱為必填。';
 
   const sortOrder = Number(sortOrderRaw || '0');
-  if (!Number.isFinite(sortOrder)) return 'Sort order 必須是數字。';
+  if (!Number.isFinite(sortOrder)) return '排序必須是數字。';
 
   return null;
 }

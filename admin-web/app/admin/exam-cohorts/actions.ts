@@ -44,6 +44,7 @@ export async function createExamCohortAction(
   const status = text(formData, 'status') || 'draft';
 
   if (!name || !subject || !level || !examDate || !weekdayPattern) return { status: 'error', message: '請填寫班別名稱、科目、程度、考試日期及上課日。' };
+  if (!['draft', 'active'].includes(status)) return { status: 'error', message: '班別狀態無效。' };
 
   try {
     const context = await requireManager();

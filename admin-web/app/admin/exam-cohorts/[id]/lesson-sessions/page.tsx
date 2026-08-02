@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { getOperationsContext, formatMacauDateTime } from '@/lib/operations/context';
 import { ErrorState, EmptyState, PageHeader, Badge, DataTable } from '@/components/operations-ui';
 import { LessonSessionCreateForm } from './lesson-session-create-form';
+import { statusLabel } from '@/lib/operations/labels';
 
 type Cohort = { id: string; name: string; subject: string; level: string };
 type LessonPlan = { id: string; sequence_no: number; title: string };
@@ -28,7 +29,7 @@ export default async function LessonSessionsPage({ params }: { params: Promise<{
     {lessonError || teacherError || sessionError ? <ErrorState error={lessonError || teacherError || sessionError} fallback="部分課堂資料未能載入，請稍後再試。" /> : null}
     <LessonSessionCreateForm cohortId={cohort.id} lessons={lessons} teachers={teachers} />
     {sessions.length === 0 ? <EmptyState>尚未建立未來課堂；請先選擇教案、導師及時間。</EmptyState> : <DataTable headers={['教案', '導師', '開始時間', '結束時間', '狀態']}>
-      {sessions.map(session => <tr key={session.id}><td className="px-3 py-2">第 {session.lesson_plans?.sequence_no ?? '—'} 堂：{session.lesson_plans?.title ?? '—'}</td><td className="px-3 py-2">{session.teacher_profiles?.display_name ?? '—'}</td><td className="px-3 py-2">{formatMacauDateTime(session.starts_at)}</td><td className="px-3 py-2">{formatMacauDateTime(session.ends_at)}</td><td className="px-3 py-2"><Badge tone={session.status === 'scheduled' ? 'blue' : session.status === 'completed' ? 'green' : 'rose'}>{session.status}</Badge></td></tr>)}
+      {sessions.map(session => <tr key={session.id}><td className="px-3 py-2">第 {session.lesson_plans?.sequence_no ?? '—'} 堂：{session.lesson_plans?.title ?? '—'}</td><td className="px-3 py-2">{session.teacher_profiles?.display_name ?? '—'}</td><td className="px-3 py-2">{formatMacauDateTime(session.starts_at)}</td><td className="px-3 py-2">{formatMacauDateTime(session.ends_at)}</td><td className="px-3 py-2"><Badge tone={session.status === 'scheduled' ? 'blue' : session.status === 'completed' ? 'green' : 'rose'}>{statusLabel(session.status)}</Badge></td></tr>)}
     </DataTable>}
   </section>;
 }

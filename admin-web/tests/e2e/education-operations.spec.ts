@@ -18,7 +18,25 @@ const password = process.env.PLAYWRIGHT_ADMIN_PASSWORD;
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-type CreatedFixture = { prefix: string; studentName: string; guardianName: string };
+type CreatedFixture = {
+  prefix: string;
+  studentName: string;
+  guardianName: string;
+  campusName: string;
+  courseName: string;
+  cohortName: string;
+  feePlanName: string;
+};
+
+function macauDateInput(offsetDays: number, time?: string) {
+  const date = new Date(Date.now() + offsetDays * 86_400_000);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Macau', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value;
+  const value = `${part('year')}-${part('month')}-${part('day')}`;
+  return time ? `${value}T${time}` : value;
+}
 
 async function cleanupAdminUxFixture(client: SupabaseClient, fixture: CreatedFixture) {
   const { data: students, error: studentError } = await client.from('students').select('id,organization_id').eq('display_name', fixture.studentName);
@@ -61,6 +79,22 @@ async function cleanupAdminUxFixture(client: SupabaseClient, fixture: CreatedFix
     if (studentUpdateError) throw studentUpdateError;
     const { error: parentError } = await client.from('parent_profiles').update({ account_status: 'disabled' }).eq('organization_id', organizationId).eq('full_name', fixture.guardianName);
     if (parentError) throw parentError;
+
+    const { data: cohorts, error: cohortLookupError } = await client.from('exam_cohorts').select('id').eq('organization_id', organizationId).eq('name', fixture.cohortName);
+    if (cohortLookupError) throw cohortLookupError;
+    const cohortIds = (cohorts ?? []).map((item) => item.id);
+    if (cohortIds.length) {
+      const { error: sessionUpdateError } = await client.from('lesson_sessions').update({ status: 'cancelled' }).eq('organization_id', organizationId).in('cohort_id', cohortIds).eq('status', 'scheduled');
+      if (sessionUpdateError) throw sessionUpdateError;
+      const { error: cohortUpdateError } = await client.from('exam_cohorts').update({ status: 'cancelled' }).eq('organization_id', organizationId).in('id', cohortIds);
+      if (cohortUpdateError) throw cohortUpdateError;
+    }
+    const { error: planUpdateError } = await client.from('fee_plans').update({ is_active: false }).eq('organization_id', organizationId).eq('name', fixture.feePlanName);
+    if (planUpdateError) throw planUpdateError;
+    const { error: courseUpdateError } = await client.from('courses').update({ is_active: false }).eq('organization_id', organizationId).eq('title', fixture.courseName);
+    if (courseUpdateError) throw courseUpdateError;
+    const { error: campusUpdateError } = await client.from('campuses').update({ is_active: false }).eq('organization_id', organizationId).eq('name', fixture.campusName);
+    if (campusUpdateError) throw campusUpdateError;
   }
 }
 
@@ -79,7 +113,11 @@ test.describe('教育中心營運主流程', () => {
     const prefix = `TEST_ADMIN_UX_${Date.now()}`;
     const studentName = `${prefix}_STUDENT`;
     const guardianName = `${prefix}_PARENT`;
-    fixture = { prefix, studentName, guardianName };
+    const campusName = `${prefix}_CAMPUS`;
+    const courseName = `${prefix}_COURSE`;
+    const cohortName = `${prefix}_COHORT`;
+    const feePlanName = `${prefix}_PACKAGE`;
+    fixture = { prefix, studentName, guardianName, campusName, courseName, cohortName, feePlanName };
 
     await page.goto('/login');
     await page.getByLabel('電郵').fill(email!);
@@ -87,12 +125,69 @@ test.describe('教育中心營運主流程', () => {
     await page.getByRole('button', { name: '登入' }).click();
     await expect(page).toHaveURL(/\/admin\/dashboard$/, { timeout: 30_000 });
 
+    await page.goto('/admin/settings');
+    await page.getByLabel('校區名稱').fill(campusName);
+    await page.getByLabel('校區地址').fill('澳門測試地址');
+    await page.getByRole('button', { name: '建立校區' }).click();
+    await expect(page.getByRole('status')).toContainText('校區已建立');
+
+    await page.goto('/admin/courses');
+    await page.getByLabel('課程名稱').fill(courseName);
+    await page.getByLabel('類別').fill('Python');
+    await page.getByLabel('程度').fill('測試');
+    await page.getByLabel('校區').selectOption({ label: campusName });
+    await page.getByRole('button', { name: '新增課程' }).click();
+    await expect(page.getByRole('status')).toContainText('課程已新增');
+
+    await page.goto('/admin/packages');
+    await page.getByLabel('套票名稱').fill(feePlanName);
+    await page.getByLabel('適用課程').selectOption({ label: courseName });
+    await page.getByLabel('堂數').fill('8');
+    await page.getByLabel('金額（仙）').fill('120000');
+    await page.getByRole('button', { name: '建立套票' }).click();
+    await expect(page.getByRole('status')).toContainText('套票已建立');
+
+    await page.goto('/admin/exam-cohorts');
+    await page.getByLabel('班別名稱').fill(cohortName);
+    await page.getByLabel('科目').first().selectOption('Python');
+    await page.getByLabel('程度').first().fill('測試');
+    await page.getByLabel('考試日期').fill(macauDateInput(90));
+    await page.getByLabel('上課日').selectOption('saturday');
+    await page.getByLabel('導師').selectOption({ index: 1 });
+    await page.getByLabel('班別狀態').selectOption('active');
+    await page.getByRole('button', { name: '建立班別' }).click();
+    await expect(page.getByRole('status')).toContainText('班別已建立');
+    await page.reload();
+    const cohortRow = page.getByRole('row').filter({ hasText: cohortName });
+    const cohortHref = await cohortRow.getByRole('link', { name: '開啟班別' }).getAttribute('href');
+    expect(cohortHref).toBeTruthy();
+
+    await page.goto(`${cohortHref}/lesson-plans`);
+    await page.getByLabel('第 1 堂教學內容').fill('測試教學內容');
+    await page.getByRole('button', { name: '儲存教案' }).click();
+    await expect(page.getByRole('status')).toContainText('教案已儲存');
+
+    await page.goto(`${cohortHref}/lesson-sessions`);
+    await page.getByLabel('教案').selectOption({ index: 1 });
+    await page.getByLabel('導師').selectOption({ index: 1 });
+    await page.getByLabel('開始時間').fill(macauDateInput(0, '09:00'));
+    await page.getByLabel('結束時間').fill(macauDateInput(0, '10:00'));
+    await page.getByRole('button', { name: '建立未來課堂' }).click();
+    await expect(page.getByText('未來課堂已建立')).toBeVisible();
+    await expect(page.locator('tbody tr')).toHaveCount(1);
+    await page.getByLabel('教案').selectOption({ index: 2 });
+    await page.getByLabel('導師').selectOption({ index: 1 });
+    await page.getByLabel('開始時間').fill(macauDateInput(2, '09:00'));
+    await page.getByLabel('結束時間').fill(macauDateInput(2, '10:00'));
+    await page.getByRole('button', { name: '建立未來課堂' }).click();
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+
     await page.goto('/admin/students');
     await page.getByLabel('家長姓名').fill(guardianName);
     await page.getByLabel('電話').fill('66881234');
     await page.getByLabel('學生姓名').fill(studentName);
-    await page.getByLabel('班別').selectOption({ index: 1 });
-    await page.getByLabel('套票').selectOption({ index: 1 });
+    await page.getByLabel('班別').selectOption({ label: cohortName });
+    await page.getByLabel('套票').selectOption({ label: feePlanName });
     await page.getByRole('button', { name: '建立資料' }).click();
     await expect(page.getByRole('status')).toContainText('已建立');
     await page.reload();
@@ -119,7 +214,8 @@ test.describe('教育中心營運主流程', () => {
 
     await page.goto('/admin/leave-makeup');
     await page.getByLabel('請假學生').selectOption({ label: studentName });
-    await page.getByLabel('原課堂').selectOption({ index: 1 });
+    const leaveSession = await page.getByLabel('原課堂').locator('option').filter({ hasText: cohortName }).last().getAttribute('value');
+    await page.getByLabel('原課堂').selectOption(leaveSession!);
     await page.getByLabel('請假原因').fill('家庭安排');
     await page.getByRole('button', { name: '提交請假' }).click();
     await page.getByRole('button', { name: '批准及建立補課額' }).first().click();

@@ -157,7 +157,7 @@ export default async function AdminFaqPage() {
 
         {topics.length === 0 ? (
           <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-4 text-sm text-amber-700">
-            請先建立至少一個 FAQ topic，才能新增 FAQ item。
+            請先建立至少一個常見問題分類，才能新增問題。
           </p>
         ) : (
           <FaqItemCreateForm topics={topics.map((topic) => ({ id: topic.id, name: topic.name }))} />
@@ -175,7 +175,7 @@ export default async function AdminFaqPage() {
 
           {!itemError && items.length === 0 && (
             <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600">
-              目前尚無 FAQ item，請先新增第一筆。
+              目前尚無常見問題，請先新增第一筆。
             </p>
           )}
 

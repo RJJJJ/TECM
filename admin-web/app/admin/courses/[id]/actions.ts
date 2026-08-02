@@ -51,12 +51,12 @@ export async function updateCourseAction(
   const sortOrderRaw = String(formData.get('sort_order') ?? '').trim();
 
   if (!title) {
-    return { status: 'error', message: 'Title 為必填。' };
+    return { status: 'error', message: '課程名稱為必填。' };
   }
 
   const sortOrder = Number(sortOrderRaw || '0');
   if (!Number.isFinite(sortOrder)) {
-    return { status: 'error', message: 'Sort order 必須是數字。' };
+    return { status: 'error', message: '排序必須是數字。' };
   }
 
   let verified: Awaited<ReturnType<typeof verifyCourseExists>>;
@@ -73,7 +73,7 @@ export async function updateCourseAction(
       .maybeSingle();
 
     if (campusError || !campus) {
-      return { status: 'error', message: 'Campus 不存在，請重新選擇。' };
+      return { status: 'error', message: '校區不存在，請重新選擇。' };
     }
 
     campusId = campus.id;
@@ -117,7 +117,7 @@ export async function addCourseTagAction(
   const tag = String(formData.get('tag') ?? '').trim();
 
   if (!tag) {
-    return { status: 'error', message: 'Tag 不可空白。' };
+    return { status: 'error', message: '標籤不可空白。' };
   }
 
   let verified: Awaited<ReturnType<typeof verifyCourseExists>>;
@@ -137,7 +137,7 @@ export async function addCourseTagAction(
   }
 
   if (existing) {
-    return { status: 'error', message: 'Tag 已存在，不可重複新增。' };
+    return { status: 'error', message: '標籤已存在，不可重複新增。' };
   }
 
   const { error } = await verified.context.supabase.from('course_tags').insert({
@@ -155,7 +155,7 @@ export async function addCourseTagAction(
 
   return {
     status: 'success',
-    message: 'Tag 已新增。'
+    message: '標籤已新增。'
   };
 }
 
@@ -167,17 +167,18 @@ export async function deleteCourseTagAction(
   try { verified = await verifyCourseExists(courseId); } catch (error) { return { status: 'error', message: safeOperationMessage(error, '刪除課程標籤失敗，請稍後再試。', 'delete-course-tag') }; }
   if (!verified.ok) return { status: 'error', message: verified.message };
 
-  const { error } = await verified.context.supabase.from('course_tags').delete().eq('id', tagId).eq('course_id', courseId).eq('organization_id', verified.context.organizationId);
+  const { data, error } = await verified.context.supabase.from('course_tags').delete().eq('id', tagId).eq('course_id', courseId).eq('organization_id', verified.context.organizationId).select('id').maybeSingle();
 
   if (error) {
     return { status: 'error', message: safeOperationMessage(error, '刪除課程標籤失敗，請稍後再試。', 'delete-course-tag') };
   }
+  if (!data) return { status: 'error', message: '標籤已不存在或不屬於目前課程。' };
 
   revalidatePath('/admin/courses');
   revalidatePath(`/admin/courses/${courseId}`);
 
   return {
     status: 'success',
-    message: 'Tag 已刪除。'
+    message: '標籤已刪除。'
   };
 }

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { getOperationsContext, formatMacauDateTime, todayMacau } from '@/lib/operations/context';
 import { Badge, DataTable, EmptyState, ErrorState, PageHeader } from '@/components/operations-ui';
+import { statusLabel } from '@/lib/operations/labels';
 
 export default async function SessionsPage() {
   const { supabase, organizationId, role, user } = await getOperationsContext();
@@ -25,7 +26,7 @@ export default async function SessionsPage() {
         <td className="px-4 py-3 font-medium">{row.exam_cohorts?.name || '—'}</td>
         <td className="px-4 py-3">{row.teacher_profiles?.display_name || '—'}</td>
         <td className="px-4 py-3">{row.attendance_records?.length ?? 0}</td>
-        <td className="px-4 py-3"><Badge tone={row.status === 'completed' ? 'green' : 'blue'}>{row.status}</Badge></td>
+        <td className="px-4 py-3"><Badge tone={row.status === 'completed' ? 'green' : 'blue'}>{statusLabel(row.status)}</Badge></td>
         <td className="px-4 py-3"><Link href="/admin/attendance" className="font-medium text-teal-700 underline">開啟點名</Link></td>
       </tr>)}</DataTable>}
   </>;

@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { getOperationsContext } from '@/lib/operations/context';
 import { ErrorState, EmptyState, PageHeader, Badge } from '@/components/operations-ui';
 import CohortStudentForm from '../cohort-student-form';
+import { statusLabel } from '@/lib/operations/labels';
 
 type Cohort = {
   id: string;
@@ -139,7 +140,7 @@ export default async function ExamCohortDetailPage({ params }: { params: Promise
               {students.map((row) => (
                 <div key={row.id} className="flex justify-between rounded-lg border border-slate-200 p-3 text-sm">
                   <span>{row.students?.display_name ?? '-'}</span>
-                   <Badge>{row.status}</Badge>
+                   <Badge>{statusLabel(row.status)}</Badge>
                 </div>
               ))}
             </div>
@@ -159,7 +160,7 @@ export default async function ExamCohortDetailPage({ params }: { params: Promise
                     <td className="py-2">{row.students?.display_name ?? '-'}</td>
                     <td className="py-2">第 {row.lesson_sessions?.lesson_plans?.sequence_no ?? '-'} 堂</td>
                     <td className="py-2">{row.lesson_sessions?.lesson_plans?.title ?? '-'}</td>
-                    <td className="py-2 font-medium">{row.status}</td>
+                    <td className="py-2 font-medium">{statusLabel(row.status)}</td>
                   </tr>
                 ))}
               </tbody>

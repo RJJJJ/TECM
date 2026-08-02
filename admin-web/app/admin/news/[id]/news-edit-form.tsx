@@ -56,8 +56,8 @@ function clientValidate(formData: FormData) {
 
   if (!title) return '標題為必填。';
   if (!publishedAt) return '發布日期為必填。';
-  if (!sortOrderRaw) return 'Sort order 為必填。';
-  if (!Number.isFinite(Number(sortOrderRaw))) return 'Sort order 必須是數字。';
+  if (!sortOrderRaw) return '排序為必填。';
+  if (!Number.isFinite(Number(sortOrderRaw))) return '排序必須是數字。';
 
   return null;
 }

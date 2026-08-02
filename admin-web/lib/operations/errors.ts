@@ -1,6 +1,9 @@
 export const PERMISSION_ERROR_MESSAGE = '你沒有權限在目前機構執行此操作，請重新登入；如仍出現，請聯絡系統管理員。';
 export const FOREIGN_KEY_ERROR_MESSAGE = '所選資料已不存在或不屬於目前機構，請重新選擇。';
 export const DUPLICATE_ERROR_MESSAGE = '已有相同記錄，請勿重複建立。';
+export const LEAVE_SESSION_ERROR_MESSAGE = '這名學生沒有報讀所選課堂的班別，或該課堂已取消、已開始或不再接受請假。請重新選擇。';
+export const TEACHER_IDENTITY_ERROR_MESSAGE = '此登入身份已連結其他機構或其他職員角色，不能改為導師。';
+export const IDEMPOTENCY_ERROR_MESSAGE = '表單內容已在提交後改變。請重新整理頁面，再重新操作。';
 
 type ErrorLike = {
   code?: unknown;
@@ -63,7 +66,22 @@ export function safeErrorMessage(
   const status = errorStatus(error);
   const message = errorText(error);
 
-  if (code === '42501' || status === 401 || status === 403 || /row-level security|permission denied|not authorized|forbidden|unauthorized/.test(message)) {
+  if (/session is not available for this student/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return LEAVE_SESSION_ERROR_MESSAGE;
+  }
+
+  if (/teacher identity belongs to another organization|identity already has a different organization role/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return TEACHER_IDENTITY_ERROR_MESSAGE;
+  }
+
+  if (/idempotency key payload mismatch/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return IDEMPOTENCY_ERROR_MESSAGE;
+  }
+
+  if (code === '42501' || status === 401 || status === 403 || /row-level security|permission denied|not authorized|authorization required|forbidden|unauthorized/.test(message)) {
     logSafeFailure(operation, error, referenceId);
     return PERMISSION_ERROR_MESSAGE;
   }

@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { getOperationsContext, formatMacauDateTime } from '@/lib/operations/context';
 import { ErrorState, EmptyState, PageHeader, Badge, Panel } from '@/components/operations-ui';
 import { completeMakeupTaskAction, scheduleMakeupSessionAction } from '../actions';
+import { statusLabel } from '@/lib/operations/labels';
 
 type MakeupTask = {
   id: string;
@@ -98,5 +99,5 @@ export default async function MakeupTaskDetailPage({ params }: { params: Promise
 }
 
 function Info({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-lg border border-slate-200 p-4"><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-1 font-semibold text-slate-900"><Badge tone={value === 'completed' ? 'green' : 'slate'}>{value}</Badge></p></div>;
+  return <div className="rounded-lg border border-slate-200 p-4"><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-1 font-semibold text-slate-900"><Badge tone={value === 'completed' ? 'green' : 'slate'}>{statusLabel(value)}</Badge></p></div>;
 }

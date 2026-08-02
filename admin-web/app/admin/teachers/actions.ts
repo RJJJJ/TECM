@@ -30,9 +30,12 @@ export async function createTeacherAction(_: OperationState, form: FormData): Pr
     if (existing?.organization_id && existing.organization_id !== context.organizationId) throw userFacingError('此登入身份已屬於其他機構，不能跨機構連結。');
     if (existing) throw userFacingError('此登入身份已是導師，請直接在班別中指派。');
 
-    const { error: memberError } = await context.supabase.from('organization_members').insert({ organization_id: context.organizationId, user_id: authUser.id, role: 'teacher', status: 'active' });
-    if (memberError) throw memberError;
-    const { error: teacherError } = await context.supabase.from('teacher_profiles').insert({ organization_id: context.organizationId, user_id: authUser.id, display_name: displayName, phone: value(form, 'phone') || null, is_active: true });
+    const { error: teacherError } = await context.supabase.rpc('link_teacher_profile', {
+      target_organization_id: context.organizationId,
+      target_user_id: authUser.id,
+      target_display_name: displayName,
+      target_phone: value(form, 'phone') || null
+    });
     if (teacherError) throw teacherError;
 
     revalidatePath('/admin/teachers');

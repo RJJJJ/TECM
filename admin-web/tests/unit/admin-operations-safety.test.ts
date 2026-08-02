@@ -35,6 +35,10 @@ test('admin writes carry the active organization and validate tenant-owned refer
   assert.match(source('app/admin/exam-cohorts/actions.ts'), /lead_teacher_id/);
   assert.match(source('app/admin/exam-cohorts/actions.ts'), /teacher_profiles/);
   assert.match(source('app/admin/packages/actions.ts'), /course_id/);
+  assert.match(source('app/admin/teachers/actions.ts'), /rpc\('link_teacher_profile'/);
+  assert.doesNotMatch(source('app/admin/teachers/actions.ts'), /from\('organization_members'\)\.insert/);
+  assert.match(source('lib/operations/actions.ts'), /rpc\('submit_staff_leave_request'/);
+  assert.doesNotMatch(source('lib/operations/actions.ts'), /from\('leave_requests'\)\.insert/);
 });
 
 test('safe operation errors do not expose provider messages or internal UI identifiers', () => {
@@ -48,6 +52,8 @@ test('safe operation errors do not expose provider messages or internal UI ident
   assert.match(ui, /statusLabel/);
   assert.doesNotMatch(source('app/admin/courses/page.tsx'), /error\.message/);
   assert.doesNotMatch(source('app/admin/exam-cohorts/page.tsx'), /error\.message/);
+  assert.match(errors, /這名學生沒有報讀所選課堂的班別/);
+  assert.match(errors, /此登入身份已連結其他機構或其他職員角色/);
 });
 
 test('intake cannot dead-end on empty setup selections', () => {
@@ -67,4 +73,24 @@ test('tenant foreign-key protection remains present in the database contract', (
   assert.match(migration, /cross-organization reference denied/);
   assert.match(migration, /'fee_plans'/);
   assert.match(migration, /'student_packages'/);
+});
+
+test('admin integrity migration makes teacher linking atomic and leave creation guarded', () => {
+  const migration = source('../supabase/migrations/202608020009_admin_operations_integrity.sql');
+  assert.match(migration, /create or replace function public\.link_teacher_profile/);
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(migration, /identity already has a different organization role/);
+  assert.match(migration, /create or replace function public\.submit_staff_leave_request/);
+  assert.match(migration, /join public\.cohort_students/);
+  assert.match(migration, /ls\.status = 'scheduled'/);
+  assert.match(migration, /revoke insert, update, delete on public\.leave_requests from authenticated/);
+});
+
+test('operator-facing statuses and setup validation use Traditional Chinese labels', async () => {
+  const { statusLabel } = await import('../../lib/operations/labels.ts');
+  assert.equal(statusLabel('attendance_deduction'), '出席扣堂');
+  assert.equal(statusLabel('available'), '可使用');
+  assert.equal(statusLabel('approved'), '已批准');
+  assert.doesNotMatch(source('app/admin/courses/[id]/actions.ts'), /Title 為必填|Sort order|Campus 不存在|Tag /);
+  assert.match(source('app/admin/exam-cohorts/cohort-create-form.tsx'), /班別狀態/);
 });

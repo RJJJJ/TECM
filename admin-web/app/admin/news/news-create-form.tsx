@@ -17,7 +17,7 @@ function CreateButton() {
       disabled={pending}
       className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
     >
-      {pending ? '新增中...' : '新增 News'}
+      {pending ? '新增中...' : '新增最新消息'}
     </button>
   );
 }
@@ -29,8 +29,8 @@ function clientValidate(formData: FormData) {
 
   if (!title) return '標題為必填。';
   if (!publishedAt) return '發布日期為必填。';
-  if (!sortOrderRaw) return 'Sort order 為必填。';
-  if (!Number.isFinite(Number(sortOrderRaw))) return 'Sort order 必須是數字。';
+  if (!sortOrderRaw) return '排序為必填。';
+  if (!Number.isFinite(Number(sortOrderRaw))) return '排序必須是數字。';
 
   return null;
 }
