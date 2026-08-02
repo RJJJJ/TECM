@@ -54,8 +54,8 @@ function clientValidate(formData: FormData) {
   const publishedAt = String(formData.get('published_at') ?? '').trim();
   const sortOrderRaw = String(formData.get('sort_order') ?? '').trim();
 
-  if (!title) return 'Title 為必填。';
-  if (!publishedAt) return 'Publish date 為必填。';
+  if (!title) return '標題為必填。';
+  if (!publishedAt) return '發布日期為必填。';
   if (!sortOrderRaw) return 'Sort order 為必填。';
   if (!Number.isFinite(Number(sortOrderRaw))) return 'Sort order 必須是數字。';
 
@@ -81,8 +81,8 @@ export default function NewsEditForm({ newsItem }: Props) {
   return (
     <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div>
-        <h3 className="text-lg font-semibold text-slate-900">編輯 News</h3>
-        <p className="mt-1 text-xs text-slate-500">可更新 news_items 全部主要欄位。</p>
+        <h3 className="text-lg font-semibold text-slate-900">編輯最新消息</h3>
+        <p className="mt-1 text-xs text-slate-500">可更新最新消息的主要資料。</p>
       </div>
 
       <form
@@ -102,7 +102,7 @@ export default function NewsEditForm({ newsItem }: Props) {
         <div className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-2">
           <div>
             <label htmlFor="category" className="mb-1 block text-sm font-medium text-slate-700">
-              Category
+              分類
             </label>
             <input
               id="category"
@@ -116,7 +116,7 @@ export default function NewsEditForm({ newsItem }: Props) {
 
           <div>
             <label htmlFor="sort_order" className="mb-1 block text-sm font-medium text-slate-700">
-              Sort Order
+              排序
             </label>
             <input
               id="sort_order"
@@ -130,7 +130,7 @@ export default function NewsEditForm({ newsItem }: Props) {
 
           <div className="md:col-span-2">
             <label htmlFor="title" className="mb-1 block text-sm font-medium text-slate-700">
-              Title
+              標題
             </label>
             <input
               id="title"
@@ -145,7 +145,7 @@ export default function NewsEditForm({ newsItem }: Props) {
 
           <div>
             <label htmlFor="published_at" className="mb-1 block text-sm font-medium text-slate-700">
-              Publish Date
+              發布日期
             </label>
             <input
               id="published_at"
@@ -159,7 +159,7 @@ export default function NewsEditForm({ newsItem }: Props) {
 
           <div>
             <label htmlFor="is_featured" className="mb-1 block text-sm font-medium text-slate-700">
-              Is Featured
+              置頂消息
             </label>
             <select
               id="is_featured"
@@ -167,14 +167,14 @@ export default function NewsEditForm({ newsItem }: Props) {
               defaultValue={newsItem.is_featured ? 'true' : 'false'}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
             >
-              <option value="false">No</option>
-              <option value="true">Yes</option>
+              <option value="false">否</option>
+              <option value="true">是</option>
             </select>
           </div>
 
           <div>
             <label htmlFor="is_active" className="mb-1 block text-sm font-medium text-slate-700">
-              Is Active
+              啟用狀態
             </label>
             <select
               id="is_active"
@@ -182,8 +182,8 @@ export default function NewsEditForm({ newsItem }: Props) {
               defaultValue={newsItem.is_active ? 'true' : 'false'}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
             >
-              <option value="true">Active</option>
-              <option value="false">Inactive</option>
+              <option value="true">啟用</option>
+              <option value="false">停用</option>
             </select>
           </div>
 
@@ -202,7 +202,7 @@ export default function NewsEditForm({ newsItem }: Props) {
 
           <div className="md:col-span-2">
             <label htmlFor="summary" className="mb-1 block text-sm font-medium text-slate-700">
-              Summary
+              摘要
             </label>
             <textarea
               id="summary"
@@ -215,7 +215,7 @@ export default function NewsEditForm({ newsItem }: Props) {
 
           <div className="md:col-span-2">
             <label htmlFor="content" className="mb-1 block text-sm font-medium text-slate-700">
-              Content
+              內容
             </label>
             <textarea
               id="content"

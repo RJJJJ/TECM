@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { getOperationsContext } from '@/lib/operations/context';
+import { ErrorState } from '@/components/operations-ui';
 import BookingUpdateForm from './booking-update-form';
 import FollowUpCopyButton from '../../follow-up-copy-button';
 import { dismissFollowUpTaskAction, markFollowUpTaskDoneAction } from './follow-up-actions';
@@ -104,15 +105,15 @@ function statusBadgeClass(status: string | null) {
 function statusLabel(status: string | null) {
   switch (status) {
     case 'pending':
-      return 'Pending';
+      return '待處理';
     case 'confirmed':
-      return 'Confirmed';
+      return '已確認';
     case 'completed':
-      return 'Completed';
+      return '已完成';
     case 'cancelled':
-      return 'Cancelled';
+      return '已取消';
     default:
-      return 'Unknown';
+      return '未知';
   }
 }
 
@@ -134,7 +135,7 @@ export default async function BookingDetailPage({
 }) {
   const { id } = await params;
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
-  const supabase = await createServerSupabaseClient();
+  const { supabase, organizationId } = await getOperationsContext();
   const backToListHref = resolveReturnTo(resolvedSearchParams?.returnTo);
 
   const { data, error } = await supabase
@@ -163,6 +164,7 @@ export default async function BookingDetailPage({
     `
     )
     .eq('id', id)
+    .eq('organization_id', organizationId)
     .maybeSingle();
 
   const { data: statusLogs, error: statusLogsError } = await supabase
@@ -177,6 +179,7 @@ export default async function BookingDetailPage({
       created_at
     `
     )
+    .eq('organization_id', organizationId)
     .eq('booking_id', id)
     .order('created_at', { ascending: false });
 
@@ -208,15 +211,12 @@ export default async function BookingDetailPage({
       updated_at
     `
     )
+    .eq('organization_id', organizationId)
     .eq('booking_id', id)
     .order('created_at', { ascending: false });
 
   if (error) {
-    return (
-      <section className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700">
-        讀取 booking 失敗：{error.message}
-      </section>
-    );
+    return <ErrorState error={error} fallback="讀取預約詳情失敗，請稍後再試。" />;
   }
 
   if (!data) {
@@ -231,8 +231,8 @@ export default async function BookingDetailPage({
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-semibold text-slate-900">Booking Detail</h2>
-          <p className="mt-1 text-sm text-slate-600">Booking ID: {booking.id}</p>
+          <h2 className="text-2xl font-semibold text-slate-900">預約詳情</h2>
+          <p className="mt-1 text-sm text-slate-600">查看預約資料及後續處理。</p>
         </div>
         <div className="flex items-center gap-2">
           <span className={statusBadgeClass(booking.status)}>{statusLabel(booking.status)}</span>
@@ -246,84 +246,62 @@ export default async function BookingDetailPage({
       </div>
 
       <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="text-lg font-semibold text-slate-900">Booking 資訊</h3>
+        <h3 className="text-lg font-semibold text-slate-900">預約資料</h3>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div>
-            <p className="text-xs text-slate-500">Parent Name</p>
+            <p className="text-xs text-slate-500">家長姓名</p>
             <p className="mt-1 text-sm text-slate-800">{displayValue(booking.parent_name)}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Phone</p>
+            <p className="text-xs text-slate-500">電話</p>
             <p className="mt-1 text-sm text-slate-800">{displayValue(booking.phone)}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Child Name</p>
+            <p className="text-xs text-slate-500">學生姓名</p>
             <p className="mt-1 text-sm text-slate-800">{displayValue(booking.child_name)}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Child Age</p>
+            <p className="text-xs text-slate-500">學生年齡</p>
             <p className="mt-1 text-sm text-slate-800">{displayValue(booking.child_age)}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">School</p>
+            <p className="text-xs text-slate-500">學校</p>
             <p className="mt-1 text-sm text-slate-800">{displayValue(booking.school_name)}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Course</p>
+            <p className="text-xs text-slate-500">課程</p>
             <p className="mt-1 text-sm text-slate-800">{displayValue(booking.course_title_snapshot)}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Campus</p>
+            <p className="text-xs text-slate-500">校區</p>
             <p className="mt-1 text-sm text-slate-800">{displayValue(booking.campuses?.name ?? null)}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Booking Date</p>
+            <p className="text-xs text-slate-500">預約日期</p>
             <p className="mt-1 text-sm text-slate-800">{formatDate(booking.booking_date)}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Time</p>
+            <p className="text-xs text-slate-500">時間</p>
             <p className="mt-1 text-sm text-slate-800">
               {formatTime(booking.start_time)} - {formatTime(booking.end_time)}
             </p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Created At</p>
+            <p className="text-xs text-slate-500">建立時間</p>
             <p className="mt-1 text-sm text-slate-800">{formatDateTime(booking.created_at)}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Updated At</p>
+            <p className="text-xs text-slate-500">更新時間</p>
             <p className="mt-1 text-sm text-slate-800">{formatDateTime(booking.updated_at)}</p>
           </div>
           <div className="md:col-span-2">
-            <p className="text-xs text-slate-500">Note</p>
+            <p className="text-xs text-slate-500">備註</p>
             <p className="mt-1 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-800">
               {displayValue(booking.note)}
             </p>
           </div>
         </div>
-      </section>
-
-      <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="text-lg font-semibold text-slate-900">Metadata</h3>
-        <dl className="grid grid-cols-1 gap-3 rounded-lg bg-slate-50 p-4 text-sm md:grid-cols-2">
-          <div>
-            <dt className="text-xs text-slate-500">parent_id</dt>
-            <dd className="mt-1 break-all font-mono text-xs text-slate-700">{displayValue(booking.parent_id)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-slate-500">child_id</dt>
-            <dd className="mt-1 break-all font-mono text-xs text-slate-700">{displayValue(booking.child_id)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-slate-500">course_id</dt>
-            <dd className="mt-1 break-all font-mono text-xs text-slate-700">{displayValue(booking.course_id)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-slate-500">campus_id</dt>
-            <dd className="mt-1 break-all font-mono text-xs text-slate-700">{displayValue(booking.campus_id)}</dd>
-          </div>
-        </dl>
       </section>
 
       <BookingUpdateForm
@@ -341,19 +319,19 @@ export default async function BookingDetailPage({
 
       <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div>
-          <h3 className="text-lg font-semibold text-slate-900">AI 跟進建議</h3>
+          <h3 className="text-lg font-semibold text-slate-900">智能跟進建議</h3>
           <p className="mt-1 text-sm text-slate-600">
-            供 staff 複製 WeChat / WhatsApp 話術後人工聯絡家長，不會自動發送。
+            職員核對建議內容後人工聯絡家長，不會自動發送。
           </p>
         </div>
 
         {followUpTasksError ? (
           <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-            讀取 AI 跟進建議失敗：{followUpTasksError.message}
+            <ErrorState error={followUpTasksError} fallback="讀取跟進建議失敗，請稍後再試。" />
           </div>
         ) : followUpTasks.length === 0 ? (
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-600">
-            目前未有 AI 跟進建議。之後可由 n8n / automation 在新 booking 建立後自動生成。
+            目前未有智能跟進建議。新的預約建立後會在需要時產生跟進事項。
           </div>
         ) : (
           <div className="space-y-3">
@@ -432,17 +410,17 @@ export default async function BookingDetailPage({
 
       <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div>
-          <h3 className="text-lg font-semibold text-slate-900">Status History</h3>
-          <p className="mt-1 text-sm text-slate-600">Booking status change logs (latest first)</p>
+          <h3 className="text-lg font-semibold text-slate-900">狀態紀錄</h3>
+          <p className="mt-1 text-sm text-slate-600">預約狀態變更紀錄（最新在前）</p>
         </div>
 
         {statusLogsError ? (
           <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-            讀取 status log 失敗：{statusLogsError.message}
+            <ErrorState error={statusLogsError} fallback="讀取狀態紀錄失敗，請稍後再試。" />
           </div>
         ) : bookingStatusLogs.length === 0 ? (
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            目前沒有 status log 紀錄。
+            目前沒有狀態紀錄。
           </div>
         ) : (
           <div className="space-y-3">
@@ -455,24 +433,24 @@ export default async function BookingDetailPage({
                 </div>
                 <dl className="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
                   <div>
-                    <dt className="text-xs text-slate-500">Changed At</dt>
+                    <dt className="text-xs text-slate-500">變更時間</dt>
                     <dd className="mt-1 text-slate-800">{formatDateTime(log.created_at)}</dd>
                   </div>
                   <div>
-                    <dt className="text-xs text-slate-500">Changed By</dt>
-                    <dd className="mt-1 break-all text-slate-800">{log.changed_by ?? 'System / Unknown'}</dd>
+                    <dt className="text-xs text-slate-500">變更者</dt>
+                    <dd className="mt-1 break-all text-slate-800">{log.changed_by ?? '系統'}</dd>
                   </div>
                   <div>
-                    <dt className="text-xs text-slate-500">Old Status</dt>
+                    <dt className="text-xs text-slate-500">原狀態</dt>
                     <dd className="mt-1 text-slate-800">{statusLabel(log.old_status)}</dd>
                   </div>
                   <div>
-                    <dt className="text-xs text-slate-500">New Status</dt>
+                    <dt className="text-xs text-slate-500">新狀態</dt>
                     <dd className="mt-1 text-slate-800">{statusLabel(log.new_status)}</dd>
                   </div>
                   {log.note ? (
                     <div className="md:col-span-2">
-                      <dt className="text-xs text-slate-500">Note</dt>
+                      <dt className="text-xs text-slate-500">備註</dt>
                       <dd className="mt-1 whitespace-pre-wrap rounded-md bg-white px-3 py-2 text-slate-800">
                         {log.note}
                       </dd>

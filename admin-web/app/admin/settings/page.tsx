@@ -1,2 +1,38 @@
-import { getOperationsContext } from '@/lib/operations/context'; import { DataTable, EmptyState, ErrorState, PageHeader, Panel } from '@/components/operations-ui';
-export default async function SettingsPage(){const {supabase,organizationId,organizationName,role}=await getOperationsContext();const [members,campuses]=await Promise.all([supabase.from('organization_members').select('id,role,status,user_id').eq('organization_id',organizationId).order('created_at'),supabase.from('campuses').select('id,name,is_active').eq('organization_id',organizationId).order('name')]);return <><PageHeader title="設定" description="機構、校區及團隊權限設定。敏感操作只應由管理員執行。"/><div className="grid gap-5 xl:grid-cols-2"><Panel title="機構資料"><dl className="grid gap-3 text-sm"><div><dt className="text-slate-500">機構</dt><dd className="font-semibold">{organizationName||organizationId}</dd></div><div><dt className="text-slate-500">你的角色</dt><dd className="font-semibold">{role}</dd></div><div><dt className="text-slate-500">時區</dt><dd>Asia/Macau</dd></div></dl></Panel><Panel title="校區">{campuses.error?<ErrorState message={campuses.error.message}/>:!campuses.data?.length?<EmptyState>尚未設定校區。</EmptyState>:<DataTable headers={['校區','狀態']}>{campuses.data.map(x=><tr key={x.id}><td className="px-4 py-3 font-medium">{x.name}</td><td className="px-4 py-3">{x.is_active?'啟用':'停用'}</td></tr>)}</DataTable>}</Panel></div><div className="mt-5"><Panel title="團隊成員">{members.error?<ErrorState message={members.error.message}/>:!members.data?.length?<EmptyState>尚未有團隊成員。</EmptyState>:<DataTable headers={['使用者 ID','角色','狀態']}>{members.data.map(x=><tr key={x.id}><td className="px-4 py-3 font-mono text-xs">{x.user_id}</td><td className="px-4 py-3">{x.role}</td><td className="px-4 py-3">{x.status==='active'?'啟用':'停用'}</td></tr>)}</DataTable>}</Panel></div></>}
+import { getOperationsContext } from '@/lib/operations/context';
+import { DataTable, EmptyState, ErrorState, PageHeader, Panel } from '@/components/operations-ui';
+import { roleLabel, statusLabel } from '@/lib/operations/labels';
+import CampusCreateForm from './campus-create-form';
+
+export default async function SettingsPage() {
+  const { supabase, organizationId, organizationName, role } = await getOperationsContext();
+  const [members, campuses] = await Promise.all([
+    supabase.from('organization_members').select('id,role,status,user_id').eq('organization_id', organizationId).order('created_at'),
+    supabase.from('campuses').select('id,name,address,is_active').eq('organization_id', organizationId).order('name')
+  ]);
+
+  return <>
+    <PageHeader title="設定" description="機構、校區及團隊權限設定。敏感操作只應由管理員執行。" />
+    <div className="grid gap-5 xl:grid-cols-2">
+      <Panel title="機構資料">
+        <dl className="grid gap-3 text-sm">
+          <div><dt className="text-slate-500">機構</dt><dd className="font-semibold">{organizationName || organizationId}</dd></div>
+          <div><dt className="text-slate-500">你的角色</dt><dd className="font-semibold">{roleLabel(role)}</dd></div>
+          <div><dt className="text-slate-500">時區</dt><dd>Asia/Macau</dd></div>
+        </dl>
+      </Panel>
+      <div id="campus-settings"><Panel title="校區">
+        {['admin', 'staff'].includes(role) ? <CampusCreateForm /> : null}
+        <div className="mt-4">
+          {campuses.error ? <ErrorState error={campuses.error} fallback="讀取校區失敗，請稍後再試。" /> : !campuses.data?.length ? <EmptyState>尚未設定校區。</EmptyState> : <DataTable headers={['校區', '地址', '狀態']}>
+            {campuses.data.map((campus) => <tr key={campus.id}><td className="px-4 py-3 font-medium">{campus.name}</td><td className="px-4 py-3">{campus.address || '—'}</td><td className="px-4 py-3">{statusLabel(campus.is_active ? 'active' : 'inactive')}</td></tr>)}
+          </DataTable>}
+        </div>
+      </Panel></div>
+    </div>
+    <div className="mt-5"><Panel title="團隊成員">
+      {members.error ? <ErrorState error={members.error} fallback="讀取團隊成員失敗，請稍後再試。" /> : !members.data?.length ? <EmptyState>尚未有團隊成員。</EmptyState> : <DataTable headers={['使用者 ID', '角色', '狀態']}>
+        {members.data.map((member) => <tr key={member.id}><td className="px-4 py-3 font-mono text-xs">{member.user_id}</td><td className="px-4 py-3">{roleLabel(member.role)}</td><td className="px-4 py-3">{statusLabel(member.status)}</td></tr>)}
+      </DataTable>}
+    </Panel></div>
+  </>;
+}

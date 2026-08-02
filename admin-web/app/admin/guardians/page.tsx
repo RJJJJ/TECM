@@ -1,12 +1,13 @@
 import { Badge, DataTable, EmptyState, ErrorState, PageHeader } from '@/components/operations-ui';
 import { getOperationsContext } from '@/lib/operations/context';
+import { userFacingError } from '@/lib/operations/errors';
 import { disableGuardianAction, inviteGuardianAction } from './actions';
 
 const sevenDays = 7 * 86400000;
 
 export default async function GuardiansPage() {
   const { supabase, organizationId, role } = await getOperationsContext();
-  if (!['admin', 'staff'].includes(role)) throw new Error('未獲授權管理家長帳戶。');
+  if (!['admin', 'staff'].includes(role)) throw userFacingError('未獲授權管理家長帳戶。');
   const [profiles, invitations] = await Promise.all([
     supabase.from('parent_profiles').select('id,full_name,phone,email,user_id,account_status,created_at').eq('organization_id', organizationId).order('full_name'),
     supabase.from('parent_account_invitations').select('id,parent_profile_id,status,sent_at,created_at').eq('organization_id', organizationId).order('created_at', { ascending: false })
@@ -16,7 +17,7 @@ export default async function GuardiansPage() {
 
   return <>
     <PageHeader title="家長帳戶" description="邀請家長使用 App、重發過期邀請或停用帳戶。家長不會加入職員權限表。" />
-    {profiles.error ? <ErrorState message={profiles.error.message} /> : !profiles.data?.length ? <EmptyState>尚未有家長資料。</EmptyState> : <DataTable headers={['家長', '聯絡', '帳戶狀態', '邀請／管理']}>
+    {profiles.error ? <ErrorState error={profiles.error} fallback="讀取家長資料失敗，請稍後再試。" /> : invitations.error ? <ErrorState error={invitations.error} fallback="讀取家長邀請狀態失敗，請稍後再試。" /> : !profiles.data?.length ? <EmptyState>尚未有家長資料。</EmptyState> : <DataTable headers={['家長', '聯絡', '帳戶狀態', '邀請／管理']}>
       {profiles.data.map((profile) => {
         const invitation = latest.get(profile.id);
         const expired = invitation?.status === 'expired' || (['pending', 'sent'].includes(invitation?.status ?? '') && Date.now() - new Date(invitation?.sent_at ?? invitation?.created_at ?? 0).getTime() > sevenDays);

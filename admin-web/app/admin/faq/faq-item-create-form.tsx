@@ -37,9 +37,9 @@ function clientValidate(formData: FormData) {
   const answer = String(formData.get('answer') ?? '').trim();
   const sortOrderRaw = String(formData.get('sort_order') ?? '').trim();
 
-  if (!topicId) return 'Topic 為必填。';
-  if (!question) return 'Question 為必填。';
-  if (!answer) return 'Answer 為必填。';
+  if (!topicId) return '分類為必填。';
+  if (!question) return '問題為必填。';
+  if (!answer) return '答案為必填。';
 
   const sortOrder = Number(sortOrderRaw || '0');
   if (!Number.isFinite(sortOrder)) return 'Sort order 必須是數字。';
@@ -80,7 +80,7 @@ export default function FaqItemCreateForm({ topics }: Props) {
       <div className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-2">
         <div>
           <label htmlFor="item_topic_id" className="mb-1 block text-sm font-medium text-slate-700">
-            Topic
+            分類
           </label>
           <select
             id="item_topic_id"
@@ -90,7 +90,7 @@ export default function FaqItemCreateForm({ topics }: Props) {
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
           >
             <option value="" disabled>
-              請選擇 Topic
+              請選擇分類
             </option>
             {topics.map((topic) => (
               <option key={topic.id} value={topic.id}>
@@ -102,7 +102,7 @@ export default function FaqItemCreateForm({ topics }: Props) {
 
         <div>
           <label htmlFor="item_sort_order" className="mb-1 block text-sm font-medium text-slate-700">
-            Sort Order
+            排序
           </label>
           <input
             id="item_sort_order"
@@ -115,7 +115,7 @@ export default function FaqItemCreateForm({ topics }: Props) {
 
         <div className="md:col-span-2">
           <label htmlFor="item_question" className="mb-1 block text-sm font-medium text-slate-700">
-            Question
+            問題
           </label>
           <input
             id="item_question"
@@ -130,7 +130,7 @@ export default function FaqItemCreateForm({ topics }: Props) {
 
         <div className="md:col-span-2">
           <label htmlFor="item_answer" className="mb-1 block text-sm font-medium text-slate-700">
-            Answer
+            答案
           </label>
           <textarea
             id="item_answer"
@@ -144,7 +144,7 @@ export default function FaqItemCreateForm({ topics }: Props) {
 
         <div>
           <label htmlFor="item_is_popular" className="mb-1 block text-sm font-medium text-slate-700">
-            Is Popular
+            熱門問題
           </label>
           <select
             id="item_is_popular"
@@ -152,14 +152,14 @@ export default function FaqItemCreateForm({ topics }: Props) {
             defaultValue="false"
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
           >
-            <option value="true">true</option>
-            <option value="false">false</option>
+            <option value="true">是</option>
+            <option value="false">否</option>
           </select>
         </div>
 
         <div>
           <label htmlFor="item_is_active" className="mb-1 block text-sm font-medium text-slate-700">
-            Is Active
+            啟用狀態
           </label>
           <select
             id="item_is_active"
@@ -167,8 +167,8 @@ export default function FaqItemCreateForm({ topics }: Props) {
             defaultValue="true"
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
           >
-            <option value="true">true</option>
-            <option value="false">false</option>
+            <option value="true">是</option>
+            <option value="false">否</option>
           </select>
         </div>
       </div>

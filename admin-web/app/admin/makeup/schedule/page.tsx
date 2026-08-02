@@ -1,83 +1,13 @@
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { getOperationsContext, formatMacauDateTime } from '@/lib/operations/context';
+import { ErrorState, EmptyState, PageHeader, Badge, DataTable } from '@/components/operations-ui';
 
-type MakeupSession = {
-  id: string;
-  scheduled_at: string;
-  completed_at: string | null;
-  status: string;
-  students: { display_name: string | null } | null;
-  teacher_profiles: { display_name: string | null } | null;
-  makeup_tasks: {
-    exam_cohorts: { name: string | null; subject: string | null; level: string | null } | null;
-    lesson_plans: { sequence_no: number | null; title: string | null } | null;
-  } | null;
-};
+type MakeupSession = { id: string; scheduled_at: string; completed_at: string | null; status: string; students: { display_name: string | null } | null; teacher_profiles: { display_name: string | null } | null; makeup_tasks: { exam_cohorts: { name: string | null; subject: string | null; level: string | null } | null; lesson_plans: { sequence_no: number | null; title: string | null } | null } | null };
 
 export default async function MakeupSchedulePage() {
-  const supabase = await createServerSupabaseClient();
-  const { data, error } = await supabase
-    .from('makeup_sessions')
-    .select(`
-      id,
-      scheduled_at,
-      completed_at,
-      status,
-      students(display_name),
-      teacher_profiles(display_name),
-      makeup_tasks(
-        exam_cohorts(name,subject,level),
-        lesson_plans(sequence_no,title)
-      )
-    `)
-    .order('scheduled_at', { ascending: true });
-
+  const { supabase, organizationId } = await getOperationsContext();
+  const { data, error } = await supabase.from('makeup_sessions').select('id,scheduled_at,completed_at,status,students(display_name),teacher_profiles(display_name),makeup_tasks(exam_cohorts(name,subject,level),lesson_plans(sequence_no,title))').eq('organization_id', organizationId).order('scheduled_at', { ascending: true });
   const sessions = (data ?? []) as unknown as MakeupSession[];
-
-  return (
-    <section className="space-y-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">MakeupSchedulePage</p>
-        <h2 className="text-2xl font-semibold text-slate-900">Makeup schedule</h2>
-        <p className="mt-1 text-sm text-slate-600">Exam-week makeup sessions, especially Monday to Friday before the exam.</p>
-      </div>
-
-      {error ? (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error.message}</div>
-      ) : sessions.length === 0 ? (
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-600">
-          No makeup sessions scheduled.
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
-              <tr>
-                <th className="px-4 py-3">Time</th>
-                <th className="px-4 py-3">Student</th>
-                <th className="px-4 py-3">Cohort / Lesson</th>
-                <th className="px-4 py-3">Teacher</th>
-                <th className="px-4 py-3">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {sessions.map((session) => (
-                <tr key={session.id}>
-                  <td className="px-4 py-3">{new Date(session.scheduled_at).toLocaleString('zh-Hant-TW')}</td>
-                  <td className="px-4 py-3">{session.students?.display_name ?? '-'}</td>
-                  <td className="px-4 py-3">
-                    <p>{session.makeup_tasks?.exam_cohorts?.name ?? '-'}</p>
-                    <p className="text-xs text-slate-500">
-                      Lesson {session.makeup_tasks?.lesson_plans?.sequence_no ?? '-'} · {session.makeup_tasks?.lesson_plans?.title ?? '-'}
-                    </p>
-                  </td>
-                  <td className="px-4 py-3">{session.teacher_profiles?.display_name ?? '-'}</td>
-                  <td className="px-4 py-3">{session.status}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
+  return <section className="space-y-5"><PageHeader title="補課時間表" description="查看已安排的補課時段及負責導師。" />{error ? <ErrorState error={error} fallback="讀取補課時間表失敗，請稍後再試。" /> : sessions.length === 0 ? <EmptyState>尚未安排補課。</EmptyState> : <DataTable headers={['時間', '學生', '班別／課堂', '導師', '狀態']}>
+    {sessions.map(session => <tr key={session.id}><td className="px-4 py-3">{formatMacauDateTime(session.scheduled_at)}</td><td className="px-4 py-3">{session.students?.display_name ?? '—'}</td><td className="px-4 py-3"><p>{session.makeup_tasks?.exam_cohorts?.name ?? '—'}</p><p className="text-xs text-slate-500">第 {session.makeup_tasks?.lesson_plans?.sequence_no ?? '—'} 堂 · {session.makeup_tasks?.lesson_plans?.title ?? '—'}</p></td><td className="px-4 py-3">{session.teacher_profiles?.display_name ?? '待分配'}</td><td className="px-4 py-3"><Badge tone={session.status === 'completed' ? 'green' : session.status === 'cancelled' ? 'rose' : 'blue'}>{session.status}</Badge></td></tr>)}
+  </DataTable>}</section>;
 }

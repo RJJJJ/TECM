@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { getOperationsContext } from '@/lib/operations/context';
+import { ErrorState } from '@/components/operations-ui';
 import FollowUpCopyButton from '../follow-up-copy-button';
 import { dismissFollowUpTaskAction, markFollowUpTaskDoneAction } from './actions';
 import {
@@ -209,7 +210,7 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">跟進任務</h2>
           <p className="mt-1 max-w-3xl text-sm text-slate-600">
-            集中管理招生、低堂數、欠費及補課跟進；職員核對繁體中文草稿後，才人工複製到 WeChat / WhatsApp。
+            集中管理招生、低堂數、欠費及補課跟進；職員核對繁體中文草稿後，才人工聯絡家長。
           </p>
         </div>
         <p className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
@@ -228,30 +229,30 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
 
       <form method="get" className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-6">
         <div>
-          <label htmlFor="status" className="mb-1 block text-xs font-medium text-slate-600">Status</label>
+          <label htmlFor="status" className="mb-1 block text-xs font-medium text-slate-600">狀態</label>
           <select id="status" name="status" defaultValue={selectedStatus} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-slate-300 focus:ring">
             {STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </div>
         <div>
-          <label htmlFor="priority" className="mb-1 block text-xs font-medium text-slate-600">Priority</label>
+          <label htmlFor="priority" className="mb-1 block text-xs font-medium text-slate-600">優先級</label>
           <select id="priority" name="priority" defaultValue={selectedPriority} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-slate-300 focus:ring">
             {PRIORITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </div>
         <div>
-          <label htmlFor="channel" className="mb-1 block text-xs font-medium text-slate-600">Channel</label>
+          <label htmlFor="channel" className="mb-1 block text-xs font-medium text-slate-600">聯絡方式</label>
           <select id="channel" name="channel" defaultValue={selectedChannel} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-slate-300 focus:ring">
             {CHANNEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </div>
         <div>
-          <label htmlFor="date" className="mb-1 block text-xs font-medium text-slate-600">Booking Date</label>
+          <label htmlFor="date" className="mb-1 block text-xs font-medium text-slate-600">預約日期</label>
           <input id="date" name="date" type="date" defaultValue={selectedDate} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-slate-300 focus:ring" />
         </div>
         <div className="md:col-span-2">
-          <label htmlFor="keyword" className="mb-1 block text-xs font-medium text-slate-600">Keyword</label>
-          <input id="keyword" name="keyword" type="search" placeholder="parent / child / phone / course" defaultValue={selectedKeyword} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-slate-300 focus:ring" />
+          <label htmlFor="keyword" className="mb-1 block text-xs font-medium text-slate-600">關鍵字</label>
+          <input id="keyword" name="keyword" type="search" placeholder="家長／學生／電話／課程" defaultValue={selectedKeyword} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-slate-300 focus:ring" />
         </div>
         <div className="flex items-end gap-2 md:col-span-6">
           <button type="submit" className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700">篩選</button>
@@ -262,12 +263,12 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
       {error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-4 text-sm text-rose-700">
           <p className="font-semibold">讀取跟進任務失敗</p>
-          <p className="mt-1">{error.message}</p>
+          <ErrorState error={error} fallback="讀取跟進任務失敗，請稍後再試。" />
         </div>
       ) : tasks.length === 0 ? (
         <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-10 text-center">
           <p className="text-sm font-medium text-slate-700">目前沒有符合條件的跟進任務</p>
-          <p className="mt-1 text-xs text-slate-500">新 booking 可由 n8n / automation 生成 follow-up task。</p>
+          <p className="mt-1 text-xs text-slate-500">新的預約建立後會在需要時產生跟進事項。</p>
         </div>
       ) : (
         <div className="space-y-3">

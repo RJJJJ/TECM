@@ -30,7 +30,7 @@ function AddTagButton() {
       disabled={pending}
       className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
     >
-      {pending ? '新增中...' : '新增 Tag'}
+      {pending ? '新增中...' : '新增標籤'}
     </button>
   );
 }
@@ -57,8 +57,8 @@ export default function CourseTagsManager({ courseId, tags }: Props) {
   return (
     <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div>
-        <h3 className="text-lg font-semibold text-slate-900">Course Tags</h3>
-        <p className="mt-1 text-xs text-slate-500">查看 / 新增 / 刪除 course_tags。</p>
+        <h3 className="text-lg font-semibold text-slate-900">課程標籤</h3>
+        <p className="mt-1 text-xs text-slate-500">查看、新增或刪除課程標籤。</p>
       </div>
 
       <form

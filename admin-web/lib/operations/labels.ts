@@ -1,0 +1,49 @@
+const LABELS: Record<string, string> = {
+  active: '使用中',
+  inactive: '已停用',
+  draft: '草稿',
+  scheduled: '已排課',
+  completed: '已完成',
+  cancelled: '已取消',
+  present: '出席',
+  absent: '缺席',
+  excused: '已請假',
+  makeup_completed: '已完成補課',
+  approved: '已批准',
+  rejected: '已拒絕',
+  pending: '待處理',
+  confirmed: '已確認',
+  open: '待處理',
+  done: '已完成',
+  dismissed: '已忽略',
+  recommended: '建議安排',
+  withdrawn: '已退出',
+  available: '可使用',
+  reserved: '已預留',
+  consumed: '已使用',
+  expired: '已過期',
+  received: '已收款',
+  paid: '已付款',
+  partially_paid: '部分付款',
+  void: '已作廢',
+  cash: '現金',
+  card: '信用卡',
+  bank_transfer: '銀行轉帳',
+  digital_wallet: '電子錢包',
+  other: '其他',
+  normal: '一般',
+  high: '高',
+  urgent: '緊急',
+  teacher: '導師',
+  staff: '職員',
+  admin: '管理員'
+};
+
+export function statusLabel(value: string | null | undefined) {
+  if (!value) return '—';
+  return LABELS[value] ?? value;
+}
+
+export function roleLabel(value: string | null | undefined) {
+  return statusLabel(value);
+}

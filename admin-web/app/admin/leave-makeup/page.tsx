@@ -25,7 +25,7 @@ export default async function LeaveMakeupPage() {
     </div>
     <div className="mt-5 grid gap-5 xl:grid-cols-2">
       <Panel title="請假紀錄">
-        {leaves.error ? <ErrorState message={leaves.error.message}/> : !leaves.data?.length ? <EmptyState>尚未有請假申請。</EmptyState> :
+        {leaves.error ? <ErrorState error={leaves.error} fallback="讀取請假申請失敗，請稍後再試。"/> : !leaves.data?.length ? <EmptyState>尚未有請假申請。</EmptyState> :
           <DataTable headers={['學生', '課堂', '原因', '狀態／操作']}>{leaves.data.map((row: any) => <tr key={row.id}>
             <td className="px-4 py-3">{row.students?.display_name || '—'}</td>
             <td className="px-4 py-3">{formatMacauDateTime(row.lesson_sessions?.starts_at)}</td>
@@ -40,7 +40,7 @@ export default async function LeaveMakeupPage() {
           </tr>)}</DataTable>}
       </Panel>
       <Panel title="補課安排">
-        {makeups.error ? <ErrorState message={makeups.error.message}/> : !makeups.data?.length ? <EmptyState>尚未有補課安排。</EmptyState> :
+        {makeups.error ? <ErrorState error={makeups.error} fallback="讀取補課安排失敗，請稍後再試。"/> : !makeups.data?.length ? <EmptyState>尚未有補課安排。</EmptyState> :
           <DataTable headers={['學生', '補課時間', '導師', '狀態']}>{makeups.data.map((row: any) => <tr key={row.id}>
             <td className="px-4 py-3">{row.students?.display_name || '—'}</td>
             <td className="px-4 py-3">{formatMacauDateTime(row.scheduled_at)}</td>
@@ -50,7 +50,7 @@ export default async function LeaveMakeupPage() {
       </Panel>
     </div>
     <div className="mt-5"><Panel title="待人工發送家長通知">
-      {messages.error ? <ErrorState message={messages.error.message}/> : !messages.data?.length ? <EmptyState>暫時沒有待發送的請假／補課通知。</EmptyState> :
+      {messages.error ? <ErrorState error={messages.error} fallback="讀取家長通知草稿失敗，請稍後再試。"/> : !messages.data?.length ? <EmptyState>暫時沒有待發送的請假／補課通知。</EmptyState> :
         <div className="grid gap-3">{messages.data.map((row: any) => <article key={row.id} className="rounded-xl border bg-white p-4">
           <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-semibold">{row.students?.display_name || '學生'} · {row.template_key === 'leave_approved' ? '請假批核' : '補課安排'}</p><FollowUpCopyButton message={row.body || ''}/></div>
           <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{row.body}</p>

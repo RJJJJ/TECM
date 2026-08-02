@@ -19,7 +19,7 @@ export default async function SessionsPage() {
 
   return <>
     <PageHeader title="今日課堂" description={`澳門時間 ${today} 的課堂安排與點名進度。老師只會看到自己負責的課堂。`}/>
-    {error ? <ErrorState message={error.message}/> : !data?.length ? <EmptyState>今天沒有已安排課堂。</EmptyState> :
+    {error ? <ErrorState error={error} fallback="讀取課堂安排失敗，請稍後再試。"/> : !data?.length ? <EmptyState>今天沒有已安排課堂。</EmptyState> :
       <DataTable headers={['時間', '班別', '導師', '點名人數', '狀態', '操作']}>{data.map((row: any) => <tr key={row.id}>
         <td className="whitespace-nowrap px-4 py-3">{formatMacauDateTime(row.starts_at)}</td>
         <td className="px-4 py-3 font-medium">{row.exam_cohorts?.name || '—'}</td>

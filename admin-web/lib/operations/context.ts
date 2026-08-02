@@ -1,14 +1,24 @@
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { verifyActiveStaffAccess } from '@/lib/auth/staff-access';
+import { userFacingError } from './errors';
 
 export async function getOperationsContext() {
   const supabase = await createServerSupabaseClient();
   const access = await verifyActiveStaffAccess(supabase);
-  if (!access.allowed || !access.user) throw new Error('未獲授權使用營運後台。');
-  const { data, error } = await supabase.from('organization_members').select('organization_id,role,organizations(name)').eq('user_id', access.user.id).eq('status', 'active').limit(1).maybeSingle();
-  if (error || !data) throw new Error(error?.message || '找不到所屬機構。');
-  const organization = data.organizations as unknown as { name?: string } | null;
-  return { supabase, user: access.user, organizationId: String(data.organization_id), role: String(data.role), organizationName: organization?.name ?? null };
+  if (!access.allowed || !access.user) throw userFacingError('未獲授權使用營運後台，請重新登入。');
+  if (access.memberships.length === 0) throw userFacingError('找不到有效的機構授權，請聯絡系統管理員。');
+  if (access.memberships.length > 1) {
+    throw userFacingError('你的帳戶屬於多個機構，目前後台未支援自動選擇，請聯絡系統管理員設定機構後再試。');
+  }
+
+  const membership = access.memberships[0];
+  return {
+    supabase,
+    user: access.user,
+    organizationId: membership.organization_id,
+    role: membership.role,
+    organizationName: membership.organizations?.name ?? null
+  };
 }
 
 export function formatMacauDateTime(value?: string | null) {

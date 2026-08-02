@@ -34,7 +34,7 @@ function SubmitButton() {
       disabled={pending}
       type="submit"
     >
-      {pending ? 'Creating...' : 'Create session'}
+      {pending ? '建立中…' : '建立未來課堂'}
     </button>
   );
 }
@@ -56,19 +56,19 @@ export function LessonSessionCreateForm({ cohortId, lessons, teachers }: LessonS
         </p>
       ) : null}
 
-      <select name="lesson_plan_id" className="rounded-lg border px-3 py-2 text-sm md:col-span-2" required defaultValue="">
+      <select aria-label="教案" name="lesson_plan_id" className="rounded-lg border px-3 py-2 text-sm md:col-span-2" required defaultValue="">
         <option value="" disabled>
-          Select lesson
+          選擇教案
         </option>
         {lessons.map((lesson) => (
           <option key={lesson.id} value={lesson.id}>
-            Lesson {lesson.sequence_no}: {lesson.title}
+            第 {lesson.sequence_no} 堂：{lesson.title}
           </option>
         ))}
       </select>
-      <select name="teacher_id" className="rounded-lg border px-3 py-2 text-sm" required defaultValue="">
+      <select aria-label="導師" name="teacher_id" className="rounded-lg border px-3 py-2 text-sm" required defaultValue="">
         <option value="" disabled>
-          Select teacher
+          選擇導師
         </option>
         {teachers.map((teacher) => (
           <option key={teacher.id} value={teacher.id}>
@@ -76,12 +76,12 @@ export function LessonSessionCreateForm({ cohortId, lessons, teachers }: LessonS
           </option>
         ))}
       </select>
-      <input name="starts_at" type="datetime-local" className="rounded-lg border px-3 py-2 text-sm" required />
-      <input name="ends_at" type="datetime-local" className="rounded-lg border px-3 py-2 text-sm" required />
-      <select name="status" className="rounded-lg border px-3 py-2 text-sm" defaultValue="scheduled">
-        <option value="scheduled">Scheduled</option>
-        <option value="completed">Completed</option>
-        <option value="cancelled">Cancelled</option>
+      <input aria-label="開始時間" name="starts_at" type="datetime-local" className="rounded-lg border px-3 py-2 text-sm" required />
+      <input aria-label="結束時間" name="ends_at" type="datetime-local" className="rounded-lg border px-3 py-2 text-sm" required />
+      <select aria-label="課堂狀態" name="status" className="rounded-lg border px-3 py-2 text-sm" defaultValue="scheduled">
+        <option value="scheduled">已排課</option>
+        <option value="completed">已完成</option>
+        <option value="cancelled">已取消</option>
       </select>
       <SubmitButton />
     </form>
