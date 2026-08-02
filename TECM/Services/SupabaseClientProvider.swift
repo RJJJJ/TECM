@@ -318,7 +318,7 @@ enum SupabaseClientProvider {
         let authStorageKey = "sb-\(projectReference)-auth-token"
         let lifecycle = SupabaseClientLifecycle(
             configuration: configuration,
-            sessionStorage: AuthClient.Configuration.defaultLocalStorage,
+            sessionStorage: AuthKeychainLocalStorage(),
             logoutSafetyFenceStorage: UserDefaultsLogoutSafetyFenceStorage(defaults: .standard),
             storageKey: authStorageKey,
             projectKey: String(projectReference)
