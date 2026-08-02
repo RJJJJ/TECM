@@ -542,12 +542,18 @@ final class AuthSessionPersistence: AuthLocalStorage, @unchecked Sendable {
     }
 }
 
-private enum AuthSessionPersistenceError: Error {
+enum AuthSessionPersistenceError: LocalizedError, Equatable {
     case invalidSessionLineage
     case invalidationFailed
     case activationFailed
     case invalidProjectKey
     case staleGeneration
+
+    static let userFacingMessage = "無法安全保存登入狀態，請重新登入。"
+
+    var errorDescription: String? {
+        Self.userFacingMessage
+    }
 }
 
 enum RemoteAuthSignOutError: LocalizedError {

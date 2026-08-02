@@ -1,5 +1,6 @@
 import Auth
 import Foundation
+import Security
 import Supabase
 import XCTest
 @testable import TECM
@@ -915,6 +916,48 @@ final class AuthViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.currentCapabilities, .guest)
     }
 
+    @MainActor
+    func testSignInPersistenceFailureShowsGenericMessage() async {
+        let authService = MockAuthService()
+        authService.signInError = AuthSessionPersistenceError.activationFailed
+        let viewModel = AuthViewModel(
+            authService: authService,
+            userRoleService: MockUserRoleService(),
+            automaticallyRestoreSession: false
+        )
+
+        await viewModel.signIn(email: "test@example.invalid", password: "unused")
+
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            AuthSessionPersistenceError.userFacingMessage
+        )
+        XCTAssertFalse(viewModel.errorMessage?.contains("AuthSessionPersistenceError") ?? true)
+        XCTAssertFalse(viewModel.errorMessage?.contains("activationFailed") ?? true)
+    }
+
+    @MainActor
+    func testCallbackPersistenceFailureShowsGenericMessage() async {
+        let authService = MockAuthService()
+        authService.callbackError = AuthSessionPersistenceError.activationFailed
+        let viewModel = AuthViewModel(
+            authService: authService,
+            userRoleService: MockUserRoleService(),
+            automaticallyRestoreSession: false
+        )
+
+        await viewModel.handleAuthCallback(
+            url: URL(string: "tecm://auth/callback?code=synthetic")!
+        )
+
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            AuthSessionPersistenceError.userFacingMessage
+        )
+        XCTAssertFalse(viewModel.errorMessage?.contains("AuthSessionPersistenceError") ?? true)
+        XCTAssertFalse(viewModel.errorMessage?.contains("activationFailed") ?? true)
+    }
+
     private func makeSignedInViewModel(
         authService: MockAuthService,
         deadline: ManualAuthSignOutDeadline? = nil
@@ -937,8 +980,257 @@ final class AuthViewModelTests: XCTestCase {
     }
 }
 
+final class AuthKeychainLocalStorageTests: XCTestCase {
+    func testFreshActivationSucceedsWhenLegacyFenceItemsAreMissing() throws {
+        let operations = StrictAuthKeychainOperations()
+        let storage = AuthKeychainLocalStorage(operations: operations)
+        let storageKey = "strict-first-login"
+        let persistence = AuthSessionPersistence(
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: InMemoryLogoutSafetyFenceStorage(),
+            storageKey: storageKey,
+            projectKey: storageKey
+        )
+        let session = makeSession(
+            user: makeUser(),
+            sessionID: "strict-first-login",
+            refreshToken: "synthetic-refresh"
+        )
+
+        XCTAssertNoThrow(try persistence.activate(session))
+        XCTAssertEqual(try persistence.accessToken(), session.accessToken)
+    }
+
+    func testLegacyFenceIsRemovedBeforeActivationBecomesRestorable() throws {
+        let operations = StrictAuthKeychainOperations()
+        let storage = AuthKeychainLocalStorage(operations: operations)
+        let storageKey = "strict-legacy-fence"
+        let legacyFenceKey = "\(storageKey).logout-fence-v1"
+        let safetyFence = InMemoryLogoutSafetyFenceStorage()
+        try storage.store(key: legacyFenceKey, value: Data([1]))
+        let persistence = AuthSessionPersistence(
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFence,
+            storageKey: storageKey,
+            projectKey: storageKey
+        )
+        let session = makeSession(
+            user: makeUser(),
+            sessionID: "strict-legacy-fence",
+            refreshToken: "synthetic-refresh"
+        )
+
+        try persistence.activate(session)
+
+        XCTAssertNil(try storage.retrieve(key: legacyFenceKey))
+        XCTAssertEqual(try persistence.accessToken(), session.accessToken)
+        XCTAssertEqual(try safetyFence.read(projectKey: storageKey), .allowsRestore)
+    }
+
+    func testNonMissingKeychainErrorKeepsActivationFailClosed() throws {
+        let operations = StrictAuthKeychainOperations()
+        operations.overrideStatus(errSecInteractionNotAllowed, for: .remove)
+        let storage = AuthKeychainLocalStorage(operations: operations)
+        let storageKey = "strict-fail-closed"
+        let safetyFence = InMemoryLogoutSafetyFenceStorage()
+        let persistence = AuthSessionPersistence(
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFence,
+            storageKey: storageKey,
+            projectKey: storageKey
+        )
+        let session = makeSession(
+            user: makeUser(),
+            sessionID: "strict-fail-closed",
+            refreshToken: "synthetic-refresh"
+        )
+
+        XCTAssertThrowsError(try persistence.activate(session)) { error in
+            XCTAssertEqual(error as? AuthSessionPersistenceError, .activationFailed)
+        }
+        XCTAssertNil(try persistence.accessToken())
+        XCTAssertEqual(try safetyFence.read(projectKey: storageKey), .loggedOut)
+    }
+
+    func testSessionPersistsAcrossRestartWithStrictKeychainSemantics() throws {
+        let operations = StrictAuthKeychainOperations()
+        let storage = AuthKeychainLocalStorage(operations: operations)
+        let storageKey = "strict-restart"
+        let safetyFence = InMemoryLogoutSafetyFenceStorage()
+        let session = makeSession(
+            user: makeUser(),
+            sessionID: "strict-restart",
+            refreshToken: "synthetic-refresh"
+        )
+        let persistence = AuthSessionPersistence(
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFence,
+            storageKey: storageKey,
+            projectKey: storageKey
+        )
+        try persistence.activate(session)
+
+        let restarted = AuthSessionPersistence(
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFence,
+            storageKey: storageKey,
+            projectKey: storageKey
+        )
+
+        XCTAssertEqual(try restarted.accessToken(), session.accessToken)
+    }
+
+    func testLogoutRestartDoesNotRestoreStrictKeychainSession() throws {
+        let operations = StrictAuthKeychainOperations()
+        let storage = AuthKeychainLocalStorage(operations: operations)
+        let storageKey = "strict-logout-restart"
+        let safetyFence = InMemoryLogoutSafetyFenceStorage()
+        let persistence = AuthSessionPersistence(
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFence,
+            storageKey: storageKey,
+            projectKey: storageKey
+        )
+        try persistence.activate(
+            makeSession(
+                user: makeUser(),
+                sessionID: "strict-logout-restart",
+                refreshToken: "synthetic-refresh"
+            )
+        )
+
+        try persistence.invalidate()
+        let restarted = AuthSessionPersistence(
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFence,
+            storageKey: storageKey,
+            projectKey: storageKey
+        )
+
+        XCTAssertNil(try restarted.accessToken())
+        XCTAssertEqual(try safetyFence.read(projectKey: storageKey), .loggedOut)
+    }
+
+    func testLogoutThenLoginPersistsOnlyNewStrictKeychainSession() throws {
+        let operations = StrictAuthKeychainOperations()
+        let storage = AuthKeychainLocalStorage(operations: operations)
+        let storageKey = "strict-login-again"
+        let safetyFence = InMemoryLogoutSafetyFenceStorage()
+        let persistence = AuthSessionPersistence(
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFence,
+            storageKey: storageKey,
+            projectKey: storageKey
+        )
+        let first = makeSession(
+            user: makeUser(),
+            sessionID: "strict-first-user",
+            refreshToken: "synthetic-first-refresh"
+        )
+        let second = makeSession(
+            user: makeUser(),
+            sessionID: "strict-second-user",
+            refreshToken: "synthetic-second-refresh"
+        )
+        try persistence.activate(first)
+        try persistence.invalidate()
+
+        try persistence.activate(second)
+        let restarted = AuthSessionPersistence(
+            sessionStorage: storage,
+            logoutSafetyFenceStorage: safetyFence,
+            storageKey: storageKey,
+            projectKey: storageKey
+        )
+
+        XCTAssertEqual(try restarted.accessToken(), second.accessToken)
+        XCTAssertNotEqual(try restarted.accessToken(), first.accessToken)
+    }
+
+    func testNonMissingStatusesAreReportedWithoutKeyOrValueContext() throws {
+        let operations = StrictAuthKeychainOperations()
+        operations.overrideStatus(errSecDecode, for: .retrieve)
+        let storage = AuthKeychainLocalStorage(operations: operations)
+
+        XCTAssertThrowsError(try storage.retrieve(key: "sensitive-key-sentinel")) { error in
+            XCTAssertEqual(
+                error as? AuthKeychainStorageError,
+                AuthKeychainStorageError(operation: .retrieve, status: errSecDecode)
+            )
+            XCTAssertFalse(error.localizedDescription.contains("sensitive-key-sentinel"))
+        }
+    }
+
+    func testStoreUsesUpdateAndDoesNotHideUpdateFailure() throws {
+        let operations = StrictAuthKeychainOperations()
+        let storage = AuthKeychainLocalStorage(operations: operations)
+        try storage.store(key: "strict-update", value: Data("first".utf8))
+        operations.overrideStatus(errSecAuthFailed, for: .update)
+
+        XCTAssertThrowsError(
+            try storage.store(key: "strict-update", value: Data("second".utf8))
+        ) { error in
+            XCTAssertEqual(
+                error as? AuthKeychainStorageError,
+                AuthKeychainStorageError(operation: .update, status: errSecAuthFailed)
+            )
+        }
+    }
+
+    func testPersistenceErrorsExposeOnlyGenericTraditionalChineseMessage() {
+        XCTAssertEqual(
+            AuthSessionPersistenceError.activationFailed.localizedDescription,
+            AuthSessionPersistenceError.userFacingMessage
+        )
+        XCTAssertFalse(
+            AuthSessionPersistenceError.activationFailed.localizedDescription
+                .contains("AuthSessionPersistenceError")
+        )
+        XCTAssertFalse(
+            AuthSessionPersistenceError.activationFailed.localizedDescription
+                .contains("activationFailed")
+        )
+    }
+
+    func testRealKeychainRetrieveMissingReturnsNil() throws {
+        let fixture = makeRealKeychainFixture()
+        defer { fixture.removeAll() }
+
+        XCTAssertNil(try fixture.storage.retrieve(key: fixture.key))
+    }
+
+    func testRealKeychainRemoveMissingSucceeds() throws {
+        let fixture = makeRealKeychainFixture()
+        defer { fixture.removeAll() }
+
+        XCTAssertNoThrow(try fixture.storage.remove(key: fixture.key))
+    }
+
+    func testRealKeychainStoreRetrieveRemoveRoundTrip() throws {
+        let fixture = makeRealKeychainFixture()
+        defer { fixture.removeAll() }
+        let value = Data("keychain-round-trip".utf8)
+
+        try fixture.storage.store(key: fixture.key, value: value)
+        XCTAssertEqual(try fixture.storage.retrieve(key: fixture.key), value)
+        try fixture.storage.remove(key: fixture.key)
+        XCTAssertNil(try fixture.storage.retrieve(key: fixture.key))
+    }
+
+    private func makeRealKeychainFixture() -> RealKeychainFixture {
+        let service = "app.TECMTests.auth-keychain.\(UUID().uuidString)"
+        return RealKeychainFixture(
+            service: service,
+            key: "isolated-test-account",
+            storage: AuthKeychainLocalStorage(service: service)
+        )
+    }
+}
+
 private final class MockAuthService: AuthServicing {
     var user: User
+    var signInError: Error?
+    var callbackError: Error?
     var remoteSignOut: (() async throws -> Void)?
     var includesRemoteSignOutOperation = true
     var localInvalidationError: Error?
@@ -952,6 +1244,9 @@ private final class MockAuthService: AuthServicing {
     }
 
     func signIn(email: String, password: String) async throws -> User {
+        if let signInError {
+            throw signInError
+        }
         localSessionInvalidated = false
         return user
     }
@@ -995,8 +1290,138 @@ private final class MockAuthService: AuthServicing {
     }
 
     func handleAuthCallback(url: URL) async throws -> User {
+        if let callbackError {
+            throw callbackError
+        }
         localSessionInvalidated = false
         return user
+    }
+}
+
+private struct RealKeychainFixture {
+    let service: String
+    let key: String
+    let storage: AuthKeychainLocalStorage
+
+    func removeAll() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
+private final class StrictAuthKeychainOperations:
+    AuthKeychainOperating,
+    @unchecked Sendable
+{
+    private struct StorageIdentity: Hashable {
+        let service: String?
+        let accessGroup: String?
+        let account: String
+    }
+
+    private let lock = NSLock()
+    private var values: [StorageIdentity: Data] = [:]
+    private var statusOverrides: [AuthKeychainStorageError.Operation: OSStatus] = [:]
+
+    func overrideStatus(
+        _ status: OSStatus,
+        for operation: AuthKeychainStorageError.Operation
+    ) {
+        lock.lock()
+        statusOverrides[operation] = status
+        lock.unlock()
+    }
+
+    func add(
+        service: String?,
+        accessGroup: String?,
+        account: String,
+        value: Data
+    ) -> OSStatus {
+        lock.lock()
+        defer { lock.unlock() }
+        if let status = statusOverrides[.add] {
+            return status
+        }
+        let identity = StorageIdentity(
+            service: service,
+            accessGroup: accessGroup,
+            account: account
+        )
+        guard values[identity] == nil else {
+            return errSecDuplicateItem
+        }
+        values[identity] = value
+        return errSecSuccess
+    }
+
+    func update(
+        service: String?,
+        accessGroup: String?,
+        account: String,
+        value: Data
+    ) -> OSStatus {
+        lock.lock()
+        defer { lock.unlock() }
+        if let status = statusOverrides[.update] {
+            return status
+        }
+        let identity = StorageIdentity(
+            service: service,
+            accessGroup: accessGroup,
+            account: account
+        )
+        guard values[identity] != nil else {
+            return errSecItemNotFound
+        }
+        values[identity] = value
+        return errSecSuccess
+    }
+
+    func retrieve(
+        service: String?,
+        accessGroup: String?,
+        account: String
+    ) -> AuthKeychainReadResult {
+        lock.lock()
+        defer { lock.unlock() }
+        if let status = statusOverrides[.retrieve] {
+            return AuthKeychainReadResult(status: status, data: nil)
+        }
+        let identity = StorageIdentity(
+            service: service,
+            accessGroup: accessGroup,
+            account: account
+        )
+        guard let value = values[identity] else {
+            return AuthKeychainReadResult(status: errSecItemNotFound, data: nil)
+        }
+        return AuthKeychainReadResult(status: errSecSuccess, data: value)
+    }
+
+    func remove(
+        service: String?,
+        accessGroup: String?,
+        account: String
+    ) -> OSStatus {
+        lock.lock()
+        defer { lock.unlock() }
+        if let status = statusOverrides[.remove] {
+            return status
+        }
+        let identity = StorageIdentity(
+            service: service,
+            accessGroup: accessGroup,
+            account: account
+        )
+        guard values.removeValue(forKey: identity) != nil else {
+            return errSecItemNotFound
+        }
+        return errSecSuccess
     }
 }
 
