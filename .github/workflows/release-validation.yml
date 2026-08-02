@@ -114,13 +114,18 @@ jobs:
           echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
           echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
           echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY" >> "$GITHUB_ENV"
-      - name: Configure masked local E2E credentials
+      - name: Generate masked local E2E credentials
         shell: bash
-        env:
-          LOCAL_E2E_PASSWORD: ${{ secrets.PLAYWRIGHT_ADMIN_PASSWORD }}
         run: |
-          test -n "$LOCAL_E2E_PASSWORD" || { echo 'PLAYWRIGHT_ADMIN_PASSWORD repository secret is required for local E2E.' >&2; exit 1; }
+          LOCAL_E2E_PASSWORD="$(openssl rand -hex 32)"
           echo "::add-mask::$LOCAL_E2E_PASSWORD"
+          curl --fail --silent --show-error \
+            --request PUT \
+            --header "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            --header "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            --header 'Content-Type: application/json' \
+            --data "$(jq -cn --arg password "$LOCAL_E2E_PASSWORD" '{password: $password, email_confirm: true}')" \
+            "$NEXT_PUBLIC_SUPABASE_URL/auth/v1/admin/users/10000000-0000-4000-8000-000000000001" >/dev/null
           echo 'PLAYWRIGHT_ADMIN_EMAIL=admin@tecm.local' >> "$GITHUB_ENV"
           echo "PLAYWRIGHT_ADMIN_PASSWORD=$LOCAL_E2E_PASSWORD" >> "$GITHUB_ENV"
           echo 'PLAYWRIGHT_BASE_URL=http://127.0.0.1:3000' >> "$GITHUB_ENV"
