@@ -1,5 +1,10 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { expect, test } from '@playwright/test';
+import {
+  assertCredentialedE2EEnvironment,
+  credentialedE2EEnvironment,
+  credentialedE2ELocalOptOutEnabled
+} from './required-env';
 
 test('login renders without the deprecated ReactDOM useFormState warning', async ({ page }) => {
   const consoleMessages: string[] = [];
@@ -13,16 +18,17 @@ test('login renders without the deprecated ReactDOM useFormState warning', async
   expect(consoleMessages).not.toContainEqual(expect.stringContaining('ReactDOM.useFormState'));
 });
 
-const email = process.env.PLAYWRIGHT_ADMIN_EMAIL;
-const password = process.env.PLAYWRIGHT_ADMIN_PASSWORD;
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const organizationId = process.env.TECM_ORGANIZATION_ID;
+const localOptOut = credentialedE2ELocalOptOutEnabled();
+const missingValue = localOptOut ? undefined : 'missing-required-e2e-value';
+const email = process.env.PLAYWRIGHT_ADMIN_EMAIL ?? missingValue;
+const password = process.env.PLAYWRIGHT_ADMIN_PASSWORD ?? missingValue;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? missingValue;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? missingValue;
+const organizationId = process.env.TECM_ORGANIZATION_ID ?? missingValue;
+const credentialedEnvironment = credentialedE2EEnvironment();
 
 test.beforeAll(() => {
-  if (supabaseUrl && !/^http:\/\/127\.0\.0\.1(?::\d+)?$/.test(supabaseUrl)) {
-    throw new Error(`Credentialed education E2E is local-only; refusing Supabase URL ${supabaseUrl}`);
-  }
+  assertCredentialedE2EEnvironment(credentialedEnvironment);
 });
 
 type CreatedFixture = {

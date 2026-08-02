@@ -23,9 +23,11 @@ export default async function TeachersPage() {
 
   const teachers = (data ?? []) as Teacher[];
   let userDirectory = new Map<string, string>();
+  let directoryUnavailable = false;
   try {
     userDirectory = await loadAdminUserDirectory();
   } catch {
+    directoryUnavailable = true;
     // The table remains usable if the server-side Auth directory is briefly unavailable.
   }
 
@@ -42,8 +44,17 @@ export default async function TeachersPage() {
       </div>
       <TeacherCreateForm />
     </Panel> : null}
+    {directoryUnavailable ? <div role="alert" className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <p className="font-semibold">暫時無法讀取導師登入目錄。</p>
+      <p className="mt-1">導師名單仍會顯示，但涉及登入身份的操作已暫停。請稍後重試。</p>
+      <a className="mt-2 inline-flex rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900" href="/admin/teachers">重新載入</a>
+    </div> : null}
     <div className="mt-5">{error ? <ErrorState error={error} fallback="讀取導師失敗，請稍後再試。" /> : teachers.length === 0 ? <EmptyState>尚未有導師資料。</EmptyState> : <DataTable headers={['姓名', '登入電郵', '電話', '狀態', '操作']}>
-      {teachers.map((teacher) => <tr key={teacher.id}><td className="px-4 py-3 font-medium">{teacher.display_name}</td><td className="px-4 py-3">{userDirectory.get(teacher.user_id) ?? '未取得登入電郵'}</td><td className="px-4 py-3">{teacher.phone ?? '—'}</td><td className="px-4 py-3">{statusLabel(teacher.is_active ? 'active' : 'inactive')}</td><td className="px-4 py-3">{!teacher.is_active && role === 'admin' && userDirectory.has(teacher.user_id) ? <TeacherReactivateForm email={userDirectory.get(teacher.user_id)!} displayName={teacher.display_name} phone={teacher.phone} /> : '—'}</td></tr>)}
+      {teachers.map((teacher) => {
+        const email = userDirectory.get(teacher.user_id);
+        const canReactivate = !teacher.is_active && role === 'admin' && Boolean(email);
+        return <tr key={teacher.id}><td className="px-4 py-3 font-medium">{teacher.display_name}</td><td className="px-4 py-3">{email ?? (directoryUnavailable ? '暫時無法取得登入電郵' : '未取得登入電郵')}</td><td className="px-4 py-3">{teacher.phone ?? '—'}</td><td className="px-4 py-3">{statusLabel(teacher.is_active ? 'active' : 'inactive')}</td><td className="px-4 py-3">{canReactivate ? <TeacherReactivateForm email={email!} displayName={teacher.display_name} phone={teacher.phone} /> : !teacher.is_active && role === 'admin' ? <button type="button" disabled className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-400">重新啟用</button> : '—'}</td></tr>;
+      })}
     </DataTable>}</div>
   </>;
 }

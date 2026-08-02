@@ -6,7 +6,13 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
+  reporter: [
+    ['list'],
+    ['./scripts/playwright-result-reporter.mjs', {
+      outputFile: process.env.PLAYWRIGHT_RESULT_FILE ?? 'test-results/playwright-results.json'
+    }],
+    ['html', { open: 'never', outputFolder: 'playwright-report' }]
+  ],
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:3000',
     trace: 'retain-on-failure',

@@ -116,11 +116,70 @@ test('normal operator pages do not render raw identity UUIDs', () => {
   ]) assert.doesNotMatch(source(path), /編號：/);
 });
 
+test('teacher directory failure remains sanitized and keeps inactive rows visible with disabled identity actions', () => {
+  const page = source('app/admin/teachers/page.tsx');
+
+  assert.match(page, /directoryUnavailable = true/);
+  assert.match(page, /role="alert"/);
+  assert.match(page, /暫時無法讀取導師登入目錄。/);
+  assert.match(page, /導師名單仍會顯示/);
+  assert.match(page, /請稍後重試/);
+  assert.match(page, /href="\/admin\/teachers">重新載入/);
+  assert.match(page, /teachers\.map/);
+  assert.match(page, /statusLabel\(teacher\.is_active \? 'active' : 'inactive'\)/);
+  assert.match(page, /type="button" disabled/);
+  assert.match(page, /const canReactivate = !teacher\.is_active && role === 'admin' && Boolean\(email\)/);
+  assert.match(page, /canReactivate \? <TeacherReactivateForm email=\{email!\}/);
+  assert.match(page, /暫時無法取得登入電郵/);
+  assert.doesNotMatch(page, /catch\s*\([^)]*\)\s*{[^}]*\.message|error\.message|access_token|refresh_token|provider_token|service_role/);
+});
+
 test('operator-facing statuses and setup validation use Traditional Chinese labels', async () => {
   const { statusLabel } = await import('../../lib/operations/labels.ts');
   assert.equal(statusLabel('attendance_deduction'), '出席扣堂');
   assert.equal(statusLabel('available'), '可使用');
   assert.equal(statusLabel('approved'), '已批准');
+  assert.equal(statusLabel('inactive'), '已停用');
+  assert.equal(statusLabel('scheduled'), '已排課');
+  assert.equal(statusLabel('failed'), '失敗');
+  assert.equal(statusLabel(statusLabel('completed')), '已完成');
   assert.doesNotMatch(source('app/admin/courses/[id]/actions.ts'), /Title 為必填|Sort order|Campus 不存在|Tag /);
   assert.match(source('app/admin/exam-cohorts/cohort-create-form.tsx'), /班別狀態/);
+});
+
+test('targeted admin status surfaces call statusLabel instead of rendering raw enum text', () => {
+  const targets = [
+    'app/admin/classes/page.tsx',
+    'app/admin/leave-makeup/page.tsx',
+    'app/admin/makeup/page.tsx',
+    'app/admin/notifications/page.tsx',
+    'app/admin/sessions/page.tsx',
+    'app/admin/makeup/schedule/page.tsx'
+  ];
+
+  for (const path of targets) {
+    const page = source(path);
+    assert.match(page, /statusLabel/);
+    assert.doesNotMatch(page, /<Badge[^>\n]*>\{(?:item|row|task|session)\.(?:status|priority)\}<\/Badge>/);
+  }
+});
+
+test('credentialed Admin E2E is loopback-only and release results cannot silently skip', () => {
+  const environment = source('tests/e2e/required-env.ts');
+  const resultVerifier = source('scripts/verify-playwright-results.mjs');
+  const reporter = source('scripts/playwright-result-reporter.mjs');
+  const workflow = readFileSync(resolve(adminWebRoot, '../.github/workflows/release-validation.yml'), 'utf8');
+
+  assert.match(environment, /LOCAL_E2E_ORGANIZATION_ID/);
+  assert.match(environment, /127\\.0\\.0\\.1/);
+  assert.match(environment, /TECM_E2E_ALLOW_MISSING_SUPABASE/);
+  assert.match(environment, /must use the deterministic local organization/);
+  assert.match(resultVerifier, /release validation never accepts skipped tests/);
+  assert.match(resultVerifier, /PLAYWRIGHT_RUN_ID/);
+  assert.match(resultVerifier, /GITHUB_SHA/);
+  assert.match(reporter, /configuredProjects/);
+  assert.match(reporter, /counts/);
+  assert.match(workflow, /TECM_ORGANIZATION_ID='10000000-0000-4000-8000-000000000000'/);
+  assert.match(workflow, /npm run test:e2e:verify/);
+  assert.doesNotMatch(workflow, /GITHUB_ENV/);
 });

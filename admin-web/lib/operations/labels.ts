@@ -61,9 +61,21 @@ const LABELS: Record<string, string> = {
   admin: '管理員'
 };
 
+const OPERATION_LABELS: Record<string, string> = {
+  claimed: '\u8655\u7406\u4e2d',
+  processing: '\u8655\u7406\u4e2d',
+  retry: '\u5f85\u91cd\u8a66',
+  delivered: '\u5df2\u6295\u905e',
+  would_send: '\u6a21\u64ec\u6295\u905e',
+  dead_letter: '\u7121\u6cd5\u6295\u905e'
+};
+
+const LABEL_VALUES = new Set([...Object.values(LABELS), ...Object.values(OPERATION_LABELS)]);
+
 export function statusLabel(value: string | null | undefined) {
   if (!value) return '—';
-  return LABELS[value] ?? '未知狀態';
+  if (LABEL_VALUES.has(value)) return value;
+  return LABELS[value] ?? OPERATION_LABELS[value] ?? '未知狀態';
 }
 
 export function roleLabel(value: string | null | undefined) {

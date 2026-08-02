@@ -23,6 +23,9 @@ jobs:
       - name: Verify migrations, repeatable seed, RLS, and SQL suites
         shell: pwsh
         run: ./scripts/testing/database-verify.ps1
+      - name: Verify Admin mutation resistance with isolated negative controls
+        shell: pwsh
+        run: ./scripts/testing/admin-operations-mutation-verify.ps1
 
   admin-web:
     runs-on: ubuntu-latest
@@ -96,47 +99,61 @@ jobs:
           test -n "$KONG_CONTAINER"
           docker restart "$KONG_CONTAINER" >/dev/null
           API_URL="$(supabase status -o json | jq -r .API_URL)"
+          case "$API_URL" in
+            http://127.0.0.1:*) ;;
+            *) echo "Refusing non-local Supabase URL: $API_URL" >&2; exit 1 ;;
+          esac
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error "$API_URL/auth/v1/health" >/dev/null; then
+              break
+            fi
+            test "$attempt" -lt 20
+            sleep 2
+          done
+      - name: Install Admin Web and Chromium
+        working-directory: admin-web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium webkit
+      - name: Run live Playwright flows and verify zero skips
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          API_URL="$(supabase status -o json | jq -r .API_URL)"
           ANON_KEY="$(supabase status -o json | jq -r .ANON_KEY)"
           SERVICE_ROLE_KEY="$(supabase status -o json | jq -r .SERVICE_ROLE_KEY)"
           case "$API_URL" in
             http://127.0.0.1:*) ;;
             *) echo "Refusing non-local Supabase URL: $API_URL" >&2; exit 1 ;;
           esac
+          test -n "$ANON_KEY"
           test -n "$SERVICE_ROLE_KEY"
+          echo "::add-mask::$ANON_KEY"
           echo "::add-mask::$SERVICE_ROLE_KEY"
-          for attempt in $(seq 1 20); do
-            if curl --fail --silent --show-error --header "apikey: $ANON_KEY" "$API_URL/auth/v1/health" >/dev/null; then
-              break
-            fi
-            test "$attempt" -lt 20
-            sleep 2
-          done
-          echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
-          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
-          echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY" >> "$GITHUB_ENV"
-      - name: Generate masked local E2E credentials
-        shell: bash
-        run: |
           LOCAL_E2E_PASSWORD="$(openssl rand -hex 32)"
           echo "::add-mask::$LOCAL_E2E_PASSWORD"
           curl --fail --silent --show-error \
             --request PUT \
-            --header "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
-            --header "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            --header "apikey: $SERVICE_ROLE_KEY" \
+            --header "Authorization: Bearer $SERVICE_ROLE_KEY" \
             --header 'Content-Type: application/json' \
             --data "$(jq -cn --arg password "$LOCAL_E2E_PASSWORD" '{password: $password, email_confirm: true}')" \
-            "$NEXT_PUBLIC_SUPABASE_URL/auth/v1/admin/users/10000000-0000-4000-8000-000000000001" >/dev/null
-          echo 'PLAYWRIGHT_ADMIN_EMAIL=admin@tecm.local' >> "$GITHUB_ENV"
-          echo "PLAYWRIGHT_ADMIN_PASSWORD=$LOCAL_E2E_PASSWORD" >> "$GITHUB_ENV"
-          echo 'PLAYWRIGHT_BASE_URL=http://127.0.0.1:3000' >> "$GITHUB_ENV"
-      - name: Install Admin Web and Chromium
-        working-directory: admin-web
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium webkit
-      - name: Run live Playwright flows
-        working-directory: admin-web
-        run: npm run test:e2e
+            "$API_URL/auth/v1/admin/users/10000000-0000-4000-8000-000000000001" >/dev/null
+          export NEXT_PUBLIC_SUPABASE_URL="$API_URL"
+          export NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY"
+          export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
+          export TECM_ORGANIZATION_ID='10000000-0000-4000-8000-000000000000'
+          export PLAYWRIGHT_ADMIN_EMAIL='admin@tecm.local'
+          export PLAYWRIGHT_ADMIN_PASSWORD="$LOCAL_E2E_PASSWORD"
+          export PLAYWRIGHT_BASE_URL='http://127.0.0.1:3000'
+          export PLAYWRIGHT_RUN_ID="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export PLAYWRIGHT_RESULT_FILE="test-results/playwright-results-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          export PLAYWRIGHT_EXPECTED_TESTS=8
+          cd admin-web
+          npm run test:e2e
+          npm run test:e2e:verify
+          unset SERVICE_ROLE_KEY LOCAL_E2E_PASSWORD PLAYWRIGHT_ADMIN_PASSWORD
 
   ios:
     runs-on: macos-15

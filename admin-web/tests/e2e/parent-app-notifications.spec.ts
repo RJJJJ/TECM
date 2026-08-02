@@ -1,14 +1,27 @@
 import { expect, test } from '@playwright/test';
 import { createClient } from '@supabase/supabase-js';
+import { createHash } from 'node:crypto';
+import {
+  assertCredentialedE2EEnvironment,
+  credentialedE2ELocalOptOutEnabled,
+  credentialedE2EEnvironment,
+} from './required-env';
 
-const apiUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const adminEmail = process.env.PLAYWRIGHT_ADMIN_EMAIL;
-const adminPassword = process.env.PLAYWRIGHT_ADMIN_PASSWORD;
+const localOptOut = credentialedE2ELocalOptOutEnabled();
+const missingValue = localOptOut ? undefined : 'missing-required-e2e-value';
+const apiUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? missingValue;
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? missingValue;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? missingValue;
+const adminEmail = process.env.PLAYWRIGHT_ADMIN_EMAIL ?? missingValue;
+const adminPassword = process.env.PLAYWRIGHT_ADMIN_PASSWORD ?? missingValue;
+const credentialedEnvironment = credentialedE2EEnvironment();
 const organizationId = '10000000-0000-4000-8000-000000000000';
 const otherOrganizationId = '20000000-0000-4000-8000-000000000000';
 const activeParentUserId = '10000000-0000-4000-8000-000000000003';
+
+test.beforeAll(() => {
+  assertCredentialedE2EEnvironment(credentialedEnvironment);
+});
 
 test.describe('家長 App 帳戶與通知', () => {
   test.skip(
@@ -19,27 +32,37 @@ test.describe('家長 App 帳戶與通知', () => {
   test('邀請、原子停用、範本、公告、投遞摘要及跨 tenant 防護', async ({ page }, testInfo) => {
     test.setTimeout(180_000);
     const runId = `${Date.now()}-${testInfo.project.name.replace(/[^a-z0-9]/gi, '-')}`;
+    const runKey = runId.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
     const guardianName = `App 驗收家長 ${runId}`;
     const guardianEmail = `parent-${runId}@tecm.test`;
     const announcementTitle = `App 測試公告 ${runId}`;
-    const templateKey = `app_test_${Date.now()}_${testInfo.project.name.startsWith('desktop') ? 'desktop' : 'mobile'}`;
-    const deviceToken = (testInfo.project.name.startsWith('desktop') ? 'd' : 'e').repeat(64);
+    const templateKey = `app_test_${runKey}`.slice(0, 64);
+    const installationId = `playwright-${runKey}`;
+    const disableInstallationId = `disable-target-${runKey}`;
+    const deviceToken = createHash('sha256').update(`${runId}:active`).digest('hex');
+    const disabledDeviceToken = createHash('sha256').update(`${runId}:disabled`).digest('hex');
     const service = createClient(apiUrl!, serviceRoleKey!, {
       auth: { autoRefreshToken: false, persistSession: false }
     });
+    let guardianId: string | undefined;
+    let linkedAuthUserId: string | undefined;
+    let announcementId: string | undefined;
+    let primaryError: unknown;
 
-    const { data: guardian, error: guardianError } = await service
+    try {
+      const { data: guardian, error: guardianError } = await service
       .from('parent_profiles')
       .insert({ organization_id: organizationId, full_name: guardianName, account_status: 'unlinked' })
       .select('id')
       .single();
-    expect(guardianError).toBeNull();
+      expect(guardianError).toBeNull();
+      guardianId = guardian?.id;
 
     const { error: deviceError } = await service.from('push_devices').upsert(
       {
         organization_id: organizationId,
         user_id: activeParentUserId,
-        installation_id: `playwright-${testInfo.project.name}`,
+        installation_id: installationId,
         device_token: deviceToken,
         environment: 'sandbox',
         bundle_id: 'app.TECM',
@@ -69,12 +92,12 @@ test.describe('家長 App 帳戶與通知', () => {
     expect(linkedError).toBeNull();
     expect(linkedProfile).toMatchObject({ email: guardianEmail, account_status: 'invited' });
     expect(linkedProfile!.user_id).toBeTruthy();
+    linkedAuthUserId = linkedProfile!.user_id;
 
-    const disabledDeviceToken = (testInfo.project.name.startsWith('desktop') ? 'a' : 'b').repeat(64);
     const { error: linkedDeviceError } = await service.from('push_devices').insert({
       organization_id: organizationId,
       user_id: linkedProfile!.user_id,
-      installation_id: `disable-target-${testInfo.project.name}`,
+      installation_id: disableInstallationId,
       device_token: disabledDeviceToken,
       environment: 'sandbox',
       bundle_id: 'app.TECM',
@@ -113,6 +136,7 @@ test.describe('家長 App 帳戶與通知', () => {
       .eq('title', announcementTitle)
       .single();
     expect(announcementError).toBeNull();
+    announcementId = announcement?.id;
     expect(announcement!.recipient_count).toBe(1);
 
     const { data: notification, error: notificationError } = await service
@@ -155,5 +179,81 @@ test.describe('家長 App 帳戶與通知', () => {
       body: 'Forbidden cross-tenant write'
     });
     expect(crossTenantError).not.toBeNull();
+    } catch (error) {
+      primaryError = error;
+      throw error;
+    } finally {
+      try {
+        if (!guardianId) {
+          const { data: createdProfile, error: profileLookupError } = await service
+            .from('parent_profiles')
+            .select('id,user_id')
+            .eq('organization_id', organizationId)
+            .eq('full_name', guardianName)
+            .maybeSingle();
+          if (profileLookupError) throw profileLookupError;
+          guardianId = createdProfile?.id ?? undefined;
+          linkedAuthUserId = createdProfile?.user_id ?? linkedAuthUserId;
+        }
+        const { data: announcementsToClean, error: announcementLookupError } = await service
+          .from('notification_announcements')
+          .select('id')
+          .eq('organization_id', organizationId)
+          .eq('title', announcementTitle);
+        if (announcementLookupError) throw announcementLookupError;
+        const announcementIds = Array.from(new Set([
+          announcementId,
+          ...(announcementsToClean ?? []).map((item) => item.id)
+        ].filter((id): id is string => Boolean(id))));
+        if (announcementIds.length > 0) {
+          const { error } = await service
+            .from('notifications')
+            .delete()
+            .eq('entity_type', 'announcement')
+            .in('entity_id', announcementIds);
+          if (error) throw error;
+          const { error: announcementDeleteError } = await service
+            .from('notification_announcements')
+            .delete()
+            .in('id', announcementIds);
+          if (announcementDeleteError) throw announcementDeleteError;
+        }
+        const { error: templateDeleteError } = await service
+          .from('notification_templates')
+          .delete()
+          .eq('organization_id', organizationId)
+          .eq('template_key', templateKey);
+        if (templateDeleteError) throw templateDeleteError;
+        const { error: deviceDeleteError } = await service
+          .from('push_devices')
+          .delete()
+          .in('installation_id', [installationId, disableInstallationId]);
+        if (deviceDeleteError) throw deviceDeleteError;
+        if (guardianId) {
+          if (!linkedAuthUserId) {
+            const { data: linkedProfile, error: linkedProfileError } = await service
+              .from('parent_profiles')
+              .select('user_id')
+              .eq('id', guardianId)
+              .maybeSingle();
+            if (linkedProfileError) throw linkedProfileError;
+            linkedAuthUserId = linkedProfile?.user_id ?? undefined;
+          }
+          const { error: guardianDeleteError } = await service
+            .from('parent_profiles')
+            .delete()
+            .eq('id', guardianId);
+          if (guardianDeleteError) throw guardianDeleteError;
+        }
+        if (linkedAuthUserId) {
+          const { error: authDeleteError } = await service.auth.admin.deleteUser(linkedAuthUserId);
+          if (authDeleteError) throw authDeleteError;
+        }
+        console.info(JSON.stringify({ runId, cleanup: 'passed' }));
+      } catch {
+        console.error(JSON.stringify({ runId, cleanup: 'failed', cleanupError: 'sanitized cleanup failure' }));
+        if (!primaryError) throw new Error('notification E2E cleanup failed; see sanitized cleanup report');
+      }
+    }
   });
 });
