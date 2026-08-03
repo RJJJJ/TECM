@@ -193,6 +193,13 @@ test('credentialed Admin E2E is loopback-only and release results cannot silentl
   assert.match(reporter, /assertTestRunIdentity/);
   assert.match(identity, /GITHUB_RUN_ATTEMPT/);
   assert.match(identity, /TECM_EXPECTED_GITHUB_RUN_ATTEMPT/);
+  assert.match(source('playwright.config.ts'), /execFileSync\(process\.execPath/);
+  assert.match(source('playwright.config.ts'), /scripts\/test-run-identity\.mjs/);
+  assert.doesNotMatch(source('playwright.config.ts'), /from ['"]\.\/scripts\/test-run-identity\.mjs['"]/);
+  const notificationSpec = source('tests/e2e/parent-app-notifications.spec.ts');
+  assert.match(notificationSpec, /execFileSync\(\s*process\.execPath/);
+  assert.match(notificationSpec, /scripts\/test-run-identity\.mjs/);
+  assert.doesNotMatch(notificationSpec, /from ['"]\.\.\/\.\.\/scripts\/test-run-identity\.mjs['"]/);
   assert.match(identity, /local-only/);
   assert.match(reporter, /configuredProjects/);
   assert.match(reporter, /counts/);

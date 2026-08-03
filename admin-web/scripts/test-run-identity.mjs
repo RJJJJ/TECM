@@ -89,7 +89,7 @@ export function assertTestRunIdentity(env = process.env) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    console.log(JSON.stringify(deriveTestRunIdentity()));
+    console.log(JSON.stringify(assertTestRunIdentity()));
   } catch (error) {
     console.error(`[TECM TEST IDENTITY] ${error instanceof Error ? error.message : 'invalid runtime identity'}`);
     process.exitCode = 1;

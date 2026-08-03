@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { createClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
@@ -6,7 +8,6 @@ import {
   credentialedE2ELocalOptOutEnabled,
   credentialedE2EEnvironment,
 } from './required-env';
-import { deriveTestRunIdentity } from '../../scripts/test-run-identity.mjs';
 import { buildPushDeviceCleanupSteps, runBestEffortNotificationCleanup, type NotificationCleanupStep } from './notification-cleanup';
 
 const localOptOut = credentialedE2ELocalOptOutEnabled();
@@ -20,7 +21,11 @@ const credentialedEnvironment = credentialedE2EEnvironment();
 const organizationId = '10000000-0000-4000-8000-000000000000';
 const otherOrganizationId = '20000000-0000-4000-8000-000000000000';
 const activeParentUserId = '10000000-0000-4000-8000-000000000003';
-const canonicalRunId = deriveTestRunIdentity().canonicalId;
+const canonicalRunId = JSON.parse(execFileSync(
+  process.execPath,
+  [resolve(process.cwd(), 'scripts/test-run-identity.mjs')],
+  { env: process.env, encoding: 'utf8' }
+).trim()).canonicalId;
 
 test.beforeAll(() => {
   assertCredentialedE2EEnvironment(credentialedEnvironment);
