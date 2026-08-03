@@ -104,7 +104,7 @@ jobs:
             docker ps -a --filter name=supabase_ --format 'local Supabase service: {{.Names}} {{.Status}}' >&2
             exit 1
           fi
-          if ! supabase db reset >/dev/null 2>&1; then
+          if ! supabase db reset --network-id "$TECM_SUPABASE_NETWORK" >/dev/null 2>&1; then
             echo 'Supabase local database reset failed' >&2
             exit 1
           fi
