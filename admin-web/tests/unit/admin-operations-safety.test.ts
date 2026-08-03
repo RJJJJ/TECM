@@ -192,7 +192,8 @@ test('credentialed Admin E2E is loopback-only and release results cannot silentl
   assert.match(reporter, /counts/);
   assert.match(workflow, /TECM_ORGANIZATION_ID='10000000-0000-4000-8000-000000000000'/);
   assert.match(workflow, /npm run test:e2e:verify/);
-  assert.match(workflow, /supabase start >\/dev\/null 2>&1/);
+  assert.match(workflow, /docker network create[\s\S]*com\.docker\.network\.bridge\.host_binding_ipv4=127\.0\.0\.1/);
+  assert.match(workflow, /supabase start --network-id "\$TECM_SUPABASE_NETWORK"\s+>\/dev\/null 2>&1/);
   assert.match(workflow, /bash scripts\/testing\/verify-local-supabase\.sh/);
   assert.match(workflow, /status_json="\$\(supabase status -o json\)"/);
   assert.doesNotMatch(workflow, /^\s*supabase start\s*$/m);
