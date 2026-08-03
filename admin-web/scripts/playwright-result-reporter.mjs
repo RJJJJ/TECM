@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { assertTestRunIdentity } from './test-run-identity.mjs';
 
 function outcomeFor(test) {
   if (typeof test.outcome === 'function') return test.outcome();
@@ -11,7 +12,7 @@ function outcomeFor(test) {
 export default class PlaywrightResultReporter {
   constructor(options = {}) {
     this.outputFile = options.outputFile ?? process.env.PLAYWRIGHT_RESULT_FILE ?? 'test-results/playwright-results.json';
-    this.runId = process.env.PLAYWRIGHT_RUN_ID ?? 'local';
+    this.runId = assertTestRunIdentity().canonicalId;
     this.headSha = process.env.GITHUB_SHA ?? null;
     this.startedAt = null;
     this.suite = null;

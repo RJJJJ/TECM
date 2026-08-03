@@ -178,6 +178,7 @@ test('credentialed Admin E2E is loopback-only and release results cannot silentl
   const environment = source('tests/e2e/required-env.ts');
   const resultVerifier = source('scripts/verify-playwright-results.mjs');
   const reporter = source('scripts/playwright-result-reporter.mjs');
+  const identity = source('scripts/test-run-identity.mjs');
   const workflow = readFileSync(resolve(adminWebRoot, '../.github/workflows/release-validation.yml'), 'utf8');
 
   assert.match(environment, /LOCAL_E2E_ORGANIZATION_ID/);
@@ -188,6 +189,11 @@ test('credentialed Admin E2E is loopback-only and release results cannot silentl
   assert.match(resultVerifier, /release validation never accepts skipped tests/);
   assert.match(resultVerifier, /PLAYWRIGHT_RUN_ID/);
   assert.match(resultVerifier, /GITHUB_SHA/);
+  assert.match(resultVerifier, /canonical test identity/);
+  assert.match(reporter, /assertTestRunIdentity/);
+  assert.match(identity, /GITHUB_RUN_ATTEMPT/);
+  assert.match(identity, /TECM_EXPECTED_GITHUB_RUN_ATTEMPT/);
+  assert.match(identity, /local-only/);
   assert.match(reporter, /configuredProjects/);
   assert.match(reporter, /counts/);
   assert.match(workflow, /TECM_ORGANIZATION_ID='10000000-0000-4000-8000-000000000000'/);
@@ -196,10 +202,15 @@ test('credentialed Admin E2E is loopback-only and release results cannot silentl
   assert.match(workflow, /supabase start --network-id "\$TECM_SUPABASE_NETWORK"\s+>\/dev\/null 2>&1/);
   assert.match(workflow, /supabase db reset --network-id "\$TECM_SUPABASE_NETWORK"\s+>\/dev\/null 2>&1/);
   assert.match(workflow, /bash scripts\/testing\/verify-local-supabase\.sh/);
+  assert.match(workflow, /TECM_EXPECTED_GITHUB_RUN_ID:\s*\$\{\{\s*github\.run_id\s*\}\}/);
+  assert.match(workflow, /TECM_EXPECTED_GITHUB_RUN_ATTEMPT:\s*\$\{\{\s*github\.run_attempt\s*\}\}/);
+  assert.match(workflow, /node admin-web\/scripts\/test-run-identity\.mjs/);
+  assert.match(workflow, /PLAYWRIGHT_RUN_ID=\"\$TECM_TEST_RUN_ID\"/);
+  assert.match(workflow, /TECM_SUPABASE_NETWORK=\"tecm-local-only-\$\{TECM_TEST_RUN_ID\}\"/);
   assert.match(workflow, /status_json="\$\(supabase status -o json\)"/);
   assert.doesNotMatch(workflow, /^\s*supabase start\s*$/m);
   assert.doesNotMatch(workflow, /^\s*supabase status\s*$/m);
-  assert.doesNotMatch(workflow, /GITHUB_ENV/);
+  assert.doesNotMatch(workflow, /PLAYWRIGHT_RUN_ID=\"\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}\"/);
 });
 
 test('local E2E preflight accepts only explicit loopback http URLs', async () => {

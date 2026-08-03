@@ -6,7 +6,8 @@ import {
   credentialedE2ELocalOptOutEnabled,
   credentialedE2EEnvironment,
 } from './required-env';
-import { runBestEffortNotificationCleanup, type NotificationCleanupStep } from './notification-cleanup';
+import { deriveTestRunIdentity } from '../../scripts/test-run-identity.mjs';
+import { buildPushDeviceCleanupSteps, runBestEffortNotificationCleanup, type NotificationCleanupStep } from './notification-cleanup';
 
 const localOptOut = credentialedE2ELocalOptOutEnabled();
 const missingValue = localOptOut ? undefined : 'missing-required-e2e-value';
@@ -19,6 +20,7 @@ const credentialedEnvironment = credentialedE2EEnvironment();
 const organizationId = '10000000-0000-4000-8000-000000000000';
 const otherOrganizationId = '20000000-0000-4000-8000-000000000000';
 const activeParentUserId = '10000000-0000-4000-8000-000000000003';
+const canonicalRunId = deriveTestRunIdentity().canonicalId;
 
 test.beforeAll(() => {
   assertCredentialedE2EEnvironment(credentialedEnvironment);
@@ -32,7 +34,7 @@ test.describe('家長 App 帳戶與通知', () => {
 
   test('邀請、原子停用、範本、公告、投遞摘要及跨 tenant 防護', async ({ page }, testInfo) => {
     test.setTimeout(180_000);
-    const runId = `${Date.now()}-${testInfo.project.name.replace(/[^a-z0-9]/gi, '-')}`;
+    const runId = `${canonicalRunId}-${testInfo.project.name.replace(/[^a-z0-9]/gi, '-')}`;
     const runKey = runId.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
     const guardianName = `App 驗收家長 ${runId}`;
     const guardianEmail = `parent-${runId}@tecm.test`;
@@ -255,17 +257,12 @@ test.describe('家長 App 帳戶與通知', () => {
             if (error) throw error;
           }
         },
-        {
-          resource: 'push_devices',
-          stage: 'delete',
-          run: async () => {
-            const { error } = await service
-              .from('push_devices')
-              .delete()
-              .in('installation_id', [installationId, disableInstallationId]);
-            if (error) throw error;
-          }
-        },
+        ...buildPushDeviceCleanupSteps(service, [
+          { organizationId, userId: activeParentUserId, installationId },
+          ...(linkedAuthUserId
+            ? [{ organizationId, userId: linkedAuthUserId, installationId: disableInstallationId }]
+            : [])
+        ]),
         {
           resource: 'parent_profile',
           stage: 'lookup_auth_user',
@@ -305,12 +302,12 @@ test.describe('家長 App 帳戶與通知', () => {
 
       try {
         await runBestEffortNotificationCleanup(cleanupSteps);
-        console.info(JSON.stringify({ runId, cleanup: 'passed' }));
+        console.info(JSON.stringify({ runId: canonicalRunId, cleanup: 'passed' }));
       } catch (error) {
         const failures = error instanceof Error && 'failures' in error
           ? (error as { failures: Array<{ resource: string; stage: string }> }).failures
           : [{ resource: 'unknown', stage: 'aggregate' }];
-        console.error(JSON.stringify({ runId, cleanup: 'failed', failures }));
+        console.error(JSON.stringify({ runId: canonicalRunId, cleanup: 'failed', failures }));
         if (!primaryError) throw error;
       }
     }

@@ -1,4 +1,5 @@
 import { readFileSync, statSync } from 'node:fs';
+import { assertTestRunIdentity } from './test-run-identity.mjs';
 
 const resultFile = process.env.PLAYWRIGHT_RESULT_FILE ?? process.argv[2] ?? 'test-results/playwright-results.json';
 const expectedTests = Number(process.env.PLAYWRIGHT_EXPECTED_TESTS ?? 8);
@@ -6,6 +7,14 @@ const expectedProjects = (process.env.PLAYWRIGHT_EXPECTED_PROJECTS ?? 'desktop-c
   .split(',').map((value) => value.trim()).filter(Boolean).sort();
 const isCi = process.env.CI === 'true' || process.env.CI === '1';
 const localOptOut = !isCi && process.env.TECM_E2E_ALLOW_MISSING_SUPABASE === '1';
+
+let testRunIdentity;
+try {
+  testRunIdentity = assertTestRunIdentity();
+} catch (error) {
+  fail(`invalid test-run identity: ${error instanceof Error ? error.message : 'unknown error'}`);
+  process.exit();
+}
 
 function fail(message) {
   console.error(`[PLAYWRIGHT RESULT] ${message}`);
@@ -29,8 +38,14 @@ if (result.schemaVersion !== 1 || !Array.isArray(result.tests) || !Array.isArray
   fail('result file has an unsupported or malformed schema');
   process.exit();
 }
+if (result.runId !== testRunIdentity.canonicalId) {
+  fail(`result belongs to the wrong canonical test identity: expected ${testRunIdentity.canonicalId}`);
+}
 if (process.env.PLAYWRIGHT_RUN_ID && result.runId !== process.env.PLAYWRIGHT_RUN_ID) {
-  fail(`result belongs to run ${String(result.runId)}, expected ${process.env.PLAYWRIGHT_RUN_ID}`);
+  fail('result identity disagrees with PLAYWRIGHT_RUN_ID');
+}
+if (testRunIdentity.source === 'github-actions' && !resultFile.endsWith(`playwright-results-${testRunIdentity.canonicalId}.json`)) {
+  fail('result file path does not use the canonical GitHub attempt identity');
 }
 if (process.env.GITHUB_SHA && result.headSha !== process.env.GITHUB_SHA) {
   fail(`result belongs to head ${String(result.headSha)}, expected ${process.env.GITHUB_SHA}`);

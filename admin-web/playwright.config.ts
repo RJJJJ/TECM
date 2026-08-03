@@ -1,8 +1,10 @@
 import { defineConfig, devices } from '@playwright/test';
 import { assertCredentialedE2EEnvironment, credentialedE2EEnvironment, requiredPlaywrightBaseUrl } from './tests/e2e/required-env';
+import { assertTestRunIdentity } from './scripts/test-run-identity.mjs';
 
 const e2eEnvironment = credentialedE2EEnvironment();
 assertCredentialedE2EEnvironment(e2eEnvironment);
+assertTestRunIdentity();
 const baseURL = requiredPlaywrightBaseUrl(e2eEnvironment);
 
 export default defineConfig({

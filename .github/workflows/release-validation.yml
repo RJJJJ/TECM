@@ -78,6 +78,9 @@ jobs:
   admin-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      TECM_EXPECTED_GITHUB_RUN_ID: ${{ github.run_id }}
+      TECM_EXPECTED_GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -89,12 +92,19 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: admin-web/package-lock.json
+      - name: Establish canonical Admin E2E identity
+        run: |
+          set -euo pipefail
+          identity_json="$(node admin-web/scripts/test-run-identity.mjs)"
+          test "$(jq -er .source <<<"$identity_json")" = 'github-actions'
+          echo "TECM_TEST_RUN_ID=$(jq -er .canonicalId <<<"$identity_json")" >> "$GITHUB_ENV"
+          echo 'TECM_TEST_RUN_SOURCE=github-actions' >> "$GITHUB_ENV"
       - uses: supabase/setup-cli@v1
         with:
           version: latest
       - name: Start local Supabase and reset schema
         run: |
-          TECM_SUPABASE_NETWORK="tecm-local-only-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          TECM_SUPABASE_NETWORK="tecm-local-only-${TECM_TEST_RUN_ID}"
           docker network create \
             --driver bridge \
             --opt com.docker.network.bridge.host_binding_ipv4=127.0.0.1 \
@@ -122,6 +132,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          identity_json="$(node scripts/test-run-identity.mjs)"
+          canonical_id="$(jq -er .canonicalId <<<"$identity_json")"
+          test "$(jq -er .source <<<"$identity_json")" = 'github-actions'
+          test "$canonical_id" = "$TECM_TEST_RUN_ID"
           status_json="$(supabase status -o json)"
           API_URL="$(jq -er .API_URL <<<"$status_json")"
           ANON_KEY="$(jq -er .ANON_KEY <<<"$status_json")"
@@ -150,8 +164,8 @@ jobs:
           export PLAYWRIGHT_ADMIN_EMAIL='admin@tecm.local'
           export PLAYWRIGHT_ADMIN_PASSWORD="$LOCAL_E2E_PASSWORD"
           export PLAYWRIGHT_BASE_URL='http://127.0.0.1:3000'
-          export PLAYWRIGHT_RUN_ID="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          export PLAYWRIGHT_RESULT_FILE="test-results/playwright-results-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          export PLAYWRIGHT_RUN_ID="$TECM_TEST_RUN_ID"
+          export PLAYWRIGHT_RESULT_FILE="test-results/playwright-results-${TECM_TEST_RUN_ID}.json"
           export PLAYWRIGHT_EXPECTED_TESTS=8
           cd admin-web
           npm run test:e2e
