@@ -1,22 +1,18 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
-import { verifyActiveStaffAccess } from '@/lib/auth/staff-access';
+import { getOperationsContext } from '@/lib/operations/context';
+import { safeOperationMessage, UserFacingOperationError, userFacingError } from '@/lib/operations/errors';
 
 export type ExamCohortFormState = {
   status: 'idle' | 'success' | 'error';
   message?: string;
 };
 
-async function requireStaff() {
-  const supabase = await createServerSupabaseClient();
-  const access = await verifyActiveStaffAccess(supabase);
-  if (!access.allowed) {
-    await supabase.auth.signOut();
-    throw new Error('Unauthorized admin operation.');
-  }
-  return supabase;
+async function requireManager() {
+  const context = await getOperationsContext();
+  if (!['admin', 'staff'].includes(context.role)) throw userFacingError('只有管理員或職員可以管理班別。');
+  return context;
 }
 
 function text(formData: FormData, key: string) {
@@ -47,13 +43,18 @@ export async function createExamCohortAction(
   const leadTeacherId = nullableText(formData, 'lead_teacher_id');
   const status = text(formData, 'status') || 'draft';
 
-  if (!name || !subject || !level || !examDate || !weekdayPattern) {
-    return { status: 'error', message: 'Name, subject, level, exam date and weekday are required.' };
-  }
+  if (!name || !subject || !level || !examDate || !weekdayPattern) return { status: 'error', message: '請填寫班別名稱、科目、程度、考試日期及上課日。' };
+  if (!['draft', 'active'].includes(status)) return { status: 'error', message: '班別狀態無效。' };
 
   try {
-    const supabase = await requireStaff();
-    const { error } = await supabase.from('exam_cohorts').insert({
+    const context = await requireManager();
+    if (leadTeacherId) {
+      const { data: teacher, error: teacherError } = await context.supabase.from('teacher_profiles').select('id').eq('id', leadTeacherId).eq('organization_id', context.organizationId).eq('is_active', true).maybeSingle();
+      if (teacherError || !teacher) throw teacherError ?? userFacingError('所選導師已不存在或不屬於目前機構，請重新選擇。');
+    }
+
+    const { error } = await context.supabase.from('exam_cohorts').insert({
+      organization_id: context.organizationId,
       name,
       subject,
       level,
@@ -62,13 +63,14 @@ export async function createExamCohortAction(
       lead_teacher_id: leadTeacherId,
       status
     });
-
-    if (error) return { status: 'error', message: error.message };
+    if (error) throw error;
 
     revalidatePath('/admin/exam-cohorts');
-    return { status: 'success', message: 'Exam cohort created.' };
+    revalidatePath('/admin/classes');
+    revalidatePath('/admin/dashboard');
+    return { status: 'success', message: '班別已建立。' };
   } catch (error) {
-    return { status: 'error', message: error instanceof Error ? error.message : 'Create failed.' };
+    return { status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '建立班別失敗，請稍後再試。', 'create-cohort') };
   }
 }
 
@@ -78,23 +80,31 @@ export async function addCohortStudentAction(
   formData: FormData
 ): Promise<ExamCohortFormState> {
   const studentId = text(formData, 'student_id');
-  if (!studentId) return { status: 'error', message: 'Student ID is required.' };
+  if (!studentId) return { status: 'error', message: '請選擇要加入的學生。' };
 
   try {
-    const supabase = await requireStaff();
-    const { error } = await supabase.from('cohort_students').insert({
+    const context = await requireManager();
+    const [{ data: cohort, error: cohortError }, { data: student, error: studentError }] = await Promise.all([
+      context.supabase.from('exam_cohorts').select('id').eq('id', cohortId).eq('organization_id', context.organizationId).maybeSingle(),
+      context.supabase.from('students').select('id').eq('id', studentId).eq('organization_id', context.organizationId).eq('status', 'active').maybeSingle()
+    ]);
+    if (cohortError || studentError) throw cohortError ?? studentError;
+    if (!cohort || !student) throw userFacingError('所選班別或學生已不存在，或不屬於目前機構，請重新選擇。');
+
+    const { error } = await context.supabase.from('cohort_students').insert({
+      organization_id: context.organizationId,
       cohort_id: cohortId,
       student_id: studentId,
       status: 'active'
     });
-
-    if (error) return { status: 'error', message: error.message };
+    if (error) throw error;
 
     revalidatePath('/admin/exam-cohorts');
     revalidatePath(`/admin/exam-cohorts/${cohortId}`);
-    return { status: 'success', message: 'Student added to cohort.' };
+    revalidatePath('/admin/students');
+    return { status: 'success', message: '學生已加入班別。' };
   } catch (error) {
-    return { status: 'error', message: error instanceof Error ? error.message : 'Add student failed.' };
+    return { status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '加入學生失敗，請稍後再試。', 'add-cohort-student') };
   }
 }
 
@@ -108,25 +118,28 @@ export async function saveLessonPlanAction(
     return {
       cohort_id: cohortId,
       sequence_no: sequenceNo,
-      title: text(formData, `title_${sequenceNo}`) || `Lesson ${sequenceNo}`,
+      title: text(formData, `title_${sequenceNo}`) || `第 ${sequenceNo} 堂`,
       teaching_content: nullableText(formData, `teaching_content_${sequenceNo}`),
       makeup_guidance: nullableText(formData, `makeup_guidance_${sequenceNo}`)
     };
   });
 
   try {
-    const supabase = await requireStaff();
-    const { error } = await supabase
-      .from('lesson_plans')
-      .upsert(rows, { onConflict: 'cohort_id,sequence_no' });
+    const context = await requireManager();
+    const { data: cohort, error: cohortError } = await context.supabase.from('exam_cohorts').select('id').eq('id', cohortId).eq('organization_id', context.organizationId).maybeSingle();
+    if (cohortError || !cohort) throw cohortError ?? userFacingError('班別已不存在或不屬於目前機構。');
 
-    if (error) return { status: 'error', message: error.message };
+    const { error } = await context.supabase.from('lesson_plans').upsert(
+      rows.map(row => ({ ...row, organization_id: context.organizationId })),
+      { onConflict: 'cohort_id,sequence_no' }
+    );
+    if (error) throw error;
 
     revalidatePath(`/admin/exam-cohorts/${cohortId}`);
     revalidatePath(`/admin/exam-cohorts/${cohortId}/lesson-plans`);
-    return { status: 'success', message: 'Lesson plans saved.' };
+    return { status: 'success', message: '教案已儲存。' };
   } catch (error) {
-    return { status: 'error', message: error instanceof Error ? error.message : 'Save failed.' };
+    return { status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '儲存教案失敗，請稍後再試。', 'save-lesson-plan') };
   }
 }
 
@@ -141,40 +154,34 @@ export async function createLessonSessionAction(
   const endsAt = macauDateTimeLocalToIso(text(formData, 'ends_at'));
   const status = text(formData, 'status') || 'scheduled';
 
-  if (!lessonPlanId || !teacherId || !startsAt || !endsAt) {
-    return { status: 'error', message: 'Lesson, teacher, start time and end time are required.' };
-  }
-
-  if (!['scheduled', 'completed', 'cancelled'].includes(status)) {
-    return { status: 'error', message: 'Invalid lesson session status.' };
-  }
-
-  if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
-    return { status: 'error', message: 'End time must be after start time.' };
-  }
+  if (!lessonPlanId || !teacherId || !startsAt || !endsAt) return { status: 'error', message: '請選擇教案、導師及填寫開始與結束時間。' };
+  if (!['scheduled', 'completed', 'cancelled'].includes(status)) return { status: 'error', message: '課堂狀態無效。' };
+  if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) return { status: 'error', message: '結束時間必須晚於開始時間。' };
 
   try {
-    const supabase = await requireStaff();
-
-    const [{ data: lessonPlan }, { data: teacher }] = await Promise.all([
-      supabase.from('lesson_plans').select('id').eq('id', lessonPlanId).eq('cohort_id', cohortId).maybeSingle(),
-      supabase.from('teacher_profiles').select('id').eq('id', teacherId).eq('is_active', true).maybeSingle()
+    const context = await requireManager();
+    const [{ data: lessonPlan, error: lessonPlanError }, { data: teacher, error: teacherError }, { data: cohort, error: cohortError }] = await Promise.all([
+      context.supabase.from('lesson_plans').select('id').eq('id', lessonPlanId).eq('cohort_id', cohortId).eq('organization_id', context.organizationId).maybeSingle(),
+      context.supabase.from('teacher_profiles').select('id').eq('id', teacherId).eq('organization_id', context.organizationId).eq('is_active', true).maybeSingle(),
+      context.supabase.from('exam_cohorts').select('id').eq('id', cohortId).eq('organization_id', context.organizationId).maybeSingle()
     ]);
+    if (lessonPlanError || teacherError || cohortError) throw lessonPlanError ?? teacherError ?? cohortError;
+    if (!cohort) throw userFacingError('班別已不存在或不屬於目前機構。');
+    if (!lessonPlan) throw userFacingError('所選教案已不存在或不屬於此班別，請重新選擇。');
+    if (!teacher) throw userFacingError('所選導師未啟用或不屬於目前機構，請重新選擇。');
 
-    if (!lessonPlan) return { status: 'error', message: 'Selected lesson does not belong to this cohort.' };
-    if (!teacher) return { status: 'error', message: 'Selected teacher is not active.' };
-
-    const { data: duplicate } = await supabase
-      .from('lesson_sessions')
+    const { data: duplicate, error: duplicateError } = await context.supabase.from('lesson_sessions')
       .select('id')
+      .eq('organization_id', context.organizationId)
       .eq('cohort_id', cohortId)
       .eq('lesson_plan_id', lessonPlanId)
       .eq('starts_at', startsAt)
       .maybeSingle();
+    if (duplicateError) throw duplicateError;
+    if (duplicate) throw userFacingError('相同教案及開始時間已有課堂，請勿重複建立。');
 
-    if (duplicate) return { status: 'error', message: 'A session for this lesson and start time already exists.' };
-
-    const { error } = await supabase.from('lesson_sessions').insert({
+    const { error } = await context.supabase.from('lesson_sessions').insert({
+      organization_id: context.organizationId,
       cohort_id: cohortId,
       lesson_plan_id: lessonPlanId,
       teacher_id: teacherId,
@@ -182,13 +189,14 @@ export async function createLessonSessionAction(
       ends_at: endsAt,
       status
     });
-
-    if (error) return { status: 'error', message: error.message };
+    if (error) throw error;
 
     revalidatePath(`/admin/exam-cohorts/${cohortId}`);
     revalidatePath(`/admin/exam-cohorts/${cohortId}/lesson-sessions`);
-    return { status: 'success', message: 'Lesson session created.' };
+    revalidatePath('/admin/sessions');
+    revalidatePath('/admin/dashboard');
+    return { status: 'success', message: '未來課堂已建立。' };
   } catch (error) {
-    return { status: 'error', message: error instanceof Error ? error.message : 'Create session failed.' };
+    return { status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '建立課堂失敗，請稍後再試。', 'create-lesson-session') };
   }
 }

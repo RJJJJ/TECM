@@ -31,7 +31,7 @@ export default async function AttendancePage() {
 
   return <>
     <PageHeader title="今日點名" description="老師只會看到自己負責的今日課堂；預設全班出席，數次點擊即可提交。重複提交不會重複扣堂。"/>
-    {error ? <ErrorState message={error.message}/> : !(sessions.data ?? []).length ? <EmptyState>今天沒有需要點名的課堂。</EmptyState> :
+    {error ? <ErrorState error={error} fallback="讀取點名資料失敗，請稍後再試。"/> : !(sessions.data ?? []).length ? <EmptyState>今天沒有需要點名的課堂。</EmptyState> :
       <div className="grid gap-5">{(sessions.data ?? []).map((session: any) => {
         const roster = (enrollments.data ?? [])
           .filter((row: any) => row.cohort_id === session.cohort_id)

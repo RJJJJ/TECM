@@ -15,6 +15,7 @@
     "test:sharp": "node scripts/sharp-runtime-smoke.mjs",
     "security:image-guard": "node scripts/image-processing-guard.mjs",
     "test:e2e": "playwright test",
+    "test:e2e:verify": "node scripts/verify-playwright-results.mjs",
     "test:e2e:list": "playwright test --list"
   },
   "dependencies": {

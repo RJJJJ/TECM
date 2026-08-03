@@ -23,6 +23,9 @@ jobs:
       - name: Verify migrations, repeatable seed, RLS, and SQL suites
         shell: pwsh
         run: ./scripts/testing/database-verify.ps1
+      - name: Verify Admin mutation resistance with isolated negative controls
+        shell: pwsh
+        run: ./scripts/testing/admin-operations-mutation-verify.ps1
 
   admin-web:
     runs-on: ubuntu-latest
@@ -68,12 +71,16 @@ jobs:
         with:
           deno-version: v2.x
       - run: node scripts/testing/validate-n8n.mjs
+      - run: node scripts/testing/validate-release-workflow.mjs
       - run: node scripts/testing/repository-security-scan.mjs
       - run: deno check supabase/functions/send-apns/index.ts
 
   admin-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      TECM_EXPECTED_GITHUB_RUN_ID: ${{ github.run_id }}
+      TECM_EXPECTED_GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,39 +92,85 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: admin-web/package-lock.json
+      - name: Establish canonical Admin E2E identity
+        run: |
+          set -euo pipefail
+          identity_json="$(node admin-web/scripts/test-run-identity.mjs)"
+          test "$(jq -er .source <<<"$identity_json")" = 'github-actions'
+          echo "TECM_TEST_RUN_ID=$(jq -er .canonicalId <<<"$identity_json")" >> "$GITHUB_ENV"
+          echo 'TECM_TEST_RUN_SOURCE=github-actions' >> "$GITHUB_ENV"
       - uses: supabase/setup-cli@v1
         with:
           version: latest
       - name: Start local Supabase and reset schema
         run: |
-          supabase start
-          supabase db reset
+          TECM_SUPABASE_NETWORK="tecm-local-only-${TECM_TEST_RUN_ID}"
+          docker network create \
+            --driver bridge \
+            --opt com.docker.network.bridge.host_binding_ipv4=127.0.0.1 \
+            "$TECM_SUPABASE_NETWORK" >/dev/null
+          if ! supabase start --network-id "$TECM_SUPABASE_NETWORK" >/dev/null 2>&1; then
+            echo 'Supabase local stack start failed' >&2
+            docker ps -a --filter name=supabase_ --format 'local Supabase service: {{.Names}} {{.Status}}' >&2
+            exit 1
+          fi
+          if ! supabase db reset --network-id "$TECM_SUPABASE_NETWORK" >/dev/null 2>&1; then
+            echo 'Supabase local database reset failed' >&2
+            exit 1
+          fi
           KONG_CONTAINER="$(docker ps --filter name=supabase_kong_ --format '{{.Names}}' | head -n 1)"
           test -n "$KONG_CONTAINER"
           docker restart "$KONG_CONTAINER" >/dev/null
-          API_URL="$(supabase status -o json | jq -r .API_URL)"
-          ANON_KEY="$(supabase status -o json | jq -r .ANON_KEY)"
-          for attempt in $(seq 1 20); do
-            if curl --fail --silent --show-error --header "apikey: $ANON_KEY" "$API_URL/auth/v1/health" >/dev/null; then
-              break
-            fi
-            test "$attempt" -lt 20
-            sleep 2
-          done
-          echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
-          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
-          echo "SUPABASE_SERVICE_ROLE_KEY=$(supabase status -o json | jq -r .SERVICE_ROLE_KEY)" >> "$GITHUB_ENV"
+          bash scripts/testing/verify-local-supabase.sh
       - name: Install Admin Web and Chromium
         working-directory: admin-web
         run: |
           npm ci
           npx playwright install --with-deps chromium webkit
-      - name: Run live Playwright flows
-        working-directory: admin-web
-        env:
-          PLAYWRIGHT_ADMIN_EMAIL: admin@tecm.local
-          PLAYWRIGHT_ADMIN_PASSWORD: LocalDemoOnly-1234
-        run: npm run test:e2e
+      - name: Run live Playwright flows and verify zero skips
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity_json="$(node admin-web/scripts/test-run-identity.mjs)"
+          canonical_id="$(jq -er .canonicalId <<<"$identity_json")"
+          test "$(jq -er .source <<<"$identity_json")" = 'github-actions'
+          test "$canonical_id" = "$TECM_TEST_RUN_ID"
+          status_json="$(supabase status -o json)"
+          API_URL="$(jq -er .API_URL <<<"$status_json")"
+          ANON_KEY="$(jq -er .ANON_KEY <<<"$status_json")"
+          SERVICE_ROLE_KEY="$(jq -er .SERVICE_ROLE_KEY <<<"$status_json")"
+          case "$API_URL" in
+            http://127.0.0.1:*) ;;
+            *) echo "Refusing non-local Supabase URL" >&2; exit 1 ;;
+          esac
+          test -n "$ANON_KEY"
+          test -n "$SERVICE_ROLE_KEY"
+          echo "::add-mask::$ANON_KEY"
+          echo "::add-mask::$SERVICE_ROLE_KEY"
+          LOCAL_E2E_PASSWORD="$(openssl rand -hex 32)"
+          echo "::add-mask::$LOCAL_E2E_PASSWORD"
+          curl --fail --silent --show-error \
+            --request PUT \
+            --header "apikey: $SERVICE_ROLE_KEY" \
+            --header "Authorization: Bearer $SERVICE_ROLE_KEY" \
+            --header 'Content-Type: application/json' \
+            --data "$(jq -cn --arg password "$LOCAL_E2E_PASSWORD" '{password: $password, email_confirm: true}')" \
+            "$API_URL/auth/v1/admin/users/10000000-0000-4000-8000-000000000001" >/dev/null
+          export NEXT_PUBLIC_SUPABASE_URL="$API_URL"
+          export NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY"
+          export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
+          export TECM_ORGANIZATION_ID='10000000-0000-4000-8000-000000000000'
+          export PLAYWRIGHT_ADMIN_EMAIL='admin@tecm.local'
+          export PLAYWRIGHT_ADMIN_PASSWORD="$LOCAL_E2E_PASSWORD"
+          export PLAYWRIGHT_BASE_URL='http://127.0.0.1:3000'
+          export PLAYWRIGHT_RUN_ID="$TECM_TEST_RUN_ID"
+          export PLAYWRIGHT_RESULT_FILE="test-results/playwright-results-${TECM_TEST_RUN_ID}.json"
+          export PLAYWRIGHT_EXPECTED_TESTS=8
+          cd admin-web
+          npm run test:e2e
+          npm run test:e2e:verify
+          unset SERVICE_ROLE_KEY LOCAL_E2E_PASSWORD PLAYWRIGHT_ADMIN_PASSWORD
 
   ios:
     runs-on: macos-15

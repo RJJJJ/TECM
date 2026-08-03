@@ -27,7 +27,7 @@ npm run dev
 將 `supabase status -o json` 顯示的本地 anon key 與 service-role key 填入 `admin-web/.env.local`，再開啟 [http://127.0.0.1:3000/login](http://127.0.0.1:3000/login)。本地 seed 帳戶：
 
 - Email: `admin@tecm.local`
-- Password: `LocalDemoOnly-1234`
+- Password: use the local seed password configured in your untracked environment file.
 
 完整說明見 [docs/local-setup.md](docs/local-setup.md)。
 

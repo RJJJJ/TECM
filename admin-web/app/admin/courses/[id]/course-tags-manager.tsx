@@ -30,7 +30,7 @@ function AddTagButton() {
       disabled={pending}
       className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
     >
-      {pending ? '新增中...' : '新增 Tag'}
+      {pending ? '新增中...' : '新增標籤'}
     </button>
   );
 }
@@ -57,8 +57,8 @@ export default function CourseTagsManager({ courseId, tags }: Props) {
   return (
     <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div>
-        <h3 className="text-lg font-semibold text-slate-900">Course Tags</h3>
-        <p className="mt-1 text-xs text-slate-500">查看 / 新增 / 刪除 course_tags。</p>
+        <h3 className="text-lg font-semibold text-slate-900">課程標籤</h3>
+        <p className="mt-1 text-xs text-slate-500">查看、新增或刪除課程標籤。</p>
       </div>
 
       <form
@@ -70,13 +70,13 @@ export default function CourseTagsManager({ courseId, tags }: Props) {
 
           if (!tag) {
             event.preventDefault();
-            setClientMessage('Tag 不可空白。');
+            setClientMessage('標籤不可空白。');
             return;
           }
 
           if (normalizedTagSet.has(tag.toLocaleLowerCase())) {
             event.preventDefault();
-            setClientMessage('Tag 已存在，不可重複新增。');
+            setClientMessage('標籤已存在，不可重複新增。');
             return;
           }
 
@@ -87,7 +87,7 @@ export default function CourseTagsManager({ courseId, tags }: Props) {
       >
         <div>
           <label htmlFor="tag" className="mb-1 block text-sm font-medium text-slate-700">
-            New Tag
+            新標籤
           </label>
           <input
             id="tag"
@@ -108,7 +108,7 @@ export default function CourseTagsManager({ courseId, tags }: Props) {
       </form>
 
       {tags.length === 0 && (
-        <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600">目前沒有 tags。</p>
+        <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600">目前沒有標籤。</p>
       )}
 
       {tags.length > 0 && (
@@ -116,9 +116,9 @@ export default function CourseTagsManager({ courseId, tags }: Props) {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50">
               <tr>
-                <th className="px-4 py-3 text-left font-medium text-slate-600">Tag</th>
-                <th className="px-4 py-3 text-left font-medium text-slate-600">Created At</th>
-                <th className="px-4 py-3 text-right font-medium text-slate-600">Action</th>
+                <th className="px-4 py-3 text-left font-medium text-slate-600">標籤</th>
+                <th className="px-4 py-3 text-left font-medium text-slate-600">建立時間</th>
+                <th className="px-4 py-3 text-right font-medium text-slate-600">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
@@ -138,7 +138,7 @@ export default function CourseTagsManager({ courseId, tags }: Props) {
                         startDeleteTransition(async () => {
                           const result = await deleteCourseTagAction(courseId, item.id);
                           if (result.status === 'success') {
-                            setDeleteMessage(result.message ?? 'Tag 已刪除。');
+                            setDeleteMessage(result.message ?? '標籤已刪除。');
                           } else if (result.status === 'error') {
                             setDeleteError(result.message ?? '刪除失敗。');
                           }

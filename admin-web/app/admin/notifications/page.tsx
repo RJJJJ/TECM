@@ -1,5 +1,7 @@
 import { Badge, DataTable, EmptyState, ErrorState, Metric, PageHeader, Panel } from '@/components/operations-ui';
 import { formatMacauDateTime, getOperationsContext } from '@/lib/operations/context';
+import { userFacingError } from '@/lib/operations/errors';
+import { statusLabel } from '@/lib/operations/labels';
 import { publishAnnouncementAction, saveNotificationTemplateAction } from './actions';
 
 const deliveryLabel: Record<string, string> = {
@@ -9,7 +11,7 @@ const deliveryLabel: Record<string, string> = {
 
 export default async function NotificationsPage() {
   const { supabase, organizationId, role } = await getOperationsContext();
-  if (!['admin', 'staff'].includes(role)) throw new Error('未獲授權管理通知。');
+  if (!['admin', 'staff'].includes(role)) throw userFacingError('未獲授權管理通知。');
   const [announcements, deliveries, recipients, templates] = await Promise.all([
     supabase.from('notification_announcements').select('id,title,category,status,recipient_count,sent_at,created_at').eq('organization_id', organizationId).order('created_at', { ascending: false }).limit(30),
     supabase.from('notification_outbox').select('status').eq('organization_id', organizationId),
@@ -47,14 +49,14 @@ export default async function NotificationsPage() {
       </Panel>
     </div>
     <div className="mt-5"><Panel title="最近發送">
-      {announcements.error ? <ErrorState message={announcements.error.message} /> : !announcements.data?.length ? <EmptyState>尚未發送通知。</EmptyState> : <DataTable headers={['標題', '類別', '收件人', '狀態', '發送時間']}>
-        {announcements.data.map((item) => <tr key={item.id}><td className="px-4 py-3 font-medium">{item.title}</td><td className="px-4 py-3">{item.category}</td><td className="px-4 py-3">{item.recipient_count}</td><td className="px-4 py-3"><Badge tone={item.status === 'sent' ? 'green' : 'slate'}>{item.status === 'sent' ? '已發送' : item.status}</Badge></td><td className="px-4 py-3">{formatMacauDateTime(item.sent_at ?? item.created_at)}</td></tr>)}
+      {announcements.error ? <ErrorState error={announcements.error} fallback="讀取通知紀錄失敗，請稍後再試。" /> : !announcements.data?.length ? <EmptyState>尚未發送通知。</EmptyState> : <DataTable headers={['標題', '類別', '收件人', '狀態', '發送時間']}>
+        {announcements.data.map((item) => <tr key={item.id}><td className="px-4 py-3 font-medium">{item.title}</td><td className="px-4 py-3">{statusLabel(item.category)}</td><td className="px-4 py-3">{item.recipient_count}</td><td className="px-4 py-3"><Badge tone={item.status === 'sent' ? 'green' : 'slate'}>{statusLabel(item.status)}</Badge></td><td className="px-4 py-3">{formatMacauDateTime(item.sent_at ?? item.created_at)}</td></tr>)}
       </DataTable>}
     </Panel></div>
     <div className="mt-5 grid gap-5 xl:grid-cols-2">
       <Panel title="通知範本">
-        {templates.error ? <ErrorState message={templates.error.message} /> : !templates.data?.length ? <EmptyState>尚未建立範本。</EmptyState> : <DataTable headers={['名稱', '識別碼', '類別', '標題']}>
-          {templates.data.map((template) => <tr key={template.id}><td className="px-4 py-3 font-medium">{template.name}</td><td className="px-4 py-3 font-mono text-xs">{template.template_key}</td><td className="px-4 py-3">{template.category}</td><td className="px-4 py-3">{template.title}</td></tr>)}
+        {templates.error ? <ErrorState error={templates.error} fallback="讀取通知範本失敗，請稍後再試。" /> : !templates.data?.length ? <EmptyState>尚未建立範本。</EmptyState> : <DataTable headers={['名稱', '識別碼', '類別', '標題']}>
+          {templates.data.map((template) => <tr key={template.id}><td className="px-4 py-3 font-medium">{template.name}</td><td className="px-4 py-3 font-mono text-xs">{template.template_key}</td><td className="px-4 py-3">{statusLabel(template.category)}</td><td className="px-4 py-3">{template.title}</td></tr>)}
         </DataTable>}
       </Panel>
       <Panel title="建立／更新範本"><form action={saveNotificationTemplateAction} className="grid gap-3">
