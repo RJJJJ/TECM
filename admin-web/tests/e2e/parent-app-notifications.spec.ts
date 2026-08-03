@@ -94,16 +94,11 @@ test.describe('家長 App 帳戶與通知', () => {
       controlUserId = controlUser?.user?.id;
       if (!controlUserId) throw new Error('control fixture user was not created');
 
-      const { error: controlMemberError } = await service.from('organization_members').insert({
-        organization_id: controlOrganizationId,
-        user_id: controlUserId,
-        role: 'staff',
-        status: 'active'
-      });
-      expect(controlMemberError).toBeNull();
-
       // push_devices is unique by (user_id, installation_id), so this deliberately
       // exercises the same installation_id in two different synthetic tenants.
+      // The control user does not need an organization membership: service-role
+      // access is intentional here, and membership audit rows are append-only and
+      // would prevent exact control-organization teardown.
       const { error: controlDeviceError } = await service.from('push_devices').insert({
         organization_id: controlOrganizationId,
         user_id: controlUserId,
@@ -473,18 +468,6 @@ test.describe('家長 App 帳戶與通知', () => {
       if (controlDevice) controlCleanupSteps.push(...buildPushDeviceCleanupSteps(service, [controlDevice]));
       if (controlOrganizationId && controlUserId) {
         controlCleanupSteps.push(
-          {
-            resource: 'organization_members',
-            stage: 'control_delete',
-            run: async () => {
-              const { error } = await service
-                .from('organization_members')
-                .delete()
-                .eq('organization_id', controlOrganizationId!)
-                .eq('user_id', controlUserId!);
-              if (error) throw error;
-            }
-          },
           {
             resource: 'auth_user',
             stage: 'control_delete',

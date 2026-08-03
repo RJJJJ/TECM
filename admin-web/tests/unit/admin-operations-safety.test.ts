@@ -212,6 +212,7 @@ test('credentialed Admin E2E is loopback-only and release results cannot silentl
   assert.match(notificationSpec, /control_after/);
   assert.match(notificationSpec, /residue_count/);
   assert.match(notificationSpec, /randomUUID/);
+  assert.doesNotMatch(notificationSpec, /controlMemberError/);
   assert.doesNotMatch(notificationSpec, /forbidden_\$\{Date\.now\(\)\}/);
   assert.match(identity, /local-only/);
   assert.match(reporter, /configuredProjects/);
