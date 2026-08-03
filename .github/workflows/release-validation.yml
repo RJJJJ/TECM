@@ -71,6 +71,7 @@ jobs:
         with:
           deno-version: v2.x
       - run: node scripts/testing/validate-n8n.mjs
+      - run: node scripts/testing/validate-release-workflow.mjs
       - run: node scripts/testing/repository-security-scan.mjs
       - run: deno check supabase/functions/send-apns/index.ts
 
@@ -93,23 +94,12 @@ jobs:
           version: latest
       - name: Start local Supabase and reset schema
         run: |
-          supabase start
-          supabase db reset
+          supabase start >/dev/null 2>&1
+          supabase db reset >/dev/null 2>&1
           KONG_CONTAINER="$(docker ps --filter name=supabase_kong_ --format '{{.Names}}' | head -n 1)"
           test -n "$KONG_CONTAINER"
           docker restart "$KONG_CONTAINER" >/dev/null
-          API_URL="$(supabase status -o json | jq -r .API_URL)"
-          case "$API_URL" in
-            http://127.0.0.1:*) ;;
-            *) echo "Refusing non-local Supabase URL: $API_URL" >&2; exit 1 ;;
-          esac
-          for attempt in $(seq 1 20); do
-            if curl --fail --silent --show-error "$API_URL/auth/v1/health" >/dev/null; then
-              break
-            fi
-            test "$attempt" -lt 20
-            sleep 2
-          done
+          bash scripts/testing/verify-local-supabase.sh
       - name: Install Admin Web and Chromium
         working-directory: admin-web
         run: |
@@ -120,12 +110,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          API_URL="$(supabase status -o json | jq -r .API_URL)"
-          ANON_KEY="$(supabase status -o json | jq -r .ANON_KEY)"
-          SERVICE_ROLE_KEY="$(supabase status -o json | jq -r .SERVICE_ROLE_KEY)"
+          status_json="$(supabase status -o json)"
+          API_URL="$(jq -er .API_URL <<<"$status_json")"
+          ANON_KEY="$(jq -er .ANON_KEY <<<"$status_json")"
+          SERVICE_ROLE_KEY="$(jq -er .SERVICE_ROLE_KEY <<<"$status_json")"
           case "$API_URL" in
             http://127.0.0.1:*) ;;
-            *) echo "Refusing non-local Supabase URL: $API_URL" >&2; exit 1 ;;
+            *) echo "Refusing non-local Supabase URL" >&2; exit 1 ;;
           esac
           test -n "$ANON_KEY"
           test -n "$SERVICE_ROLE_KEY"

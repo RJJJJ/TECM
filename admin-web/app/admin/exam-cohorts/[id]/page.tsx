@@ -140,7 +140,7 @@ export default async function ExamCohortDetailPage({ params }: { params: Promise
               {students.map((row) => (
                 <div key={row.id} className="flex justify-between rounded-lg border border-slate-200 p-3 text-sm">
                   <span>{row.students?.display_name ?? '-'}</span>
-                   <Badge>{row.status}</Badge>
+                   <Badge>{statusLabel(row.status)}</Badge>
                 </div>
               ))}
             </div>

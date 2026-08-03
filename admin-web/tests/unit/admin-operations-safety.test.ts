@@ -150,18 +150,28 @@ test('operator-facing statuses and setup validation use Traditional Chinese labe
 test('targeted admin status surfaces call statusLabel instead of rendering raw enum text', () => {
   const targets = [
     'app/admin/classes/page.tsx',
+    'app/admin/exam-cohorts/page.tsx',
+    'app/admin/exam-cohorts/[id]/page.tsx',
+    'app/admin/exam-cohorts/[id]/lesson-sessions/page.tsx',
     'app/admin/leave-makeup/page.tsx',
     'app/admin/makeup/page.tsx',
+    'app/admin/makeup/[id]/page.tsx',
+    'app/admin/makeup/schedule/page.tsx',
     'app/admin/notifications/page.tsx',
+    'app/admin/packages/page.tsx',
+    'app/admin/payments/page.tsx',
     'app/admin/sessions/page.tsx',
-    'app/admin/makeup/schedule/page.tsx'
+    'app/admin/follow-ups/page.tsx'
   ];
 
   for (const path of targets) {
     const page = source(path);
     assert.match(page, /statusLabel/);
-    assert.doesNotMatch(page, /<Badge[^>\n]*>\{(?:item|row|task|session)\.(?:status|priority)\}<\/Badge>/);
+    assert.doesNotMatch(page, />\{(?:cohort|item|plan|row|session|task)\.(?:status|priority|missed_status)\}<\//);
+    assert.doesNotMatch(page, /value=\{(?:item|plan|task)\.(?:status|priority|missed_status)\}/);
   }
+
+  assert.doesNotMatch(source('app/admin/follow-ups/page.tsx'), /TASK_TYPE_LABELS\[task\.task_type\]\s*\?\?\s*task\.task_type/);
 });
 
 test('credentialed Admin E2E is loopback-only and release results cannot silently skip', () => {
@@ -171,7 +181,8 @@ test('credentialed Admin E2E is loopback-only and release results cannot silentl
   const workflow = readFileSync(resolve(adminWebRoot, '../.github/workflows/release-validation.yml'), 'utf8');
 
   assert.match(environment, /LOCAL_E2E_ORGANIZATION_ID/);
-  assert.match(environment, /127\\.0\\.0\\.1/);
+  assert.match(environment, /assertLoopbackHttpUrl/);
+  assert.match(environment, /PLAYWRIGHT_BASE_URL/);
   assert.match(environment, /TECM_E2E_ALLOW_MISSING_SUPABASE/);
   assert.match(environment, /must use the deterministic local organization/);
   assert.match(resultVerifier, /release validation never accepts skipped tests/);
@@ -181,5 +192,39 @@ test('credentialed Admin E2E is loopback-only and release results cannot silentl
   assert.match(reporter, /counts/);
   assert.match(workflow, /TECM_ORGANIZATION_ID='10000000-0000-4000-8000-000000000000'/);
   assert.match(workflow, /npm run test:e2e:verify/);
+  assert.match(workflow, /supabase start >\/dev\/null 2>&1/);
+  assert.match(workflow, /bash scripts\/testing\/verify-local-supabase\.sh/);
+  assert.match(workflow, /status_json="\$\(supabase status -o json\)"/);
+  assert.doesNotMatch(workflow, /^\s*supabase start\s*$/m);
+  assert.doesNotMatch(workflow, /^\s*supabase status\s*$/m);
   assert.doesNotMatch(workflow, /GITHUB_ENV/);
+});
+
+test('local E2E preflight accepts only explicit loopback http URLs', async () => {
+  const { assertLoopbackHttpUrl, assertLocalE2EPreflight } = await import('../../tests/e2e/required-env.ts');
+
+  for (const value of ['http://127.0.0.1:3000', 'http://localhost:3000/login', 'http://[::1]:3000']) {
+    assert.doesNotThrow(() => assertLoopbackHttpUrl(value, 'PLAYWRIGHT_BASE_URL'));
+  }
+
+  for (const value of [
+    'https://127.0.0.1:3000',
+    'http://192.168.1.20:3000',
+    'http://0.0.0.0:3000',
+    'not a URL',
+    'http://user:password@127.0.0.1:3000'
+  ]) {
+    assert.throws(() => assertLoopbackHttpUrl(value, 'PLAYWRIGHT_BASE_URL'));
+  }
+
+  assert.throws(() => assertLoopbackHttpUrl(undefined, 'PLAYWRIGHT_BASE_URL'));
+  assert.doesNotThrow(() => assertLocalE2EPreflight({
+    email: 'admin@tecm.local',
+    password: 'synthetic-only',
+    supabaseUrl: 'http://127.0.0.1:54321',
+    playwrightBaseUrl: 'http://127.0.0.1:3000',
+    anonKey: 'synthetic-anon-key',
+    serviceRoleKey: 'synthetic-service-role-key',
+    organizationId: '10000000-0000-4000-8000-000000000000'
+  }));
 });

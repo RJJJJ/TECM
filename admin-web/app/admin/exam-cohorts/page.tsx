@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { getOperationsContext } from '@/lib/operations/context';
 import { ErrorState, EmptyState, PageHeader, Panel, Badge, DataTable } from '@/components/operations-ui';
+import { statusLabel } from '@/lib/operations/labels';
 import CohortCreateForm from './cohort-create-form';
 
 type SearchParams = { subject?: string; level?: string; status?: string };
@@ -34,7 +35,7 @@ export default async function ExamCohortListPage({ searchParams }: { searchParam
         <button className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white" type="submit">篩選</button>
       </form>
       {error ? <ErrorState error={error} fallback="讀取班別失敗，請稍後再試。" /> : cohorts.length === 0 ? <EmptyState>尚未有符合條件的班別，請先建立班別。</EmptyState> : <DataTable headers={['班別', '科目／程度', '考試日期', '導師', '狀態', '操作']}>
-        {cohorts.map(cohort => <tr key={cohort.id}><td className="px-4 py-3 font-medium text-slate-900">{cohort.name}</td><td className="px-4 py-3">{cohort.subject}／{cohort.level}</td><td className="px-4 py-3">{cohort.exam_date} · {cohort.weekday_pattern === 'saturday' ? '星期六' : '星期日'}</td><td className="px-4 py-3">{cohort.teacher_profiles?.display_name ?? '待分配'}</td><td className="px-4 py-3"><Badge tone={cohort.status === 'active' ? 'green' : cohort.status === 'cancelled' ? 'rose' : cohort.status === 'completed' ? 'slate' : 'amber'}>{cohort.status}</Badge></td><td className="px-4 py-3"><Link className="text-sm font-medium text-teal-700 underline" href={`/admin/exam-cohorts/${cohort.id}`}>開啟班別</Link></td></tr>)}
+        {cohorts.map(cohort => <tr key={cohort.id}><td className="px-4 py-3 font-medium text-slate-900">{cohort.name}</td><td className="px-4 py-3">{cohort.subject}／{cohort.level}</td><td className="px-4 py-3">{cohort.exam_date} · {cohort.weekday_pattern === 'saturday' ? '星期六' : '星期日'}</td><td className="px-4 py-3">{cohort.teacher_profiles?.display_name ?? '待分配'}</td><td className="px-4 py-3"><Badge tone={cohort.status === 'active' ? 'green' : cohort.status === 'cancelled' ? 'rose' : cohort.status === 'completed' ? 'slate' : 'amber'}>{statusLabel(cohort.status)}</Badge></td><td className="px-4 py-3"><Link className="text-sm font-medium text-teal-700 underline" href={`/admin/exam-cohorts/${cohort.id}`}>開啟班別</Link></td></tr>)}
       </DataTable>}
     </section>
   </>;

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { getOperationsContext } from '@/lib/operations/context';
 import { ErrorState } from '@/components/operations-ui';
+import { statusLabel } from '@/lib/operations/labels';
 import FollowUpCopyButton from '../follow-up-copy-button';
 import { dismissFollowUpTaskAction, markFollowUpTaskDoneAction } from './actions';
 import {
@@ -34,15 +35,6 @@ type FollowUpRow = FollowUpTask & {
   subject_student_id: string | null;
   due_at: string | null;
   students: { display_name: string | null } | null;
-};
-
-const TASK_TYPE_LABELS: Record<string, string> = {
-  morning_summary: '早上營運摘要',
-  evening_summary: '晚上點名摘要',
-  low_credit: '低堂數／續費',
-  overdue_payment: '逾期欠費',
-  unassigned_makeup: '未安排補課',
-  weekly_report: '每週營運報告'
 };
 
 const STATUS_OPTIONS: Array<{ label: string; value: 'all' | FollowUpStatus }> = [
@@ -278,7 +270,7 @@ export default async function AdminFollowUpsPage({ searchParams }: { searchParam
                 <span className={followUpPriorityBadgeClass(task.priority)}>優先：{followUpPriorityLabel(task.priority)}</span>
                 <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">{followUpChannelLabel(task.channel)}</span>
                 <span className={followUpStatusBadgeClass(task.status)}>{followUpStatusLabel(task.status)}</span>
-                {task.task_type ? <span className="inline-flex rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-700">{TASK_TYPE_LABELS[task.task_type] ?? task.task_type}</span> : null}
+                {task.task_type ? <span className="inline-flex rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-700">{statusLabel(task.task_type)}</span> : null}
               </div>
 
               <div className="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-3">

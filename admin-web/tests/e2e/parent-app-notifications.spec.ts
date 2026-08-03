@@ -6,6 +6,7 @@ import {
   credentialedE2ELocalOptOutEnabled,
   credentialedE2EEnvironment,
 } from './required-env';
+import { runBestEffortNotificationCleanup, type NotificationCleanupStep } from './notification-cleanup';
 
 const localOptOut = credentialedE2ELocalOptOutEnabled();
 const missingValue = localOptOut ? undefined : 'missing-required-e2e-value';
@@ -183,76 +184,134 @@ test.describe('家長 App 帳戶與通知', () => {
       primaryError = error;
       throw error;
     } finally {
-      try {
-        if (!guardianId) {
-          const { data: createdProfile, error: profileLookupError } = await service
-            .from('parent_profiles')
-            .select('id,user_id')
-            .eq('organization_id', organizationId)
-            .eq('full_name', guardianName)
-            .maybeSingle();
-          if (profileLookupError) throw profileLookupError;
-          guardianId = createdProfile?.id ?? undefined;
-          linkedAuthUserId = createdProfile?.user_id ?? linkedAuthUserId;
-        }
-        const { data: announcementsToClean, error: announcementLookupError } = await service
-          .from('notification_announcements')
-          .select('id')
-          .eq('organization_id', organizationId)
-          .eq('title', announcementTitle);
-        if (announcementLookupError) throw announcementLookupError;
-        const announcementIds = Array.from(new Set([
-          announcementId,
-          ...(announcementsToClean ?? []).map((item) => item.id)
-        ].filter((id): id is string => Boolean(id))));
-        if (announcementIds.length > 0) {
-          const { error } = await service
-            .from('notifications')
-            .delete()
-            .eq('entity_type', 'announcement')
-            .in('entity_id', announcementIds);
-          if (error) throw error;
-          const { error: announcementDeleteError } = await service
-            .from('notification_announcements')
-            .delete()
-            .in('id', announcementIds);
-          if (announcementDeleteError) throw announcementDeleteError;
-        }
-        const { error: templateDeleteError } = await service
-          .from('notification_templates')
-          .delete()
-          .eq('organization_id', organizationId)
-          .eq('template_key', templateKey);
-        if (templateDeleteError) throw templateDeleteError;
-        const { error: deviceDeleteError } = await service
-          .from('push_devices')
-          .delete()
-          .in('installation_id', [installationId, disableInstallationId]);
-        if (deviceDeleteError) throw deviceDeleteError;
-        if (guardianId) {
-          if (!linkedAuthUserId) {
-            const { data: linkedProfile, error: linkedProfileError } = await service
+      let announcementIds = Array.from(new Set([announcementId].filter((id): id is string => Boolean(id))));
+      const cleanupSteps: NotificationCleanupStep[] = [
+        {
+          resource: 'parent_profile',
+          stage: 'lookup',
+          run: async () => {
+            if (guardianId) return;
+            const { data: createdProfile, error } = await service
+              .from('parent_profiles')
+              .select('id,user_id')
+              .eq('organization_id', organizationId)
+              .eq('full_name', guardianName)
+              .maybeSingle();
+            if (error) throw error;
+            guardianId = createdProfile?.id ?? undefined;
+            linkedAuthUserId = createdProfile?.user_id ?? linkedAuthUserId;
+          }
+        },
+        {
+          resource: 'notification_announcements',
+          stage: 'lookup',
+          run: async () => {
+            const { data, error } = await service
+              .from('notification_announcements')
+              .select('id')
+              .eq('organization_id', organizationId)
+              .eq('title', announcementTitle);
+            if (error) throw error;
+            announcementIds = Array.from(new Set([
+              ...announcementIds,
+              ...(data ?? []).map((item) => item.id)
+            ].filter((id): id is string => Boolean(id))));
+          }
+        },
+        {
+          resource: 'notifications',
+          stage: 'delete',
+          run: async () => {
+            if (announcementIds.length === 0) return;
+            const { error } = await service
+              .from('notifications')
+              .delete()
+              .eq('entity_type', 'announcement')
+              .in('entity_id', announcementIds);
+            if (error) throw error;
+          }
+        },
+        {
+          resource: 'notification_announcements',
+          stage: 'delete',
+          run: async () => {
+            if (announcementIds.length === 0) return;
+            const { error } = await service
+              .from('notification_announcements')
+              .delete()
+              .in('id', announcementIds);
+            if (error) throw error;
+          }
+        },
+        {
+          resource: 'notification_templates',
+          stage: 'delete',
+          run: async () => {
+            const { error } = await service
+              .from('notification_templates')
+              .delete()
+              .eq('organization_id', organizationId)
+              .eq('template_key', templateKey);
+            if (error) throw error;
+          }
+        },
+        {
+          resource: 'push_devices',
+          stage: 'delete',
+          run: async () => {
+            const { error } = await service
+              .from('push_devices')
+              .delete()
+              .in('installation_id', [installationId, disableInstallationId]);
+            if (error) throw error;
+          }
+        },
+        {
+          resource: 'parent_profile',
+          stage: 'lookup_auth_user',
+          run: async () => {
+            if (!guardianId || linkedAuthUserId) return;
+            const { data, error } = await service
               .from('parent_profiles')
               .select('user_id')
               .eq('id', guardianId)
               .maybeSingle();
-            if (linkedProfileError) throw linkedProfileError;
-            linkedAuthUserId = linkedProfile?.user_id ?? undefined;
+            if (error) throw error;
+            linkedAuthUserId = data?.user_id ?? undefined;
           }
-          const { error: guardianDeleteError } = await service
-            .from('parent_profiles')
-            .delete()
-            .eq('id', guardianId);
-          if (guardianDeleteError) throw guardianDeleteError;
+        },
+        {
+          resource: 'parent_profile',
+          stage: 'delete',
+          run: async () => {
+            if (!guardianId) return;
+            const { error } = await service
+              .from('parent_profiles')
+              .delete()
+              .eq('id', guardianId);
+            if (error) throw error;
+          }
+        },
+        {
+          resource: 'auth_user',
+          stage: 'delete',
+          run: async () => {
+            if (!linkedAuthUserId) return;
+            const { error } = await service.auth.admin.deleteUser(linkedAuthUserId);
+            if (error) throw error;
+          }
         }
-        if (linkedAuthUserId) {
-          const { error: authDeleteError } = await service.auth.admin.deleteUser(linkedAuthUserId);
-          if (authDeleteError) throw authDeleteError;
-        }
+      ];
+
+      try {
+        await runBestEffortNotificationCleanup(cleanupSteps);
         console.info(JSON.stringify({ runId, cleanup: 'passed' }));
-      } catch {
-        console.error(JSON.stringify({ runId, cleanup: 'failed', cleanupError: 'sanitized cleanup failure' }));
-        if (!primaryError) throw new Error('notification E2E cleanup failed; see sanitized cleanup report');
+      } catch (error) {
+        const failures = error instanceof Error && 'failures' in error
+          ? (error as { failures: Array<{ resource: string; stage: string }> }).failures
+          : [{ resource: 'unknown', stage: 'aggregate' }];
+        console.error(JSON.stringify({ runId, cleanup: 'failed', failures }));
+        if (!primaryError) throw error;
       }
     }
   });

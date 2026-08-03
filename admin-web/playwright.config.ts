@@ -1,4 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
+import { assertCredentialedE2EEnvironment, credentialedE2EEnvironment, requiredPlaywrightBaseUrl } from './tests/e2e/required-env';
+
+const e2eEnvironment = credentialedE2EEnvironment();
+assertCredentialedE2EEnvironment(e2eEnvironment);
+const baseURL = requiredPlaywrightBaseUrl(e2eEnvironment);
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -14,7 +19,7 @@ export default defineConfig({
     ['html', { open: 'never', outputFolder: 'playwright-report' }]
   ],
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:3000',
+    baseURL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure'
   },
@@ -26,7 +31,7 @@ export default defineConfig({
     ? undefined
     : {
         command: 'npm run dev',
-        url: 'http://127.0.0.1:3000/login',
+        url: `${baseURL}/login`,
         reuseExistingServer: true,
         timeout: 120_000
       }

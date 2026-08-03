@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import { getOperationsContext, formatMacauDateTime } from '@/lib/operations/context';
 import { ErrorState, EmptyState, PageHeader, Badge, Panel } from '@/components/operations-ui';
+import { statusLabel } from '@/lib/operations/labels';
 import { MakeupCompletionForm, MakeupScheduleForm } from '../makeup-session-forms';
 
 type MakeupTask = {
@@ -70,7 +71,7 @@ export default async function MakeupTaskDetailPage({ params }: { params: Promise
     <section className="space-y-5">
       <PageHeader title={`${task.students?.display_name ?? '學生'}的補課安排`} description={`${task.exam_cohorts?.subject ?? ''}／${task.exam_cohorts?.level ?? ''} · ${task.exam_cohorts?.name ?? ''} · 考試日期 ${task.exam_cohorts?.exam_date ?? '—'}`} />
       <div>
-        <div className="grid gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-3"><Info label="狀態" value={task.status} /><Info label="優先程度" value={task.priority} /><Info label="缺席狀態" value={task.missed_status} /></div>
+        <div className="grid gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-3"><Info label="狀態" value={statusLabel(task.status)} /><Info label="優先程度" value={statusLabel(task.priority)} /><Info label="缺席狀態" value={statusLabel(task.missed_status)} /></div>
       </div>
 
       <Panel title="缺席課堂內容">
@@ -86,7 +87,7 @@ export default async function MakeupTaskDetailPage({ params }: { params: Promise
       <MakeupScheduleForm taskId={task.id} studentId={task.student_id} teachers={(teachers ?? []) as Array<{ id: string; display_name: string | null }>} idempotencyKey={crypto.randomUUID()} />
 
       {makeupSessions.length > 0 ? <Panel title="補課安排">
-        <div className="space-y-2 text-sm">{makeupSessions.map((session) => <div key={session.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 p-3"><span>{session.scheduled_at} · {session.teacher_profiles?.display_name ?? '未命名導師'}</span><Badge tone={session.status === 'completed' ? 'green' : session.status === 'cancelled' ? 'rose' : 'blue'}>{session.status}</Badge></div>)}</div>
+        <div className="space-y-2 text-sm">{makeupSessions.map((session) => <div key={session.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 p-3"><span>{session.scheduled_at} · {session.teacher_profiles?.display_name ?? '未命名導師'}</span><Badge tone={session.status === 'completed' ? 'green' : session.status === 'cancelled' ? 'rose' : 'blue'}>{statusLabel(session.status)}</Badge></div>)}</div>
       </Panel> : null}
 
       {canComplete ? <MakeupCompletionForm taskId={task.id} /> : task.status === 'scheduled' ? <p className="text-sm text-amber-700">只有存在一節有效的已安排補課時，才可標記完成。</p> : null}
@@ -95,5 +96,5 @@ export default async function MakeupTaskDetailPage({ params }: { params: Promise
 }
 
 function Info({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-lg border border-slate-200 p-4"><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-1 font-semibold text-slate-900"><Badge tone={value === 'completed' ? 'green' : 'slate'}>{value}</Badge></p></div>;
+  return <div className="rounded-lg border border-slate-200 p-4"><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-1 font-semibold text-slate-900"><Badge tone={value === '已完成' ? 'green' : 'slate'}>{value}</Badge></p></div>;
 }
