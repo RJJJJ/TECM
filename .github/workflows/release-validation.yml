@@ -99,8 +99,15 @@ jobs:
             --driver bridge \
             --opt com.docker.network.bridge.host_binding_ipv4=127.0.0.1 \
             "$TECM_SUPABASE_NETWORK" >/dev/null
-          supabase start --network-id "$TECM_SUPABASE_NETWORK" >/dev/null 2>&1
-          supabase db reset >/dev/null 2>&1
+          if ! supabase start --network-id "$TECM_SUPABASE_NETWORK" >/dev/null 2>&1; then
+            echo 'Supabase local stack start failed' >&2
+            docker ps -a --filter name=supabase_ --format 'local Supabase service: {{.Names}} {{.Status}}' >&2
+            exit 1
+          fi
+          if ! supabase db reset >/dev/null 2>&1; then
+            echo 'Supabase local database reset failed' >&2
+            exit 1
+          fi
           KONG_CONTAINER="$(docker ps --filter name=supabase_kong_ --format '{{.Names}}' | head -n 1)"
           test -n "$KONG_CONTAINER"
           docker restart "$KONG_CONTAINER" >/dev/null
