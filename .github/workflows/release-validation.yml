@@ -132,7 +132,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          identity_json="$(node scripts/test-run-identity.mjs)"
+          identity_json="$(node admin-web/scripts/test-run-identity.mjs)"
           canonical_id="$(jq -er .canonicalId <<<"$identity_json")"
           test "$(jq -er .source <<<"$identity_json")" = 'github-actions'
           test "$canonical_id" = "$TECM_TEST_RUN_ID"

@@ -29,6 +29,7 @@ requireMatch(workflow, /::add-mask::\$LOCAL_E2E_PASSWORD/, 'E2E password must be
 requireMatch(workflow, /TECM_EXPECTED_GITHUB_RUN_ID:\s*\$\{\{\s*github\.run_id\s*\}\}/, 'Workflow must pass authoritative GitHub run ID metadata');
 requireMatch(workflow, /TECM_EXPECTED_GITHUB_RUN_ATTEMPT:\s*\$\{\{\s*github\.run_attempt\s*\}\}/, 'Workflow must pass authoritative GitHub attempt metadata');
 requireMatch(workflow, /node admin-web\/scripts\/test-run-identity\.mjs/, 'Workflow must establish and re-check canonical test identity');
+rejectMatch(workflow, /node scripts\/test-run-identity\.mjs/, 'Root-level workflow steps must use the repository path to the identity helper');
 requireMatch(workflow, /TECM_TEST_RUN_ID/, 'Workflow must use one canonical test identity');
 requireMatch(workflow, /TECM_SUPABASE_NETWORK=\"tecm-local-only-\$\{TECM_TEST_RUN_ID\}\"/, 'Supabase namespace must use the canonical test identity');
 requireMatch(workflow, /PLAYWRIGHT_RUN_ID=\"\$TECM_TEST_RUN_ID\"/, 'Playwright run ID must use canonical test identity');

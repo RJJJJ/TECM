@@ -205,6 +205,7 @@ test('credentialed Admin E2E is loopback-only and release results cannot silentl
   assert.match(workflow, /TECM_EXPECTED_GITHUB_RUN_ID:\s*\$\{\{\s*github\.run_id\s*\}\}/);
   assert.match(workflow, /TECM_EXPECTED_GITHUB_RUN_ATTEMPT:\s*\$\{\{\s*github\.run_attempt\s*\}\}/);
   assert.match(workflow, /node admin-web\/scripts\/test-run-identity\.mjs/);
+  assert.doesNotMatch(workflow, /node scripts\/test-run-identity\.mjs/);
   assert.match(workflow, /PLAYWRIGHT_RUN_ID=\"\$TECM_TEST_RUN_ID\"/);
   assert.match(workflow, /TECM_SUPABASE_NETWORK=\"tecm-local-only-\$\{TECM_TEST_RUN_ID\}\"/);
   assert.match(workflow, /status_json="\$\(supabase status -o json\)"/);
