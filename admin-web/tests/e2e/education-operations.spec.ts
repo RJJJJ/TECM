@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { expect, test } from '@playwright/test';
 import {
@@ -26,6 +28,11 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? missingValue;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? missingValue;
 const organizationId = process.env.TECM_ORGANIZATION_ID ?? missingValue;
 const credentialedEnvironment = credentialedE2EEnvironment();
+const canonicalRunId = JSON.parse(execFileSync(
+  process.execPath,
+  [resolve(process.cwd(), 'scripts/test-run-identity.mjs')],
+  { env: process.env, encoding: 'utf8' }
+).trim()).canonicalId as string;
 
 test.beforeAll(() => {
   assertCredentialedE2EEnvironment(credentialedEnvironment);
@@ -145,7 +152,9 @@ test.describe('教育中心營運主流程', () => {
   });
 
   test('招生、報讀、收費、點名、扣堂、請假、補課及跟進', async ({ page }, testInfo) => {
-    const prefix = `TEST_ADMIN_UX_${Date.now()}`;
+    const fixtureScope = `${canonicalRunId}-${testInfo.project.name}-${testInfo.retry}`
+      .replace(/[^a-z0-9_-]/gi, '_');
+    const prefix = `TEST_ADMIN_UX_${fixtureScope}`;
     const studentName = `${prefix}_STUDENT`;
     const guardianName = `${prefix}_PARENT`;
     const campusName = `${prefix}_CAMPUS`;

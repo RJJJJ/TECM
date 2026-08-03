@@ -2,13 +2,18 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { createClient } from '@supabase/supabase-js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   assertCredentialedE2EEnvironment,
   credentialedE2ELocalOptOutEnabled,
   credentialedE2EEnvironment,
 } from './required-env';
-import { buildPushDeviceCleanupSteps, runBestEffortNotificationCleanup, type NotificationCleanupStep } from './notification-cleanup';
+import {
+  buildPushDeviceCleanupSteps,
+  runBestEffortNotificationCleanup,
+  type NotificationCleanupStep,
+  type PushDeviceCleanupTarget
+} from './notification-cleanup';
 
 const localOptOut = credentialedE2ELocalOptOutEnabled();
 const missingValue = localOptOut ? undefined : 'missing-required-e2e-value';
@@ -49,15 +54,72 @@ test.describe('家長 App 帳戶與通知', () => {
     const disableInstallationId = `disable-target-${runKey}`;
     const deviceToken = createHash('sha256').update(`${runId}:active`).digest('hex');
     const disabledDeviceToken = createHash('sha256').update(`${runId}:disabled`).digest('hex');
+    const controlDeviceToken = createHash('sha256').update(`${runId}:control`).digest('hex');
+    const forbiddenTemplateKey = `forbidden_${runKey}`;
+    const targetDevice: PushDeviceCleanupTarget = {
+      organizationId,
+      userId: activeParentUserId,
+      installationId
+    };
     const service = createClient(apiUrl!, serviceRoleKey!, {
       auth: { autoRefreshToken: false, persistSession: false }
     });
     let guardianId: string | undefined;
     let linkedAuthUserId: string | undefined;
     let announcementId: string | undefined;
+    let controlOrganizationId: string | undefined;
+    let controlUserId: string | undefined;
+    let controlDevice: PushDeviceCleanupTarget | undefined;
     let primaryError: unknown;
 
     try {
+      controlOrganizationId = randomUUID();
+      const controlEmail = `control-${runKey}-${controlOrganizationId}@tecm.test`;
+      const controlPassword = randomUUID();
+      const { error: controlOrganizationError } = await service.from('organizations').insert({
+        id: controlOrganizationId,
+        slug: `e2e-control-${runKey}-${controlOrganizationId.slice(0, 8)}`,
+        name: `E2E control tenant ${runId}`,
+        timezone: 'Asia/Macau',
+        currency_code: 'MOP'
+      });
+      expect(controlOrganizationError).toBeNull();
+
+      const { data: controlUser, error: controlUserError } = await service.auth.admin.createUser({
+        email: controlEmail,
+        password: controlPassword,
+        email_confirm: true
+      });
+      expect(controlUserError).toBeNull();
+      controlUserId = controlUser?.user?.id;
+      if (!controlUserId) throw new Error('control fixture user was not created');
+
+      const { error: controlMemberError } = await service.from('organization_members').insert({
+        organization_id: controlOrganizationId,
+        user_id: controlUserId,
+        role: 'staff',
+        status: 'active'
+      });
+      expect(controlMemberError).toBeNull();
+
+      // push_devices is unique by (user_id, installation_id), so this deliberately
+      // exercises the same installation_id in two different synthetic tenants.
+      const { error: controlDeviceError } = await service.from('push_devices').insert({
+        organization_id: controlOrganizationId,
+        user_id: controlUserId,
+        installation_id: installationId,
+        device_token: controlDeviceToken,
+        environment: 'sandbox',
+        bundle_id: 'app.TECM',
+        is_active: true
+      });
+      expect(controlDeviceError).toBeNull();
+      controlDevice = {
+        organizationId: controlOrganizationId,
+        userId: controlUserId,
+        installationId
+      };
+
       const { data: guardian, error: guardianError } = await service
       .from('parent_profiles')
       .insert({ organization_id: organizationId, full_name: guardianName, account_status: 'unlinked' })
@@ -180,7 +242,7 @@ test.describe('家長 App 帳戶與通知', () => {
     expect(loginError).toBeNull();
     const { error: crossTenantError } = await authenticated.from('notification_templates').insert({
       organization_id: otherOrganizationId,
-      template_key: `forbidden_${Date.now()}`,
+      template_key: forbiddenTemplateKey,
       name: 'Forbidden',
       category: 'announcement',
       title: 'Forbidden',
@@ -192,6 +254,10 @@ test.describe('家長 App 帳戶與通知', () => {
       throw error;
     } finally {
       let announcementIds = Array.from(new Set([announcementId].filter((id): id is string => Boolean(id))));
+      const cleanupErrors: unknown[] = [];
+      const rememberCleanupError = (error: unknown) => {
+        if (cleanupErrors.length === 0) cleanupErrors.push(error);
+      };
       const cleanupSteps: NotificationCleanupStep[] = [
         {
           resource: 'parent_profile',
@@ -262,12 +328,6 @@ test.describe('家長 App 帳戶與通知', () => {
             if (error) throw error;
           }
         },
-        ...buildPushDeviceCleanupSteps(service, [
-          { organizationId, userId: activeParentUserId, installationId },
-          ...(linkedAuthUserId
-            ? [{ organizationId, userId: linkedAuthUserId, installationId: disableInstallationId }]
-            : [])
-        ]),
         {
           resource: 'parent_profile',
           stage: 'lookup_auth_user',
@@ -280,6 +340,21 @@ test.describe('家長 App 帳戶與通知', () => {
               .maybeSingle();
             if (error) throw error;
             linkedAuthUserId = data?.user_id ?? undefined;
+          }
+        },
+        ...buildPushDeviceCleanupSteps(service, [
+          targetDevice
+        ]),
+        {
+          resource: 'notification_templates',
+          stage: 'cross_tenant_cleanup',
+          run: async () => {
+            const { error } = await service
+              .from('notification_templates')
+              .delete()
+              .eq('organization_id', otherOrganizationId)
+              .eq('template_key', forbiddenTemplateKey);
+            if (error) throw error;
           }
         },
         {
@@ -305,15 +380,144 @@ test.describe('家長 App 帳戶與通知', () => {
         }
       ];
 
+      let targetBefore: number | undefined;
+      let controlBefore: number | undefined;
+      if (controlDevice) {
+        try {
+          const targetCount = await service
+            .from('push_devices')
+            .select('id', { count: 'exact', head: true })
+            .eq('organization_id', targetDevice.organizationId)
+            .eq('user_id', targetDevice.userId)
+            .eq('installation_id', targetDevice.installationId);
+          expect(targetCount.error).toBeNull();
+          targetBefore = targetCount.count ?? 0;
+
+          const controlCount = await service
+            .from('push_devices')
+            .select('id', { count: 'exact', head: true })
+            .eq('organization_id', controlDevice.organizationId)
+            .eq('user_id', controlDevice.userId)
+            .eq('installation_id', controlDevice.installationId);
+          expect(controlCount.error).toBeNull();
+          controlBefore = controlCount.count ?? 0;
+          expect(targetBefore).toBe(1);
+          expect(controlBefore).toBe(1);
+        } catch (error) {
+          rememberCleanupError(error);
+        }
+      }
+
       try {
         await runBestEffortNotificationCleanup(cleanupSteps);
-        console.info(JSON.stringify({ runId: canonicalRunId, cleanup: 'passed' }));
       } catch (error) {
-        const failures = error instanceof Error && 'failures' in error
-          ? (error as { failures: Array<{ resource: string; stage: string }> }).failures
-          : [{ resource: 'unknown', stage: 'aggregate' }];
-        console.error(JSON.stringify({ runId: canonicalRunId, cleanup: 'failed', failures }));
-        if (!primaryError) throw error;
+        rememberCleanupError(error);
+      }
+
+      if (linkedAuthUserId) {
+        try {
+          await runBestEffortNotificationCleanup(buildPushDeviceCleanupSteps(service, [{
+            organizationId,
+            userId: linkedAuthUserId,
+            installationId: disableInstallationId
+          }]));
+        } catch (error) {
+          rememberCleanupError(error);
+        }
+      }
+
+      if (controlDevice && targetBefore !== undefined && controlBefore !== undefined) {
+        try {
+          const targetAfterCount = await service
+            .from('push_devices')
+            .select('id', { count: 'exact', head: true })
+            .eq('organization_id', targetDevice.organizationId)
+            .eq('user_id', targetDevice.userId)
+            .eq('installation_id', targetDevice.installationId);
+          expect(targetAfterCount.error).toBeNull();
+
+          const controlAfterCount = await service
+            .from('push_devices')
+            .select('id', { count: 'exact', head: true })
+            .eq('organization_id', controlDevice.organizationId)
+            .eq('user_id', controlDevice.userId)
+            .eq('installation_id', controlDevice.installationId);
+          expect(controlAfterCount.error).toBeNull();
+
+          const residueCount = await service
+            .from('push_devices')
+            .select('id', { count: 'exact', head: true })
+            .eq('organization_id', targetDevice.organizationId)
+            .in('installation_id', [installationId, disableInstallationId]);
+          expect(residueCount.error).toBeNull();
+
+          const targetAfter = targetAfterCount.count ?? 0;
+          const controlAfter = controlAfterCount.count ?? 0;
+          const residue = residueCount.count ?? 0;
+          console.info(JSON.stringify({
+            target_before: targetBefore,
+            target_after: targetAfter,
+            control_before: controlBefore,
+            control_after: controlAfter,
+            residue_count: residue
+          }));
+          expect(targetAfter).toBe(0);
+          expect(controlAfter).toBe(1);
+          expect(residue).toBe(0);
+        } catch (error) {
+          rememberCleanupError(error);
+        }
+      }
+
+      const controlCleanupSteps: NotificationCleanupStep[] = [];
+      if (controlDevice) controlCleanupSteps.push(...buildPushDeviceCleanupSteps(service, [controlDevice]));
+      if (controlOrganizationId && controlUserId) {
+        controlCleanupSteps.push(
+          {
+            resource: 'organization_members',
+            stage: 'control_delete',
+            run: async () => {
+              const { error } = await service
+                .from('organization_members')
+                .delete()
+                .eq('organization_id', controlOrganizationId!)
+                .eq('user_id', controlUserId!);
+              if (error) throw error;
+            }
+          },
+          {
+            resource: 'auth_user',
+            stage: 'control_delete',
+            run: async () => {
+              const { error } = await service.auth.admin.deleteUser(controlUserId!);
+              if (error) throw error;
+            }
+          }
+        );
+      }
+      if (controlOrganizationId) {
+        controlCleanupSteps.push({
+          resource: 'organization',
+          stage: 'control_delete',
+          run: async () => {
+            const { error } = await service
+              .from('organizations')
+              .delete()
+              .eq('id', controlOrganizationId!);
+            if (error) throw error;
+          }
+        });
+      }
+      if (controlCleanupSteps.length > 0) {
+        try {
+          await runBestEffortNotificationCleanup(controlCleanupSteps);
+        } catch (error) {
+          rememberCleanupError(error);
+        }
+      }
+
+      if (!primaryError && cleanupErrors.length > 0) {
+        throw cleanupErrors[0];
       }
     }
   });
