@@ -112,7 +112,7 @@ $cases = @(
     Description = 'Leave a withdrawn duplicate enrollment invisible instead of reactivating it.'
     MutationFile = 'supabase/migrations/202608050012_uat_core_workflows.sql'
     TargetAssertion = 'supabase/tests/015_uat_core_workflows.sql'
-    ExpectedFailure = 'inactive enrollment was not reactivated'
+    ExpectedFailure = 'enrollment list/count state did not persist as active'
     Search = @'
     else
       update public.cohort_students
@@ -138,17 +138,8 @@ $cases = @(
     MutationFile = 'supabase/migrations/202607180005_foundation_security.sql'
     TargetAssertion = 'supabase/tests/015_uat_core_workflows.sql'
     ExpectedFailure = 'parent-student tenant condition no longer blocks unsafe legacy link'
-    Search = @'
-    join public.students s
-      on s.id=psl.student_id
-     and s.organization_id=psl.organization_id
-    where psl.student_id=target_student_id
-'@
-    Replacement = @'
-    join public.students s
-      on s.id=psl.student_id
-    where psl.student_id=target_student_id
-'@
+    Search = '     and s.organization_id=psl.organization_id'
+    Replacement = ''
   }
 )
 
