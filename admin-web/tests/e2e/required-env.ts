@@ -10,6 +10,10 @@ export type CredentialedE2EEnvironment = {
   anonKey: string | undefined;
   serviceRoleKey: string | undefined;
   organizationId: string | undefined;
+  teacherEmail: string | undefined;
+  teacherPassword: string | undefined;
+  parentEmail: string | undefined;
+  parentPassword: string | undefined;
 };
 
 export function credentialedE2EEnvironment(): CredentialedE2EEnvironment {
@@ -20,7 +24,11 @@ export function credentialedE2EEnvironment(): CredentialedE2EEnvironment {
     playwrightBaseUrl: process.env.PLAYWRIGHT_BASE_URL,
     anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
-    organizationId: process.env.TECM_ORGANIZATION_ID
+    organizationId: process.env.TECM_ORGANIZATION_ID,
+    teacherEmail: process.env.PLAYWRIGHT_TEACHER_EMAIL,
+    teacherPassword: process.env.PLAYWRIGHT_TEACHER_PASSWORD,
+    parentEmail: process.env.PLAYWRIGHT_PARENT_EMAIL,
+    parentPassword: process.env.PLAYWRIGHT_PARENT_PASSWORD
   };
 }
 
@@ -33,6 +41,10 @@ export function missingCredentialedE2EEnvironment(environment = credentialedE2EE
   if (!environment.anonKey) missing.push('NEXT_PUBLIC_SUPABASE_ANON_KEY');
   if (!environment.serviceRoleKey) missing.push('SUPABASE_SERVICE_ROLE_KEY');
   if (!environment.organizationId) missing.push('TECM_ORGANIZATION_ID');
+  if (!environment.teacherEmail) missing.push('PLAYWRIGHT_TEACHER_EMAIL');
+  if (!environment.teacherPassword) missing.push('PLAYWRIGHT_TEACHER_PASSWORD');
+  if (!environment.parentEmail) missing.push('PLAYWRIGHT_PARENT_EMAIL');
+  if (!environment.parentPassword) missing.push('PLAYWRIGHT_PARENT_PASSWORD');
   return missing;
 }
 

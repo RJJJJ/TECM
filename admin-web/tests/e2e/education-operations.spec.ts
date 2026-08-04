@@ -10,14 +10,24 @@ import {
 
 test('login renders without the deprecated ReactDOM useFormState warning', async ({ page }) => {
   const consoleMessages: string[] = [];
+  const pageErrors: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error' || message.type() === 'warning') consoleMessages.push(message.text());
   });
+  page.on('pageerror', (error) => pageErrors.push(error.message));
 
   await page.goto('/login');
   await expect(page.locator('form[data-hydrated="true"]')).toBeVisible();
   await page.waitForTimeout(1_000);
   expect(consoleMessages).not.toContainEqual(expect.stringContaining('ReactDOM.useFormState'));
+  await page.getByLabel('電郵').fill('unknown-account@tecm.test');
+  await page.getByLabel('密碼').fill('definitely-wrong');
+  await page.getByRole('button', { name: '登入' }).click();
+  await expect(page.getByText('電郵或密碼不正確。')).toBeVisible();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.locator('body')).not.toContainText('Invalid login credentials');
+  expect(pageErrors).toEqual([]);
+  expect(consoleMessages.join('\n')).not.toMatch(/unhandled|stack trace|invalid login credentials/i);
 });
 
 const localOptOut = credentialedE2ELocalOptOutEnabled();
@@ -27,6 +37,11 @@ const password = process.env.PLAYWRIGHT_ADMIN_PASSWORD ?? missingValue;
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? missingValue;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? missingValue;
 const organizationId = process.env.TECM_ORGANIZATION_ID ?? missingValue;
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? missingValue;
+const teacherEmail = process.env.PLAYWRIGHT_TEACHER_EMAIL ?? missingValue;
+const teacherPassword = process.env.PLAYWRIGHT_TEACHER_PASSWORD ?? missingValue;
+const parentEmail = process.env.PLAYWRIGHT_PARENT_EMAIL ?? missingValue;
+const parentPassword = process.env.PLAYWRIGHT_PARENT_PASSWORD ?? missingValue;
 const credentialedEnvironment = credentialedE2EEnvironment();
 const canonicalRunId = JSON.parse(execFileSync(
   process.execPath,
@@ -46,6 +61,7 @@ type CreatedFixture = {
   courseName: string;
   cohortName: string;
   feePlanName: string;
+  enrollmentStudentName: string;
 };
 
 function macauDateInput(offsetDays: number, time?: string) {
@@ -59,7 +75,7 @@ function macauDateInput(offsetDays: number, time?: string) {
 }
 
 async function cleanupAdminUxFixture(client: SupabaseClient, fixture: CreatedFixture) {
-  let studentsQuery = client.from('students').select('id,organization_id').eq('display_name', fixture.studentName);
+  let studentsQuery = client.from('students').select('id,organization_id').in('display_name', [fixture.studentName, fixture.enrollmentStudentName]);
   if (organizationId) studentsQuery = studentsQuery.eq('organization_id', organizationId);
   const { data: students, error: studentError } = await studentsQuery;
   if (studentError) throw studentError;
@@ -141,7 +157,7 @@ async function cleanupAdminUxFixture(client: SupabaseClient, fixture: CreatedFix
 }
 
 test.describe('教育中心營運主流程', () => {
-  test.skip(!email || !password || !supabaseUrl || !serviceRoleKey || !organizationId, '需要 seed 管理員、Supabase service role 及本機 E2E 環境');
+  test.skip(!email || !password || !supabaseUrl || !anonKey || !serviceRoleKey || !organizationId || !parentEmail || !parentPassword, '需要 seed 管理員、家長、Supabase keys 及本機 E2E 環境');
   let fixture: CreatedFixture | null = null;
 
   test.afterEach(async () => {
@@ -161,7 +177,8 @@ test.describe('教育中心營運主流程', () => {
     const courseName = `${prefix}_COURSE`;
     const cohortName = `${prefix}_COHORT`;
     const feePlanName = `${prefix}_PACKAGE`;
-    fixture = { prefix, studentName, guardianName, campusName, courseName, cohortName, feePlanName };
+    const enrollmentStudentName = `${prefix}_ENROLLMENT_STUDENT`;
+    fixture = { prefix, studentName, guardianName, campusName, courseName, cohortName, feePlanName, enrollmentStudentName };
     test.setTimeout(180_000);
     const adminClient = createClient(supabaseUrl!, serviceRoleKey!, { auth: { persistSession: false, autoRefreshToken: false } });
     const assertPersisted = async (table: string, filters: Record<string, string>) => {
@@ -253,6 +270,41 @@ test.describe('教育中心營運主流程', () => {
     expect(persistedSessions.error).toBeNull();
     expect(persistedSessions.data?.length ?? 0).toBe(2);
 
+    const standaloneStudent = await adminClient.from('students').insert({
+      organization_id: organizationId!,
+      display_name: enrollmentStudentName,
+      school_name: '澳門合成測試學校',
+      status: 'active'
+    }).select('id').single();
+    expect(standaloneStudent.error).toBeNull();
+    await page.goto(cohortHref!);
+    await page.getByLabel('要加入的學生').selectOption({ label: enrollmentStudentName });
+    await page.getByRole('button', { name: '加入班別' }).click();
+    await expect(page.getByRole('status')).toContainText('學生已加入班別');
+    await page.reload();
+    await expect(page.getByText(enrollmentStudentName)).toBeVisible();
+
+    const adminSessionClient = createClient(supabaseUrl!, anonKey!, { auth: { persistSession: false, autoRefreshToken: false } });
+    const adminSignIn = await adminSessionClient.auth.signInWithPassword({ email: email!, password: password! });
+    expect(adminSignIn.error).toBeNull();
+    const duplicateEnrollment = await adminSessionClient.rpc('enroll_student_in_cohort', {
+      target_organization_id: organizationId!,
+      target_cohort_id: persistedCohort.data!.id,
+      target_student_id: standaloneStudent.data!.id
+    });
+    expect(duplicateEnrollment.error).toBeNull();
+    expect((duplicateEnrollment.data as { status: string }).status).toBe('existing');
+
+    const withdrawEnrollment = await adminClient.from('cohort_students').update({ status: 'withdrawn', left_at: new Date().toISOString().slice(0, 10) })
+      .eq('organization_id', organizationId!).eq('cohort_id', persistedCohort.data!.id).eq('student_id', standaloneStudent.data!.id);
+    expect(withdrawEnrollment.error).toBeNull();
+    await page.reload();
+    await page.getByLabel('要加入的學生').selectOption({ label: enrollmentStudentName });
+    await page.getByRole('button', { name: '加入班別' }).click();
+    await expect(page.getByRole('status')).toContainText('舊報讀記錄已恢復');
+    await page.reload();
+    await expect(page.getByText(enrollmentStudentName)).toBeVisible();
+
     await page.goto('/admin/students');
     await page.getByLabel('家長姓名').fill(guardianName);
     await page.getByLabel('電話').fill('66881234');
@@ -279,6 +331,36 @@ test.describe('教育中心營運主流程', () => {
     const persistedPayments = await adminClient.from('payments').select('id').eq('organization_id', organizationId!).eq('amount_minor', '120000');
     expect(persistedPayments.error).toBeNull();
     expect(persistedPayments.data?.length ?? 0).toBeGreaterThan(0);
+
+    await page.goto('/admin/guardians');
+    const existingParentCard = page.locator('article').filter({ hasText: 'Guardian A' });
+    await existingParentCard.getByLabel('連結另一名學生').selectOption({ label: enrollmentStudentName });
+    await existingParentCard.getByRole('button', { name: '連結學生' }).click();
+    await expect(existingParentCard.getByRole('status')).toContainText('已連結至現有家長帳戶');
+
+    const parentClient = createClient(supabaseUrl!, anonKey!, { auth: { persistSession: false, autoRefreshToken: false } });
+    const parentSignIn = await parentClient.auth.signInWithPassword({ email: parentEmail!, password: parentPassword! });
+    expect(parentSignIn.error).toBeNull();
+    const parentStudents = await parentClient.rpc('get_parent_attendance_summary');
+    expect(parentStudents.error).toBeNull();
+    const parentStudentIds = (parentStudents.data ?? []).map((row: { student_id: string }) => row.student_id);
+    expect(parentStudentIds).toContain('15000000-0000-4000-8000-000000000001');
+    expect(parentStudentIds).toContain(standaloneStudent.data!.id);
+    const parentFutureLessons = await parentClient.rpc('get_parent_lesson_sessions', { p_student_id: standaloneStudent.data!.id });
+    expect(parentFutureLessons.error).toBeNull();
+    expect(parentFutureLessons.data?.length ?? 0).toBe(2);
+
+    page.once('dialog', dialog => dialog.accept());
+    await existingParentCard.getByText(enrollmentStudentName).locator('..').getByRole('button', { name: '移除連結' }).click();
+    await expect(existingParentCard.getByTestId('linked-students-13000000-0000-4000-8000-000000000001').getByText(enrollmentStudentName)).toHaveCount(0);
+    const activeParent = await adminClient.from('parent_profiles').select('account_status').eq('id', '13000000-0000-4000-8000-000000000001').single();
+    expect(activeParent.data?.account_status).toBe('active');
+    const unlinkAudit = await adminClient.from('audit_logs').select('id').eq('organization_id', organizationId!).eq('table_name', 'parent_student_links').eq('action', 'DELETE').contains('old_data', { student_id: standaloneStudent.data!.id });
+    expect(unlinkAudit.error).toBeNull();
+    expect(unlinkAudit.data?.length ?? 0).toBeGreaterThan(0);
+    const retireStandaloneEnrollment = await adminClient.from('cohort_students').update({ status: 'withdrawn', left_at: new Date().toISOString().slice(0, 10) })
+      .eq('organization_id', organizationId!).eq('cohort_id', persistedCohort.data!.id).eq('student_id', standaloneStudent.data!.id);
+    expect(retireStandaloneEnrollment.error).toBeNull();
 
     await page.goto('/admin/attendance');
     const studentGroup = page.getByRole('group', { name: studentName });
@@ -347,4 +429,19 @@ test.describe('教育中心營運主流程', () => {
       expect(body).not.toMatch(/row-level security policy|permission denied|PGRST|LessonPlanEditor|LessonSessionsPage|MakeupStudentListPage|error code/i);
     }
   });
+});
+
+test('Teacher direct URL and navigation cannot reach the operations dashboard', async ({ page }) => {
+  test.skip(!teacherEmail || !teacherPassword, '需要本機 Teacher 測試登入');
+  await page.goto('/login');
+  await page.getByLabel('電郵').fill(teacherEmail!);
+  await page.getByLabel('密碼').fill(teacherPassword!);
+  await page.getByRole('button', { name: '登入' }).click();
+  await expect(page).toHaveURL(/\/admin\/sessions$/, { timeout: 30_000 });
+  await expect(page.getByRole('navigation', { name: '後台功能' }).getByRole('link', { name: '總覽' })).toHaveCount(0);
+  await page.goto('/admin/dashboard');
+  await expect(page).toHaveURL(/\/admin\/sessions$/);
+  await expect(page.locator('body')).not.toContainText(/欠費總額|本月收款|營運儀表板/);
+  await page.goto('/admin');
+  await expect(page).toHaveURL(/\/admin\/sessions$/);
 });

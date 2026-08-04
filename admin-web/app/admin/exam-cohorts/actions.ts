@@ -91,18 +91,27 @@ export async function addCohortStudentAction(
     if (cohortError || studentError) throw cohortError ?? studentError;
     if (!cohort || !student) throw userFacingError('所選班別或學生已不存在，或不屬於目前機構，請重新選擇。');
 
-    const { error } = await context.supabase.from('cohort_students').insert({
-      organization_id: context.organizationId,
-      cohort_id: cohortId,
-      student_id: studentId,
-      status: 'active'
+    const { data, error } = await context.supabase.rpc('enroll_student_in_cohort', {
+      target_organization_id: context.organizationId,
+      target_cohort_id: cohortId,
+      target_student_id: studentId
     });
     if (error) throw error;
 
     revalidatePath('/admin/exam-cohorts');
     revalidatePath(`/admin/exam-cohorts/${cohortId}`);
+    revalidatePath('/admin/classes');
     revalidatePath('/admin/students');
-    return { status: 'success', message: '學生已加入班別。' };
+    revalidatePath('/admin/sessions');
+    revalidatePath('/admin/attendance');
+    revalidatePath('/admin/dashboard');
+    const result = data as { status?: string } | null;
+    const message = result?.status === 'reactivated'
+      ? '學生的舊報讀記錄已恢復，現已重新加入班別。'
+      : result?.status === 'existing'
+        ? '學生已在此班別，現有報讀記錄保持有效。'
+        : '學生已加入班別。';
+    return { status: 'success', message };
   } catch (error) {
     return { status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '加入學生失敗，請稍後再試。', 'add-cohort-student') };
   }

@@ -228,6 +228,8 @@ test('credentialed Admin E2E is loopback-only and release results cannot silentl
   assert.match(workflow, /node admin-web\/scripts\/test-run-identity\.mjs/);
   assert.doesNotMatch(workflow, /node scripts\/test-run-identity\.mjs/);
   assert.match(workflow, /PLAYWRIGHT_RUN_ID=\"\$TECM_TEST_RUN_ID\"/);
+  assert.match(workflow, /PLAYWRIGHT_PARENT_PASSWORD=\"\$LOCAL_E2E_PASSWORD\"/);
+  assert.match(source('../supabase/seed.sql'), /Parent credentials are intentionally not persisted in Git/);
   assert.match(workflow, /TECM_SUPABASE_NETWORK=\"tecm-local-only-\$\{TECM_TEST_RUN_ID\}\"/);
   assert.match(workflow, /status_json="\$\(supabase status -o json\)"/);
   assert.doesNotMatch(workflow, /^\s*supabase start\s*$/m);
@@ -260,6 +262,10 @@ test('local E2E preflight accepts only explicit loopback http URLs', async () =>
     playwrightBaseUrl: 'http://127.0.0.1:3000',
     anonKey: 'synthetic-anon-key',
     serviceRoleKey: 'synthetic-service-role-key',
-    organizationId: '10000000-0000-4000-8000-000000000000'
+    organizationId: '10000000-0000-4000-8000-000000000000',
+    teacherEmail: 'teacher@tecm.local',
+    teacherPassword: 'synthetic-only',
+    parentEmail: 'parent@tecm.local',
+    parentPassword: 'synthetic-only'
   }));
 });

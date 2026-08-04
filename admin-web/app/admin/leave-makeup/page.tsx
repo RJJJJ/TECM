@@ -1,9 +1,9 @@
 import { getOperationsContext, formatMacauDateTime } from '@/lib/operations/context';
 import { LeaveForm, MakeupForm } from '@/components/operation-forms';
-import { decideLeaveRequestAction } from '@/lib/operations/actions';
 import { Badge, DataTable, EmptyState, ErrorState, PageHeader, Panel } from '@/components/operations-ui';
 import { statusLabel } from '@/lib/operations/labels';
 import FollowUpCopyButton from '../follow-up-copy-button';
+import LeaveDecisionForm from './leave-decision-form';
 
 export default async function LeaveMakeupPage() {
   const { supabase, organizationId } = await getOperationsContext();
@@ -32,11 +32,7 @@ export default async function LeaveMakeupPage() {
             <td className="px-4 py-3">{formatMacauDateTime(row.lesson_sessions?.starts_at)}</td>
             <td className="px-4 py-3">{row.reason}</td>
             <td className="px-4 py-3"><div className="space-y-2"><Badge tone={row.status === 'approved' ? 'green' : 'amber'}>{statusLabel(row.status)}</Badge>
-              {row.status === 'pending' ? <form action={decideLeaveRequestAction} className="flex flex-wrap gap-1">
-                <input type="hidden" name="leave_request_id" value={row.id}/>
-                <button name="decision" value="approved" className="rounded bg-emerald-700 px-2 py-1 text-xs text-white">批准及建立補課額</button>
-                <button name="decision" value="rejected" className="rounded border px-2 py-1 text-xs">拒絕</button>
-              </form> : null}
+              {row.status === 'pending' ? <LeaveDecisionForm leaveRequestId={row.id} /> : null}
             </div></td>
           </tr>)}</DataTable>}
       </Panel>

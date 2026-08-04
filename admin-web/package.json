@@ -12,6 +12,7 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/unit/*.test.ts",
+    "test:mutation:uat": "node ../scripts/testing/uat-core-workflows-mutation-verify.mjs",
     "test:sharp": "node scripts/sharp-runtime-smoke.mjs",
     "security:image-guard": "node scripts/image-processing-guard.mjs",
     "test:e2e": "playwright test",

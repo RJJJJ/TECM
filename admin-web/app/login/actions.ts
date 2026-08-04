@@ -8,7 +8,7 @@ export type LoginFormState = {
   error?: string;
 };
 
-const DEFAULT_LOGIN_ERROR = '登入失敗，請確認電郵與密碼。';
+const CREDENTIAL_LOGIN_ERROR = '電郵或密碼不正確。';
 
 export async function loginAction(
   _prevState: LoginFormState,
@@ -29,7 +29,8 @@ export async function loginAction(
   });
 
   if (error) {
-    return { error: error.message || DEFAULT_LOGIN_ERROR };
+    // Keep unknown-email and wrong-password responses identical.
+    return { error: CREDENTIAL_LOGIN_ERROR };
   }
 
   const access = await verifyActiveStaffAccess(supabase);

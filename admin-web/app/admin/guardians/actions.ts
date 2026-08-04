@@ -8,6 +8,13 @@ import { createServiceRoleSupabaseClient } from '@/lib/supabase/service-role';
 
 const text = (form: FormData, key: string) => String(form.get(key) ?? '').trim();
 
+export type GuardianActionState = { status: 'idle' | 'success' | 'error'; message?: string };
+const guardianOk = (message: string): GuardianActionState => ({ status: 'success', message });
+const guardianFail = (error: unknown, fallback: string, operation: string): GuardianActionState => ({
+  status: 'error',
+  message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, fallback, operation)
+});
+
 function safeActionError(error: unknown, fallback: string, operation: string) {
   return error instanceof UserFacingOperationError ? error : userFacingError(safeOperationMessage(error, fallback, operation));
 }
@@ -27,7 +34,10 @@ async function findUserByEmail(email: string) {
   });
 }
 
-export async function inviteGuardianAction(form: FormData): Promise<void> {
+export async function inviteGuardianAction(
+  _prevState: GuardianActionState,
+  form: FormData
+): Promise<GuardianActionState> {
   try {
     const context = await requireGuardianManager();
     const parentProfileId = text(form, 'parent_profile_id');
@@ -89,12 +99,16 @@ export async function inviteGuardianAction(form: FormData): Promise<void> {
       throw linkError;
     }
     revalidatePath('/admin/guardians');
+    return guardianOk('家長邀請已發送。');
   } catch (error) {
-    throw safeActionError(error, '發送家長邀請失敗，請稍後再試。', 'invite-guardian');
+    return guardianFail(safeActionError(error, '發送家長邀請失敗，請稍後再試。', 'invite-guardian'), '發送家長邀請失敗，請稍後再試。', 'invite-guardian');
   }
 }
 
-export async function disableGuardianAction(form: FormData): Promise<void> {
+export async function disableGuardianAction(
+  _prevState: GuardianActionState,
+  form: FormData
+): Promise<GuardianActionState> {
   try {
     const context = await requireGuardianManager();
     const parentProfileId = text(form, 'parent_profile_id');
@@ -107,12 +121,16 @@ export async function disableGuardianAction(form: FormData): Promise<void> {
     if (error) throw error;
     if (data !== true) throw userFacingError('無法停用家長帳戶。');
     revalidatePath('/admin/guardians');
+    return guardianOk('家長帳戶已停用。');
   } catch (error) {
-    throw safeActionError(error, '停用家長帳戶失敗，請稍後再試。', 'disable-guardian');
+    return guardianFail(safeActionError(error, '停用家長帳戶失敗，請稍後再試。', 'disable-guardian'), '停用家長帳戶失敗，請稍後再試。', 'disable-guardian');
   }
 }
 
-export async function recoverGuardianAction(form: FormData): Promise<void> {
+export async function recoverGuardianAction(
+  _prevState: GuardianActionState,
+  form: FormData
+): Promise<GuardianActionState> {
   try {
     const context = await requireGuardianManager();
     const parentProfileId = text(form, 'parent_profile_id');
@@ -124,7 +142,56 @@ export async function recoverGuardianAction(form: FormData): Promise<void> {
     if (error) throw error;
     if (data !== true) throw userFacingError('無法恢復家長帳戶。');
     revalidatePath('/admin/guardians');
+    return guardianOk('家長帳戶已恢復，可重新發送邀請。');
   } catch (error) {
-    throw safeActionError(error, '恢復家長帳戶失敗，請稍後再試。', 'recover-guardian');
+    return guardianFail(safeActionError(error, '恢復家長帳戶失敗，請稍後再試。', 'recover-guardian'), '恢復家長帳戶失敗，請稍後再試。', 'recover-guardian');
+  }
+}
+
+export async function linkExistingParentStudentAction(
+  _prevState: GuardianActionState,
+  form: FormData
+): Promise<GuardianActionState> {
+  try {
+    const context = await requireGuardianManager();
+    const parentProfileId = text(form, 'parent_profile_id');
+    const studentId = text(form, 'student_id');
+    if (!parentProfileId || !studentId) throw userFacingError('請選擇已啟用家長及要連結的學生。');
+
+    const { data, error } = await context.supabase.rpc('link_existing_parent_student', {
+      target_organization_id: context.organizationId,
+      target_parent_profile_id: parentProfileId,
+      target_student_id: studentId
+    });
+    if (error) throw error;
+    revalidatePath('/admin/guardians');
+    const result = data as { status?: string } | null;
+    return guardianOk(result?.status === 'existing' ? '此家長已連結該學生，現有連結保持有效。' : '學生已連結至現有家長帳戶。');
+  } catch (error) {
+    return guardianFail(error, '連結學生失敗，請稍後再試。', 'link-existing-parent-student');
+  }
+}
+
+export async function unlinkExistingParentStudentAction(
+  _prevState: GuardianActionState,
+  form: FormData
+): Promise<GuardianActionState> {
+  try {
+    const context = await requireGuardianManager();
+    const linkId = text(form, 'link_id');
+    const confirmed = text(form, 'confirmed') === 'true';
+    if (!linkId || !confirmed) throw userFacingError('移除學生連結前必須確認。');
+
+    const { data, error } = await context.supabase.rpc('unlink_existing_parent_student', {
+      target_organization_id: context.organizationId,
+      target_link_id: linkId,
+      target_confirmed: confirmed
+    });
+    if (error) throw error;
+    if (data !== true) throw userFacingError('無法移除學生連結。');
+    revalidatePath('/admin/guardians');
+    return guardianOk('學生連結已移除；家長帳戶仍保持啟用。');
+  } catch (error) {
+    return guardianFail(error, '移除學生連結失敗，請稍後再試。', 'unlink-existing-parent-student');
   }
 }

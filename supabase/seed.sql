@@ -21,6 +21,16 @@ where id in (
   '10000000-0000-4000-8000-000000000005'
 );
 
+-- Parent credentials are intentionally not persisted in Git. Populate only
+-- the Auth metadata required for the local Admin API; credentialed E2E sets a
+-- random execution-scoped password after reset.
+update auth.users
+set email_confirmed_at = coalesce(email_confirmed_at, now()),
+    aud = 'authenticated', role = 'authenticated',
+    raw_app_meta_data = jsonb_build_object('provider','email','providers',jsonb_build_array('email')),
+    raw_user_meta_data = '{}'::jsonb
+where id = '10000000-0000-4000-8000-000000000003';
+
 -- The plain PostgreSQL verification shim has a deliberately small auth.users
 -- table. When the full Supabase Auth schema is present, add the fields and
 -- email identities that GoTrue requires for password login.

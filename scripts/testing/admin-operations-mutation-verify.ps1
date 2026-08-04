@@ -35,7 +35,9 @@ $setupFiles = @(
   'supabase/migrations/202608020010_admin_operations_release_gate.sql',
   'supabase/migrations/202608020010_admin_operations_release_gate.sql',
   'supabase/migrations/202608020011_makeup_partial_state_recovery.sql',
-  'supabase/migrations/202608020011_makeup_partial_state_recovery.sql'
+  'supabase/migrations/202608020011_makeup_partial_state_recovery.sql',
+  'supabase/migrations/202608050012_uat_core_workflows.sql',
+  'supabase/migrations/202608050012_uat_core_workflows.sql'
 )
 
 $targetAssertion = 'supabase/tests/013_admin_operations_release_gate.sql'
@@ -103,6 +105,49 @@ $cases = @(
   where organization_id = target_organization_id
     and idempotency_key = target_idempotency_key || ':mutated'
   for update;
+'@
+  },
+  [pscustomobject]@{
+    Case = 'M18'
+    Description = 'Leave a withdrawn duplicate enrollment invisible instead of reactivating it.'
+    MutationFile = 'supabase/migrations/202608050012_uat_core_workflows.sql'
+    TargetAssertion = 'supabase/tests/015_uat_core_workflows.sql'
+    ExpectedFailure = 'inactive enrollment was not reactivated'
+    Search = @'
+    else
+      update public.cohort_students
+      set status = 'active', left_at = null, joined_at = current_date
+      where id = existing_enrollment.id
+      returning id into enrollment_id;
+      result_status := 'reactivated';
+    end if;
+'@
+    Replacement = @'
+    else
+      update public.cohort_students
+      set left_at = null, joined_at = current_date
+      where id = existing_enrollment.id
+      returning id into enrollment_id;
+      result_status := 'reactivated';
+    end if;
+'@
+  },
+  [pscustomobject]@{
+    Case = 'M19'
+    Description = 'Remove the student tenant join from parent authorization.'
+    MutationFile = 'supabase/migrations/202607180005_foundation_security.sql'
+    TargetAssertion = 'supabase/tests/015_uat_core_workflows.sql'
+    ExpectedFailure = 'parent-student tenant condition no longer blocks unsafe legacy link'
+    Search = @'
+    join public.students s
+      on s.id=psl.student_id
+     and s.organization_id=psl.organization_id
+    where psl.student_id=target_student_id
+'@
+    Replacement = @'
+    join public.students s
+      on s.id=psl.student_id
+    where psl.student_id=target_student_id
 '@
   }
 )
@@ -174,7 +219,7 @@ function Invoke-Git {
 function Copy-SqlInputs {
   param([Parameter(Mandatory)][string]$TempRoot)
 
-  $relativeFiles = @($setupFiles + $targetAssertion) | Select-Object -Unique
+  $relativeFiles = @($setupFiles + $targetAssertion + @($cases | ForEach-Object { $_.TargetAssertion })) | Select-Object -Unique
   foreach ($relativeFile in $relativeFiles) {
     $source = Join-Path $repoRoot $relativeFile
     if (-not (Test-Path -LiteralPath $source)) {
