@@ -73,7 +73,7 @@ export async function submitSessionAttendanceAction(_: OperationState, form: For
   } catch (error) { return fail(error); }
 }
 
-export async function decideLeaveRequestAction(form: FormData): Promise<void> {
+export async function decideLeaveRequestAction(_: OperationState, form: FormData): Promise<OperationState> {
   try {
     const ctx = await getOperationsContext();
     requireManager(ctx.role);
@@ -94,8 +94,9 @@ export async function decideLeaveRequestAction(form: FormData): Promise<void> {
     });
     if (error) throw error;
     revalidatePath('/admin/leave-makeup'); revalidatePath('/admin/dashboard');
+    return ok(decision === 'approved' ? '請假已批准。' : '請假已拒絕。');
   } catch (error) {
-    throw userFacingError(safeOperationMessage(error, '處理請假申請失敗，請稍後再試。', 'decide-leave-request'));
+    return fail(error instanceof UserFacingOperationError ? error : userFacingError(safeOperationMessage(error, '處理請假申請失敗，請稍後再試。', 'decide-leave-request')));
   }
 }
 

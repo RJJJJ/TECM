@@ -68,6 +68,8 @@ try {
     '/workspace/supabase/migrations/202608020010_admin_operations_release_gate.sql',
     '/workspace/supabase/migrations/202608020011_makeup_partial_state_recovery.sql',
     '/workspace/supabase/migrations/202608020011_makeup_partial_state_recovery.sql',
+    '/workspace/supabase/migrations/202608050012_uat_core_workflows.sql',
+    '/workspace/supabase/migrations/202608050012_uat_core_workflows.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
     '/workspace/supabase/tests/002_rls_tenant_isolation.sql',
     '/workspace/supabase/tests/003_attendance_leave_makeup.sql',
@@ -81,7 +83,8 @@ try {
     '/workspace/supabase/tests/011_apns_completion_outcome.sql',
     '/workspace/supabase/tests/012_admin_operations_integrity.sql',
     '/workspace/supabase/tests/013_admin_operations_release_gate.sql',
-    '/workspace/supabase/tests/014_makeup_partial_state_recovery.sql'
+    '/workspace/supabase/tests/014_makeup_partial_state_recovery.sql',
+    '/workspace/supabase/tests/015_uat_core_workflows.sql'
   )
 
   foreach ($file in $files) {
@@ -376,7 +379,7 @@ try {
     throw 'Blocked migration partially applied mutable DDL before preflight.'
   }
 
-  Write-Host '[PASS] repeatable migrations, negative preflight, seed, RLS, fourteen SQL suites, parent races, Admin operations races, bounded outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
+  Write-Host '[PASS] repeatable migrations, negative preflight, seed, RLS, fifteen SQL suites, parent races, Admin operations races, bounded outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity

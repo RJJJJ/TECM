@@ -52,6 +52,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      - run: npm run test:mutation:uat
       - run: npm run build
       - run: npm audit --audit-level=high
 
@@ -150,27 +151,36 @@ jobs:
           echo "::add-mask::$SERVICE_ROLE_KEY"
           LOCAL_E2E_PASSWORD="$(openssl rand -hex 32)"
           echo "::add-mask::$LOCAL_E2E_PASSWORD"
-          curl --fail --silent --show-error \
-            --request PUT \
-            --header "apikey: $SERVICE_ROLE_KEY" \
-            --header "Authorization: Bearer $SERVICE_ROLE_KEY" \
-            --header 'Content-Type: application/json' \
-            --data "$(jq -cn --arg password "$LOCAL_E2E_PASSWORD" '{password: $password, email_confirm: true}')" \
-            "$API_URL/auth/v1/admin/users/10000000-0000-4000-8000-000000000001" >/dev/null
+          for user_id in \
+            10000000-0000-4000-8000-000000000001 \
+            10000000-0000-4000-8000-000000000003 \
+            10000000-0000-4000-8000-000000000004; do
+            curl --fail --silent --show-error \
+              --request PUT \
+              --header "apikey: $SERVICE_ROLE_KEY" \
+              --header "Authorization: Bearer $SERVICE_ROLE_KEY" \
+              --header 'Content-Type: application/json' \
+              --data "$(jq -cn --arg password "$LOCAL_E2E_PASSWORD" '{password: $password, email_confirm: true}')" \
+              "$API_URL/auth/v1/admin/users/$user_id" >/dev/null
+          done
           export NEXT_PUBLIC_SUPABASE_URL="$API_URL"
           export NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY"
           export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
           export TECM_ORGANIZATION_ID='10000000-0000-4000-8000-000000000000'
           export PLAYWRIGHT_ADMIN_EMAIL='admin@tecm.local'
           export PLAYWRIGHT_ADMIN_PASSWORD="$LOCAL_E2E_PASSWORD"
+          export PLAYWRIGHT_TEACHER_EMAIL='teacher-a@tecm.test'
+          export PLAYWRIGHT_TEACHER_PASSWORD="$LOCAL_E2E_PASSWORD"
+          export PLAYWRIGHT_PARENT_EMAIL='guardian-a@tecm.test'
+          export PLAYWRIGHT_PARENT_PASSWORD="$LOCAL_E2E_PASSWORD"
           export PLAYWRIGHT_BASE_URL='http://127.0.0.1:3000'
           export PLAYWRIGHT_RUN_ID="$TECM_TEST_RUN_ID"
           export PLAYWRIGHT_RESULT_FILE="test-results/playwright-results-${TECM_TEST_RUN_ID}.json"
-          export PLAYWRIGHT_EXPECTED_TESTS=8
+          export PLAYWRIGHT_EXPECTED_TESTS=10
           cd admin-web
           npm run test:e2e
           npm run test:e2e:verify
-          unset SERVICE_ROLE_KEY LOCAL_E2E_PASSWORD PLAYWRIGHT_ADMIN_PASSWORD
+          unset SERVICE_ROLE_KEY LOCAL_E2E_PASSWORD PLAYWRIGHT_ADMIN_PASSWORD PLAYWRIGHT_TEACHER_PASSWORD PLAYWRIGHT_PARENT_PASSWORD
 
   ios:
     runs-on: macos-15

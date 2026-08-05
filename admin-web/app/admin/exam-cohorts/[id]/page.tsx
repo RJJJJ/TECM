@@ -59,7 +59,7 @@ export default async function ExamCohortDetailPage({ params }: { params: Promise
 
   const [{ data: lessonData, error: lessonError }, { data: studentData, error: studentError }, { data: attendanceData, error: attendanceError }, { data: makeupData, error: makeupError }, { data: availableStudentData, error: availableStudentError }] = await Promise.all([
     supabase.from('lesson_plans').select('id,sequence_no,title,teaching_content,makeup_guidance').eq('organization_id', organizationId).eq('cohort_id', id).order('sequence_no'),
-    supabase.from('cohort_students').select('id,status,student_id,students(display_name,school_name)').eq('organization_id', organizationId).eq('cohort_id', id).order('created_at'),
+    supabase.from('cohort_students').select('id,status,student_id,students(display_name,school_name)').eq('organization_id', organizationId).eq('cohort_id', id).eq('status', 'active').order('created_at'),
     supabase
       .from('attendance_records')
       .select('id,status,students(display_name),lesson_sessions!inner(starts_at,lesson_plans(sequence_no,title))')
