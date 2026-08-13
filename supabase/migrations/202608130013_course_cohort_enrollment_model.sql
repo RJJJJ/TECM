@@ -15,6 +15,95 @@ create index if not exists idx_cohort_students_active_student
   on public.cohort_students(organization_id, student_id, cohort_id)
   where is_active_membership;
 
+create or replace function public.guard_exam_cohort_course_fields()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  course_row public.courses%rowtype;
+  legacy_student_id uuid;
+begin
+  if tg_op = 'UPDATE'
+     and new.course_id is not distinct from old.course_id
+     and new.subject is not distinct from old.subject
+     and new.level is not distinct from old.level then
+    return new;
+  end if;
+
+  if tg_op = 'UPDATE'
+     and old.course_id is not null
+     and new.course_id is distinct from old.course_id then
+    raise exception 'cohort course is already linked';
+  end if;
+
+  if new.course_id is null then
+    return new;
+  end if;
+
+  select * into course_row
+  from public.courses
+  where id = new.course_id
+    and organization_id = new.organization_id
+    and is_active
+  for share;
+  if course_row.id is null then
+    raise exception 'active course not found';
+  end if;
+  if new.subject is distinct from course_row.category
+     or new.level is distinct from course_row.level then
+    raise exception 'cohort course fields must match the linked course';
+  end if;
+
+  if tg_op = 'UPDATE'
+     and old.course_id is null
+  then
+    -- Coordinate privileged direct writes with the enrollment trigger. Lock in
+    -- student order so concurrent link/enroll transactions cannot both validate
+    -- against stale committed state and leave two active memberships per Course.
+    for legacy_student_id in
+      select distinct cs.student_id
+      from public.cohort_students cs
+      where cs.organization_id = new.organization_id
+        and cs.cohort_id = new.id
+        and cs.is_active_membership
+      order by cs.student_id
+    loop
+      perform pg_advisory_xact_lock(
+        hashtextextended('course-enrollment:' || new.organization_id::text || ':' || legacy_student_id::text || ':' || new.course_id::text, 0)
+      );
+    end loop;
+
+    if exists (
+       select 1
+       from public.cohort_students legacy_cs
+       join public.cohort_students other_cs
+         on other_cs.organization_id = legacy_cs.organization_id
+        and other_cs.student_id = legacy_cs.student_id
+        and other_cs.id <> legacy_cs.id
+        and other_cs.is_active_membership
+       join public.exam_cohorts other_ec
+         on other_ec.id = other_cs.cohort_id
+        and other_ec.organization_id = other_cs.organization_id
+       where legacy_cs.organization_id = new.organization_id
+         and legacy_cs.cohort_id = new.id
+         and legacy_cs.is_active_membership
+         and other_ec.course_id = new.course_id
+    ) then
+      raise exception 'course link conflicts with active student enrollment';
+    end if;
+  end if;
+
+  return new;
+end
+$$;
+
+drop trigger if exists trg_guard_exam_cohort_course_fields on public.exam_cohorts;
+create trigger trg_guard_exam_cohort_course_fields
+before insert or update of course_id, subject, level
+on public.exam_cohorts
+for each row execute function public.guard_exam_cohort_course_fields();
+
 create or replace function public.guard_active_course_membership()
 returns trigger
 language plpgsql
@@ -336,6 +425,15 @@ after insert or update or delete on public.exam_cohorts
 for each row execute function public.capture_audit_log();
 
 revoke insert, update, delete on public.cohort_students from authenticated;
+-- Course linkage is server-controlled. Preserve ordinary Cohort management by
+-- replacing the inherited table-level UPDATE with an explicit safe-column set.
+revoke update on public.exam_cohorts from authenticated;
+revoke update (id, organization_id, course_id, subject, level, created_at, updated_at)
+  on public.exam_cohorts from authenticated;
+grant update (name, exam_date, weekday_pattern, campus_id, lead_teacher_id, status)
+  on public.exam_cohorts to authenticated;
+revoke all on function public.guard_active_course_membership() from public;
+revoke all on function public.guard_exam_cohort_course_fields() from public;
 revoke all on function public.enroll_student_in_cohort(uuid,uuid,uuid) from public;
 revoke all on function public.transfer_student_between_cohorts(uuid,uuid,uuid,uuid,boolean) from public;
 revoke all on function public.link_cohort_to_course(uuid,uuid,uuid,boolean) from public;

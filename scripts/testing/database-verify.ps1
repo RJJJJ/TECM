@@ -72,6 +72,8 @@ try {
     '/workspace/supabase/migrations/202608050012_uat_core_workflows.sql',
     '/workspace/supabase/migrations/202608130013_course_cohort_enrollment_model.sql',
     '/workspace/supabase/migrations/202608130013_course_cohort_enrollment_model.sql',
+    '/workspace/supabase/seed.sql',
+    '/workspace/supabase/seed.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
     '/workspace/supabase/tests/002_rls_tenant_isolation.sql',
     '/workspace/supabase/tests/003_attendance_leave_makeup.sql',
@@ -381,6 +383,25 @@ try {
     -f '/workspace/supabase/tests/concurrency/course_transfer_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Course transfer/enrollment concurrency assertion failed.' }
 
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/course_link_enroll_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare Course link/enrollment race fixtures.' }
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/course_link_enroll_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/course_link_second.sql' `
+    -StartSecondDelayMilliseconds 250
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/course_link_enroll_first_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Enroll-first Course link race assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/course_link_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/course_link_enroll_second.sql' `
+    -StartSecondDelayMilliseconds 250
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/course_link_first_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Link-first Course enrollment race assertion failed.' }
+
   $unsafeDatabase = 'tecm_unsafe_preflight'
   docker exec $containerName createdb -U postgres $unsafeDatabase
   if ($LASTEXITCODE -ne 0) { throw 'Could not create unsafe preflight database.' }
@@ -407,7 +428,7 @@ try {
     throw 'Blocked migration partially applied mutable DDL before preflight.'
   }
 
-  Write-Host '[PASS] repeatable migrations, negative preflight, seed, RLS, fifteen SQL suites, parent races, Admin operations races, bounded outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
+  Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-016, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity

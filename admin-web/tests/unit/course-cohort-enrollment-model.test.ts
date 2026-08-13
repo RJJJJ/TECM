@@ -64,6 +64,11 @@ test('database contract is Course-scoped, locked, audited, and direct-DML protec
   assert.match(migration, /student-enrollment:/);
   assert.match(migration, /course-enrollment:/);
   assert.match(migration, /revoke insert, update, delete on public\.cohort_students from authenticated/);
+  assert.match(migration, /revoke update on public\.exam_cohorts from authenticated/);
+  assert.match(migration, /grant update \(name, exam_date, weekday_pattern, campus_id, lead_teacher_id, status\)/);
+  assert.match(migration, /guard_exam_cohort_course_fields/);
+  assert.match(migration, /revoke all on function public\.guard_active_course_membership\(\) from public/);
+  assert.match(migration, /revoke all on function public\.guard_exam_cohort_course_fields\(\) from public/);
   assert.match(migration, /trg_exam_cohorts_audit/);
   assert.doesNotMatch(migration, /update public\.exam_cohorts[\s\S]{0,120}where course_id is null/);
 });

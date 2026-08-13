@@ -134,8 +134,8 @@ insert into public.campuses (id,name,address,is_active,organization_id) values
 on conflict (id) do update set name=excluded.name;
 
 insert into public.courses (id,title,category,level,campus_id,is_active,organization_id) values
-('18000000-0000-4000-8000-000000000001','Python Foundations','Coding','Foundation','17000000-0000-4000-8000-000000000001',true,'10000000-0000-4000-8000-000000000000')
-on conflict (id) do update set title=excluded.title;
+('18000000-0000-4000-8000-000000000001','Python Foundations','Python','Foundation','17000000-0000-4000-8000-000000000001',true,'10000000-0000-4000-8000-000000000000')
+on conflict (id) do update set title=excluded.title,category=excluded.category,level=excluded.level;
 
 insert into public.teacher_profiles (id,user_id,display_name,is_active,organization_id) values
 ('19000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000004','陳老師',true,'10000000-0000-4000-8000-000000000000'),
@@ -175,9 +175,9 @@ on conflict (organization_id,idempotency_key) do nothing;
 update public.organizations set name='澳門 TECM 教育中心' where id='10000000-0000-4000-8000-000000000000';
 
 insert into public.courses (id,title,category,level,campus_id,is_active,organization_id) values
-('18000000-0000-4000-8000-000000000002','Scratch 創意編程','編程','入門','17000000-0000-4000-8000-000000000001',true,'10000000-0000-4000-8000-000000000000'),
-('18000000-0000-4000-8000-000000000003','C++ 算法班','編程','進階','17000000-0000-4000-8000-000000000001',true,'10000000-0000-4000-8000-000000000000')
-on conflict (id) do update set title=excluded.title;
+('18000000-0000-4000-8000-000000000002','Scratch 創意編程','Scratch','入門','17000000-0000-4000-8000-000000000001',true,'10000000-0000-4000-8000-000000000000'),
+('18000000-0000-4000-8000-000000000003','C++ 算法班','C++','進階','17000000-0000-4000-8000-000000000001',true,'10000000-0000-4000-8000-000000000000')
+on conflict (id) do update set title=excluded.title,category=excluded.category,level=excluded.level;
 
 update public.exam_cohorts set name='Python 基礎班' where id='1a000000-0000-4000-8000-000000000001';
 insert into public.exam_cohorts (id,name,subject,level,exam_date,weekday_pattern,course_id,campus_id,lead_teacher_id,status,organization_id) values

@@ -151,6 +151,53 @@ create unique index if not exists unique_active_exam_membership
   },
   [pscustomobject]@{
     Case = 'M22'
+    Description = 'Restore authenticated table-level UPDATE on exam_cohorts.'
+    MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
+    TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
+    ExpectedFailure = 'direct legacy course linkage was accepted'
+    Search = @'
+revoke update on public.exam_cohorts from authenticated;
+revoke update (id, organization_id, course_id, subject, level, created_at, updated_at)
+  on public.exam_cohorts from authenticated;
+grant update (name, exam_date, weekday_pattern, campus_id, lead_teacher_id, status)
+  on public.exam_cohorts to authenticated;
+'@
+    Replacement = 'grant update on public.exam_cohorts to authenticated;'
+  },
+  [pscustomobject]@{
+    Case = 'M23'
+    Description = 'Remove the PUBLIC execute revoke from guard_active_course_membership.'
+    MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
+    TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
+    ExpectedFailure = 'guard_active_course_membership retains direct execute privilege'
+    Search = 'revoke all on function public.guard_active_course_membership() from public;'
+    Replacement = ''
+  },
+  [pscustomobject]@{
+    Case = 'M24'
+    Description = 'Remove Course/student serialization from the privileged Cohort-link trigger.'
+    MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
+    TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
+    ExpectedFailure = 'cohort Course trigger lock missing'
+    Search = @'
+    for legacy_student_id in
+      select distinct cs.student_id
+      from public.cohort_students cs
+      where cs.organization_id = new.organization_id
+        and cs.cohort_id = new.id
+        and cs.is_active_membership
+      order by cs.student_id
+    loop
+      perform pg_advisory_xact_lock(
+        hashtextextended('course-enrollment:' || new.organization_id::text || ':' || legacy_student_id::text || ':' || new.course_id::text, 0)
+      );
+    end loop;
+
+'@
+    Replacement = ''
+  },
+  [pscustomobject]@{
+    Case = 'M25'
     Description = 'Remove the tenant check from the controlled Course-link path.'
     MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
     TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
@@ -162,13 +209,14 @@ create unique index if not exists unique_active_exam_membership
 '@
     Replacement = @'
   execute 'alter table public.exam_cohorts disable trigger trg_exam_cohorts_tenant_fk';
+  execute 'alter table public.exam_cohorts disable trigger trg_guard_exam_cohort_course_fields';
   select * into course_row from public.courses
   where id = target_course_id and is_active
   for share;
 '@
   },
   [pscustomobject]@{
-    Case = 'M23'
+    Case = 'M26'
     Description = 'Remove the transfer transaction lock.'
     MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
     TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
@@ -185,7 +233,7 @@ create unique index if not exists unique_active_exam_membership
 '@
   },
   [pscustomobject]@{
-    Case = 'M24'
+    Case = 'M27'
     Description = 'Allow a legacy NULL-Course active enrollment to be bypassed.'
     MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
     TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
@@ -194,7 +242,7 @@ create unique index if not exists unique_active_exam_membership
     Replacement = "      and ec.course_id = '00000000-0000-0000-0000-000000000000'::uuid"
   },
   [pscustomobject]@{
-    Case = 'M25'
+    Case = 'M28'
     Description = 'Restore direct authenticated enrollment DML bypass.'
     MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
     TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
@@ -203,7 +251,7 @@ create unique index if not exists unique_active_exam_membership
     Replacement = 'grant insert, update, delete on public.cohort_students to authenticated;'
   },
   [pscustomobject]@{
-    Case = 'M26'
+    Case = 'M29'
     Description = 'Swallow a transfer failure after mutating the source instead of rolling back.'
     MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
     TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
