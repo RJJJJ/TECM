@@ -74,6 +74,17 @@ function macauDateInput(offsetDays: number, time?: string) {
   return time ? `${value}T${time}` : value;
 }
 
+function macauLaterTodayInput(offsetMinutes: number) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Macau', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  });
+  const parts = formatter.formatToParts(new Date());
+  const value = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find(item => item.type === type)?.value ?? 0);
+  const futureMinutes = Math.min(value('hour') * 60 + value('minute') + offsetMinutes, 23 * 60 + 59);
+  return `${value('year')}-${String(value('month')).padStart(2, '0')}-${String(value('day')).padStart(2, '0')}T${String(Math.floor(futureMinutes / 60)).padStart(2, '0')}:${String(futureMinutes % 60).padStart(2, '0')}`;
+}
+
 async function cleanupAdminUxFixture(client: SupabaseClient, fixture: CreatedFixture) {
   let studentsQuery = client.from('students').select('id,organization_id').in('display_name', [fixture.studentName, fixture.enrollmentStudentName]);
   if (organizationId) studentsQuery = studentsQuery.eq('organization_id', organizationId);
@@ -82,7 +93,7 @@ async function cleanupAdminUxFixture(client: SupabaseClient, fixture: CreatedFix
   const studentIds = (students ?? []).map((student) => student.id);
   if (!studentIds.length) {
     if (!organizationId) return;
-    const { data: cohorts, error: cohortError } = await client.from('exam_cohorts').select('id').eq('organization_id', organizationId).eq('name', fixture.cohortName);
+    const { data: cohorts, error: cohortError } = await client.from('exam_cohorts').select('id').eq('organization_id', organizationId).like('name', `${fixture.prefix}%`);
     if (cohortError) throw cohortError;
     const cohortIds = (cohorts ?? []).map((item) => item.id);
     if (cohortIds.length) {
@@ -96,7 +107,9 @@ async function cleanupAdminUxFixture(client: SupabaseClient, fixture: CreatedFix
       ['courses', 'title', fixture.courseName],
       ['campuses', 'name', fixture.campusName]
     ] as const) {
-      const { error } = await client.from(table).update({ is_active: false }).eq('organization_id', organizationId).eq(column, value);
+      let update = client.from(table).update({ is_active: false }).eq('organization_id', organizationId);
+      update = table === 'courses' ? update.like(column, `${fixture.prefix}%`) : update.eq(column, value);
+      const { error } = await update;
       if (error) throw error;
     }
     return;
@@ -138,7 +151,7 @@ async function cleanupAdminUxFixture(client: SupabaseClient, fixture: CreatedFix
     const { error: parentError } = await client.from('parent_profiles').update({ account_status: 'disabled' }).eq('organization_id', organizationId).eq('full_name', fixture.guardianName);
     if (parentError) throw parentError;
 
-    const { data: cohorts, error: cohortLookupError } = await client.from('exam_cohorts').select('id').eq('organization_id', organizationId).eq('name', fixture.cohortName);
+    const { data: cohorts, error: cohortLookupError } = await client.from('exam_cohorts').select('id').eq('organization_id', organizationId).like('name', `${fixture.prefix}%`);
     if (cohortLookupError) throw cohortLookupError;
     const cohortIds = (cohorts ?? []).map((item) => item.id);
     if (cohortIds.length) {
@@ -149,7 +162,7 @@ async function cleanupAdminUxFixture(client: SupabaseClient, fixture: CreatedFix
     }
     const { error: planUpdateError } = await client.from('fee_plans').update({ is_active: false }).eq('organization_id', organizationId).eq('name', fixture.feePlanName);
     if (planUpdateError) throw planUpdateError;
-    const { error: courseUpdateError } = await client.from('courses').update({ is_active: false }).eq('organization_id', organizationId).eq('title', fixture.courseName);
+    const { error: courseUpdateError } = await client.from('courses').update({ is_active: false }).eq('organization_id', organizationId).like('title', `${fixture.prefix}%`);
     if (courseUpdateError) throw courseUpdateError;
     const { error: campusUpdateError } = await client.from('campuses').update({ is_active: false }).eq('organization_id', organizationId).eq('name', fixture.campusName);
     if (campusUpdateError) throw campusUpdateError;
@@ -224,12 +237,13 @@ test.describe('教育中心營運主流程', () => {
     await expect(page.getByText(feePlanName)).toBeVisible();
 
     await page.goto('/admin/exam-cohorts');
+    const courseOption = page.getByLabel('所屬課程').locator('option').filter({ hasText: courseName });
+    await page.getByLabel('所屬課程').selectOption((await courseOption.getAttribute('value'))!);
     await page.getByLabel('班別名稱').fill(cohortName);
-    await page.getByLabel('科目').first().selectOption('Python');
-    await page.getByLabel('程度').first().fill('測試');
     await page.getByLabel('考試日期').fill(macauDateInput(90));
     await page.getByLabel('上課日').selectOption('saturday');
     await page.getByLabel('導師').selectOption({ index: 1 });
+    await page.getByLabel('校區').last().selectOption({ label: campusName });
     await page.getByLabel('班別狀態').selectOption('active');
     await page.getByRole('button', { name: '建立班別' }).click();
     await expect(page.getByRole('status')).toContainText('班別已建立');
@@ -245,13 +259,13 @@ test.describe('教育中心營運主流程', () => {
     await page.goto(`${cohortHref}/lesson-plans`);
     await page.getByLabel('第 1 堂教學內容').fill('測試教學內容');
     await page.getByRole('button', { name: '儲存教案' }).click();
-    await expect(page.getByRole('status')).toContainText('教案已儲存');
+    await expect(page.getByRole('status')).toContainText('教案已儲存', { timeout: 15_000 });
 
     await page.goto(`${cohortHref}/lesson-sessions`);
     await page.getByLabel('教案').selectOption({ index: 1 });
     await page.getByLabel('導師').selectOption({ index: 1 });
-    await page.getByLabel('開始時間').fill(macauDateInput(0, '09:00'));
-    await page.getByLabel('結束時間').fill(macauDateInput(0, '10:00'));
+    await page.getByLabel('開始時間').fill(macauLaterTodayInput(30));
+    await page.getByLabel('結束時間').fill(macauLaterTodayInput(90));
     await page.getByRole('button', { name: '建立未來課堂' }).click();
     await expect(page.getByText('未來課堂已建立')).toBeVisible();
     await expect(page.locator('tbody tr')).toHaveCount(1);
@@ -428,6 +442,107 @@ test.describe('教育中心營運主流程', () => {
       const body = await page.locator('body').innerText();
       expect(body).not.toMatch(/row-level security policy|permission denied|PGRST|LessonPlanEditor|LessonSessionsPage|MakeupStudentListPage|error code/i);
     }
+  });
+
+  test('同一學生可跨課程報讀，並須透過確認流程在同課程轉班', async ({ page }, testInfo) => {
+    test.setTimeout(300_000);
+    const scope = `${canonicalRunId}-${testInfo.project.name}-${testInfo.retry}`.replace(/[^a-z0-9_-]/gi, '_');
+    const prefix = `TEST_COURSE_MODEL_${scope}`;
+    const pythonCourse = `${prefix}_PYTHON`;
+    const scratchCourse = `${prefix}_SCRATCH`;
+    const pythonA = `${prefix}_PYTHON_A`;
+    const pythonB = `${prefix}_PYTHON_B`;
+    const scratchA = `${prefix}_SCRATCH_A`;
+    const studentName = `${prefix}_STUDENT`;
+    fixture = {
+      prefix, studentName, enrollmentStudentName: studentName, guardianName: `${prefix}_UNUSED_PARENT`,
+      campusName: `${prefix}_UNUSED_CAMPUS`, courseName: pythonCourse, cohortName: pythonA,
+      feePlanName: `${prefix}_UNUSED_PACKAGE`
+    };
+    const adminClient = createClient(supabaseUrl!, serviceRoleKey!, { auth: { persistSession: false, autoRefreshToken: false } });
+
+    await page.goto('/login');
+    await page.getByLabel('電郵').fill(email!);
+    await page.getByLabel('密碼').fill(password!);
+    await page.getByRole('button', { name: '登入' }).click();
+    await expect(page).toHaveURL(/\/admin\/dashboard$/, { timeout: 30_000 });
+
+    const createCourse = async (title: string, category: string, level: string) => {
+      await page.goto('/admin/courses');
+      await page.getByLabel('課程名稱').fill(title);
+      await page.getByLabel('類別').fill(category);
+      await page.getByLabel('程度').fill(level);
+      await page.getByRole('button', { name: '新增課程' }).click();
+      await expect(page.getByRole('status')).toContainText('課程已新增', { timeout: 15_000 });
+    };
+    await createCourse(pythonCourse, 'Python', '三級');
+    await createCourse(scratchCourse, 'Scratch', '一級');
+
+    const createCohort = async (courseTitle: string, cohortName: string, weekday: 'saturday' | 'sunday') => {
+      await page.goto('/admin/exam-cohorts');
+      const option = page.getByLabel('所屬課程').locator('option').filter({ hasText: courseTitle });
+      await page.getByLabel('所屬課程').selectOption((await option.getAttribute('value'))!);
+      await page.getByLabel('班別名稱').fill(cohortName);
+      await page.getByLabel('考試日期').fill(macauDateInput(100));
+      await page.getByLabel('上課日').selectOption(weekday);
+      await page.getByLabel('班別狀態').selectOption('active');
+      await page.getByRole('button', { name: '建立班別' }).click();
+      await expect(page.getByRole('status')).toContainText('班別已建立', { timeout: 15_000 });
+    };
+    await createCohort(pythonCourse, pythonA, 'saturday');
+    await createCohort(pythonCourse, pythonB, 'sunday');
+    await createCohort(scratchCourse, scratchA, 'saturday');
+
+    const student = await adminClient.from('students').insert({ organization_id: organizationId!, display_name: studentName, status: 'active' }).select('id').single();
+    expect(student.error).toBeNull();
+    const cohorts = await adminClient.from('exam_cohorts').select('id,name,course_id').eq('organization_id', organizationId!).in('name', [pythonA, pythonB, scratchA]);
+    expect(cohorts.error).toBeNull();
+    const cohort = (name: string) => cohorts.data!.find(row => row.name === name)!;
+
+    const openCohort = async (name: string) => {
+      await page.goto('/admin/exam-cohorts');
+      const href = await page.getByRole('row').filter({ hasText: name }).getByRole('link', { name: '開啟班別' }).getAttribute('href');
+      await page.goto(href!);
+    };
+    await openCohort(pythonA);
+    await page.getByLabel('要加入的學生').selectOption({ label: studentName });
+    await page.getByRole('button', { name: '加入班別' }).click();
+    await expect(page.getByRole('status')).toContainText('學生已加入班別。', { timeout: 15_000 });
+
+    await openCohort(scratchA);
+    await page.getByLabel('要加入的學生').selectOption({ label: studentName });
+    await page.getByRole('button', { name: '加入班別' }).click();
+    await expect(page.getByRole('status')).toContainText('學生已加入班別。', { timeout: 15_000 });
+
+    const sessionClient = createClient(supabaseUrl!, anonKey!, { auth: { persistSession: false, autoRefreshToken: false } });
+    expect((await sessionClient.auth.signInWithPassword({ email: email!, password: password! })).error).toBeNull();
+    const replay = await sessionClient.rpc('enroll_student_in_cohort', { target_organization_id: organizationId!, target_cohort_id: cohort(pythonA).id, target_student_id: student.data!.id });
+    expect(replay.error).toBeNull();
+    expect((replay.data as { status: string }).status).toBe('existing');
+
+    await openCohort(pythonB);
+    await page.getByLabel('要加入的學生').selectOption({ label: studentName });
+    await page.getByRole('button', { name: '加入班別' }).click();
+    await expect(page.getByRole('status')).toContainText('學生已報讀此課程的另一班別。如需更換，請使用轉班。', { timeout: 15_000 });
+    await expect(page.locator('body')).not.toContainText(/duplicate key|unique_active_exam_membership|PGRST|error boundary/i);
+
+    await openCohort(pythonA);
+    const transfer = page.locator('form').filter({ hasText: `學生：${studentName}` });
+    await transfer.getByLabel(`為${studentName}選擇目標班別`).selectOption({ label: pythonB });
+    await transfer.getByRole('checkbox').check();
+    await transfer.getByRole('button', { name: '確認轉班' }).click();
+    await expect(transfer.getByRole('status')).toContainText('學生已完成轉班，舊報讀記錄已保留。', { timeout: 15_000 });
+    await page.reload();
+
+    const memberships = await adminClient.from('cohort_students').select('cohort_id,status,is_active_membership,left_at').eq('organization_id', organizationId!).eq('student_id', student.data!.id);
+    expect(memberships.error).toBeNull();
+    expect(memberships.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ cohort_id: cohort(pythonA).id, status: 'withdrawn', is_active_membership: false }),
+      expect.objectContaining({ cohort_id: cohort(pythonB).id, status: 'active', is_active_membership: true }),
+      expect.objectContaining({ cohort_id: cohort(scratchA).id, status: 'active', is_active_membership: true })
+    ]));
+    await openCohort(pythonB);
+    await expect(page.getByText(studentName).first()).toBeVisible();
   });
 });
 

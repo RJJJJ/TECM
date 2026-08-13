@@ -3,6 +3,8 @@ import { notFound } from 'next/navigation';
 import { getOperationsContext } from '@/lib/operations/context';
 import { ErrorState, EmptyState, PageHeader, Badge } from '@/components/operations-ui';
 import CohortStudentForm from '../cohort-student-form';
+import CohortCourseLinkForm from '../cohort-course-link-form';
+import CohortTransferForm from '../cohort-transfer-form';
 import { statusLabel } from '@/lib/operations/labels';
 
 type Cohort = {
@@ -13,6 +15,8 @@ type Cohort = {
   exam_date: string;
   weekday_pattern: string;
   status: string;
+  course_id: string | null;
+  courses: { title: string; category: string | null; level: string | null } | null;
   teacher_profiles: { display_name: string | null } | null;
 };
 
@@ -26,6 +30,7 @@ type LessonPlan = {
 
 type StudentRow = {
   id: string;
+  student_id: string;
   status: string;
   students: { display_name: string | null; school_name: string | null } | null;
 };
@@ -45,7 +50,7 @@ export default async function ExamCohortDetailPage({ params }: { params: Promise
   const { supabase, organizationId, role } = await getOperationsContext();
   const { data: cohortData, error: cohortError } = await supabase
     .from('exam_cohorts')
-    .select('id,name,subject,level,exam_date,weekday_pattern,status,teacher_profiles(display_name)')
+    .select('id,name,subject,level,exam_date,weekday_pattern,status,course_id,courses(title,category,level),teacher_profiles(display_name)')
     .eq('id', id)
     .eq('organization_id', organizationId)
     .maybeSingle();
@@ -57,7 +62,7 @@ export default async function ExamCohortDetailPage({ params }: { params: Promise
 
   const cohort = cohortData as unknown as Cohort;
 
-  const [{ data: lessonData, error: lessonError }, { data: studentData, error: studentError }, { data: attendanceData, error: attendanceError }, { data: makeupData, error: makeupError }, { data: availableStudentData, error: availableStudentError }] = await Promise.all([
+  const [{ data: lessonData, error: lessonError }, { data: studentData, error: studentError }, { data: attendanceData, error: attendanceError }, { data: makeupData, error: makeupError }, { data: availableStudentData, error: availableStudentError }, { data: courseData, error: courseError }, { data: transferTargetData, error: transferTargetError }] = await Promise.all([
     supabase.from('lesson_plans').select('id,sequence_no,title,teaching_content,makeup_guidance').eq('organization_id', organizationId).eq('cohort_id', id).order('sequence_no'),
     supabase.from('cohort_students').select('id,status,student_id,students(display_name,school_name)').eq('organization_id', organizationId).eq('cohort_id', id).eq('status', 'active').order('created_at'),
     supabase
@@ -68,26 +73,31 @@ export default async function ExamCohortDetailPage({ params }: { params: Promise
       .order('recorded_at', { ascending: false })
       .limit(50),
     supabase.from('makeup_tasks').select('id,status,priority').eq('organization_id', organizationId).eq('cohort_id', id),
-    supabase.from('students').select('id,display_name').eq('organization_id', organizationId).eq('status', 'active').order('display_name')
+    supabase.from('students').select('id,display_name').eq('organization_id', organizationId).eq('status', 'active').order('display_name'),
+    supabase.from('courses').select('id,title,category,level').eq('organization_id', organizationId).eq('is_active', true).order('title'),
+    cohort.course_id
+      ? supabase.from('exam_cohorts').select('id,name').eq('organization_id', organizationId).eq('course_id', cohort.course_id).eq('status', 'active').neq('id', id).order('name')
+      : Promise.resolve({ data: [], error: null })
   ]);
 
   const lessons = (lessonData ?? []) as unknown as LessonPlan[];
   const students = (studentData ?? []) as unknown as StudentRow[];
   const attendances = (attendanceData ?? []) as unknown as AttendanceRow[];
   const makeupTasks = makeupData ?? [];
-  const enrolledStudentIds = new Set((students as Array<StudentRow & { student_id?: string }>).map(row => row.student_id).filter(Boolean));
+  const enrolledStudentIds = new Set(students.map(row => row.student_id));
   const availableStudents = (availableStudentData ?? []).filter(student => !enrolledStudentIds.has(student.id));
   const pendingMakeups = makeupTasks.filter((task: any) => ['pending', 'recommended'].includes(task.status)).length;
 
   return (
     <section className="space-y-5">
-      <PageHeader title={cohort.name} description={`${cohort.subject}／${cohort.level} · 考試日期 ${cohort.exam_date} · ${cohort.weekday_pattern === 'saturday' ? '星期六' : '星期日'} · 導師：${cohort.teacher_profiles?.display_name ?? '待分配'}`} action={<Link className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" href="/admin/exam-cohorts">返回班別列表</Link>} />
+      <PageHeader title={cohort.name} description={`${cohort.courses?.title ?? '尚未連結課程'} · 考試日期 ${cohort.exam_date} · ${cohort.weekday_pattern === 'saturday' ? '星期六' : '星期日'} · 導師：${cohort.teacher_profiles?.display_name ?? '待分配'}`} action={<Link className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" href="/admin/exam-cohorts">返回班別列表</Link>} />
+      {!cohort.course_id && ['admin', 'staff'].includes(role) ? <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-5"><h2 className="font-semibold text-amber-950">此班別尚未連結課程，請先選擇所屬課程。</h2><p className="mt-1 text-sm text-amber-900">現有班別及報讀記錄會保持可讀；完成連結前不能新增普通報讀。</p><div className="mt-4"><CohortCourseLinkForm cohortId={id} cohortSummary={`${cohort.name} · ${cohort.subject}／${cohort.level} · ${cohort.exam_date}`} courses={(courseData ?? []).map(course => ({ id: course.id, title: course.title, category: course.category, level: course.level }))} /></div></div> : null}
       <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-2xl font-semibold text-slate-900">班別資料</h2>
             <p className="mt-1 text-sm text-slate-600">
-              {cohort.subject}／{cohort.level} · 考試日期 {cohort.exam_date} · {cohort.weekday_pattern === 'saturday' ? '星期六' : '星期日'}
+              所屬課程：{cohort.courses?.title ?? '尚未連結'} · {cohort.courses?.category ?? cohort.subject}／{cohort.courses?.level ?? cohort.level} · 考試日期 {cohort.exam_date} · {cohort.weekday_pattern === 'saturday' ? '星期六' : '星期日'}
             </p>
             <p className="mt-1 text-sm text-slate-600">導師：{cohort.teacher_profiles?.display_name ?? '待分配'}</p>
           </div>
@@ -112,8 +122,8 @@ export default async function ExamCohortDetailPage({ params }: { params: Promise
         <Metric label="待安排補課" value={pendingMakeups} />
       </div>
 
-      {lessonError || studentError || attendanceError || makeupError || availableStudentError ? <ErrorState error={lessonError || studentError || attendanceError || makeupError || availableStudentError} fallback="部分班別資料未能載入，請稍後再試。" /> : null}
-      {['admin', 'staff'].includes(role) ? <Panel title="將學生加入班別"><CohortStudentForm cohortId={id} students={availableStudents.map(student => ({ id: student.id, label: student.display_name }))} /></Panel> : null}
+      {lessonError || studentError || attendanceError || makeupError || availableStudentError || courseError || transferTargetError ? <ErrorState error={lessonError || studentError || attendanceError || makeupError || availableStudentError || courseError || transferTargetError} fallback="部分班別資料未能載入，請稍後再試。" /> : null}
+      {['admin', 'staff'].includes(role) ? <Panel title="將學生加入班別">{cohort.course_id ? <CohortStudentForm cohortId={id} students={availableStudents.map(student => ({ id: student.id, label: student.display_name }))} /> : <p className="text-sm font-medium text-amber-800">此班別尚未連結課程，請先選擇所屬課程。</p>}</Panel> : null}
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Panel title="教案">
@@ -138,9 +148,9 @@ export default async function ExamCohortDetailPage({ params }: { params: Promise
           ) : (
             <div className="space-y-2">
               {students.map((row) => (
-                <div key={row.id} className="flex justify-between rounded-lg border border-slate-200 p-3 text-sm">
-                  <span>{row.students?.display_name ?? '-'}</span>
-                   <Badge>{statusLabel(row.status)}</Badge>
+                <div key={row.id} className="rounded-lg border border-slate-200 p-3 text-sm">
+                  <div className="flex justify-between"><span>{row.students?.display_name ?? '-'}</span><Badge>{statusLabel(row.status)}</Badge></div>
+                  {cohort.course_id && (transferTargetData ?? []).length ? <CohortTransferForm sourceCohortId={id} studentId={row.student_id} studentName={row.students?.display_name ?? '學生'} sourceName={cohort.name} courseName={cohort.courses?.title ?? `${cohort.subject}／${cohort.level}`} targets={(transferTargetData ?? []).map(target => ({ id: target.id, name: target.name }))} /> : null}
                 </div>
               ))}
             </div>

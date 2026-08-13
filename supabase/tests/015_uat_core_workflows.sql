@@ -14,7 +14,7 @@ insert into public.exam_cohorts (
   course_id, campus_id, lead_teacher_id, status
 ) values (
   '51000000-0000-4000-8000-000000000010',
-  '10000000-0000-4000-8000-000000000000','UAT Core Cohort','Python','UAT',
+  '10000000-0000-4000-8000-000000000000','UAT Core Cohort','Python','Foundation',
   current_date + 90,'saturday','18000000-0000-4000-8000-000000000001',
   '17000000-0000-4000-8000-000000000001','19000000-0000-4000-8000-000000000001','active'
 ) on conflict (id) do update set status = 'active';
