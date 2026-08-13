@@ -176,7 +176,7 @@ jobs:
           export PLAYWRIGHT_BASE_URL='http://127.0.0.1:3000'
           export PLAYWRIGHT_RUN_ID="$TECM_TEST_RUN_ID"
           export PLAYWRIGHT_RESULT_FILE="test-results/playwright-results-${TECM_TEST_RUN_ID}.json"
-          export PLAYWRIGHT_EXPECTED_TESTS=10
+          export PLAYWRIGHT_EXPECTED_TESTS=12
           cd admin-web
           npm run test:e2e
           npm run test:e2e:verify

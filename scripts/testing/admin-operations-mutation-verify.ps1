@@ -3,7 +3,8 @@ param(
   [ValidateRange(1, 3600)]
   [int]$CommandTimeoutSeconds = $(if ($env:TECM_MUTATION_COMMAND_TIMEOUT_SECONDS) { [int]$env:TECM_MUTATION_COMMAND_TIMEOUT_SECONDS } else { 120 }),
   [ValidateRange(1, 3600)]
-  [int]$ReadyTimeoutSeconds = $(if ($env:TECM_MUTATION_READY_TIMEOUT_SECONDS) { [int]$env:TECM_MUTATION_READY_TIMEOUT_SECONDS } else { 60 })
+  [int]$ReadyTimeoutSeconds = $(if ($env:TECM_MUTATION_READY_TIMEOUT_SECONDS) { [int]$env:TECM_MUTATION_READY_TIMEOUT_SECONDS } else { 60 }),
+  [string[]]$CaseFilter = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,7 +38,9 @@ $setupFiles = @(
   'supabase/migrations/202608020011_makeup_partial_state_recovery.sql',
   'supabase/migrations/202608020011_makeup_partial_state_recovery.sql',
   'supabase/migrations/202608050012_uat_core_workflows.sql',
-  'supabase/migrations/202608050012_uat_core_workflows.sql'
+  'supabase/migrations/202608050012_uat_core_workflows.sql',
+  'supabase/migrations/202608130013_course_cohort_enrollment_model.sql',
+  'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
 )
 
 $targetAssertion = 'supabase/tests/013_admin_operations_release_gate.sql'
@@ -110,27 +113,11 @@ $cases = @(
   [pscustomobject]@{
     Case = 'M18'
     Description = 'Leave a withdrawn duplicate enrollment invisible instead of reactivating it.'
-    MutationFile = 'supabase/migrations/202608050012_uat_core_workflows.sql'
-    TargetAssertion = 'supabase/tests/015_uat_core_workflows.sql'
-    ExpectedFailure = 'enrollment list/count state did not persist as active'
-    Search = @'
-    else
-      update public.cohort_students
-      set status = 'active', left_at = null, joined_at = current_date
-      where id = existing_enrollment.id
-      returning id into enrollment_id;
-      result_status := 'reactivated';
-    end if;
-'@
-    Replacement = @'
-    else
-      update public.cohort_students
-      set left_at = null, joined_at = current_date
-      where id = existing_enrollment.id
-      returning id into enrollment_id;
-      result_status := 'reactivated';
-    end if;
-'@
+    MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
+    TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
+    ExpectedFailure = 'withdrawn membership was not restored'
+    Search = "      set status = 'active', left_at = null, joined_at = current_date"
+    Replacement = "      set left_at = null, joined_at = current_date"
   },
   [pscustomobject]@{
     Case = 'M19'
@@ -140,8 +127,99 @@ $cases = @(
     ExpectedFailure = 'parent-student tenant condition no longer blocks unsafe legacy link'
     Search = '     and s.organization_id=psl.organization_id'
     Replacement = ''
+  },
+  [pscustomobject]@{
+    Case = 'M20'
+    Description = 'Restore the invalid global student-only active membership unique index.'
+    MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
+    TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
+    ExpectedFailure = 'unique_active_exam_membership'
+    Search = 'drop index if exists public.unique_active_exam_membership;'
+    Replacement = @'
+create unique index if not exists unique_active_exam_membership
+  on public.cohort_students(student_id) where is_active_membership;
+'@
+  },
+  [pscustomobject]@{
+    Case = 'M21'
+    Description = 'Remove the same-Course active membership recheck.'
+    MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
+    TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
+    ExpectedFailure = 'same-course second cohort enrollment was accepted'
+    Search = '      and ec.course_id = cohort_course'
+    Replacement = '      and false'
+  },
+  [pscustomobject]@{
+    Case = 'M22'
+    Description = 'Remove the tenant check from the controlled Course-link path.'
+    MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
+    TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
+    ExpectedFailure = 'cross-tenant course link was accepted'
+    Search = @'
+  select * into course_row from public.courses
+  where id = target_course_id and organization_id = target_organization_id and is_active
+  for share;
+'@
+    Replacement = @'
+  execute 'alter table public.exam_cohorts disable trigger trg_exam_cohorts_tenant_fk';
+  select * into course_row from public.courses
+  where id = target_course_id and is_active
+  for share;
+'@
+  },
+  [pscustomobject]@{
+    Case = 'M23'
+    Description = 'Remove the transfer transaction lock.'
+    MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
+    TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
+    ExpectedFailure = 'transfer advisory lock missing'
+    Search = @'
+  if source_cohort_id = target_cohort_id then raise exception 'transfer cohorts must differ'; end if;
+
+  perform pg_advisory_xact_lock(
+    hashtextextended('student-enrollment:' || target_organization_id::text || ':' || target_student_id::text, 0)
+  );
+'@
+    Replacement = @'
+  if source_cohort_id = target_cohort_id then raise exception 'transfer cohorts must differ'; end if;
+'@
+  },
+  [pscustomobject]@{
+    Case = 'M24'
+    Description = 'Allow a legacy NULL-Course active enrollment to be bypassed.'
+    MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
+    TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
+    ExpectedFailure = 'legacy NULL-course UAT did not return course-link business failure'
+    Search = '      and ec.course_id is null'
+    Replacement = "      and ec.course_id = '00000000-0000-0000-0000-000000000000'::uuid"
+  },
+  [pscustomobject]@{
+    Case = 'M25'
+    Description = 'Restore direct authenticated enrollment DML bypass.'
+    MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
+    TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
+    ExpectedFailure = 'authenticated direct enrollment DML bypassed canonical RPC'
+    Search = 'revoke insert, update, delete on public.cohort_students from authenticated;'
+    Replacement = 'grant insert, update, delete on public.cohort_students to authenticated;'
+  },
+  [pscustomobject]@{
+    Case = 'M26'
+    Description = 'Swallow a transfer failure after mutating the source instead of rolling back.'
+    MutationFile = 'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
+    TargetAssertion = 'supabase/tests/016_course_cohort_enrollment_model.sql'
+    ExpectedFailure = 'atomic transfer state is incorrect'
+    Search = '  if destination_membership.id is null then'
+    Replacement = @'
+  return jsonb_build_object('ok', false, 'status', 'partial');
+  if destination_membership.id is null then
+'@
   }
 )
+
+if ($CaseFilter.Count -gt 0) {
+  $cases = @($cases | Where-Object { $_.Case -in $CaseFilter })
+  if ($cases.Count -ne $CaseFilter.Count) { throw 'One or more requested mutation cases do not exist.' }
+}
 
 function ConvertTo-WorkspacePath {
   param([Parameter(Mandatory)][string]$RelativePath)

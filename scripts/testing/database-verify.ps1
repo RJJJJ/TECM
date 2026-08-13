@@ -70,6 +70,8 @@ try {
     '/workspace/supabase/migrations/202608020011_makeup_partial_state_recovery.sql',
     '/workspace/supabase/migrations/202608050012_uat_core_workflows.sql',
     '/workspace/supabase/migrations/202608050012_uat_core_workflows.sql',
+    '/workspace/supabase/migrations/202608130013_course_cohort_enrollment_model.sql',
+    '/workspace/supabase/migrations/202608130013_course_cohort_enrollment_model.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
     '/workspace/supabase/tests/002_rls_tenant_isolation.sql',
     '/workspace/supabase/tests/003_attendance_leave_makeup.sql',
@@ -84,7 +86,8 @@ try {
     '/workspace/supabase/tests/012_admin_operations_integrity.sql',
     '/workspace/supabase/tests/013_admin_operations_release_gate.sql',
     '/workspace/supabase/tests/014_makeup_partial_state_recovery.sql',
-    '/workspace/supabase/tests/015_uat_core_workflows.sql'
+    '/workspace/supabase/tests/015_uat_core_workflows.sql',
+    '/workspace/supabase/tests/016_course_cohort_enrollment_model.sql'
   )
 
   foreach ($file in $files) {
@@ -352,6 +355,31 @@ try {
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/makeup_same_task_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Makeup same-task booking/completion race assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/course_enrollment_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare Course enrollment concurrency fixtures.' }
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/course_enroll_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/course_enroll_second.sql' `
+    -ExpectedFirstExitCodes @(0, 3) `
+    -ExpectedSecondExitCodes @(0, 3) `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'course-enroll'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/course_enroll_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Course enrollment concurrency assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/course_transfer_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/course_transfer_second.sql' `
+    -ExpectedFirstExit 0 `
+    -ExpectedSecondExit 3 `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'course-transfer-enroll'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/course_transfer_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Course transfer/enrollment concurrency assertion failed.' }
 
   $unsafeDatabase = 'tecm_unsafe_preflight'
   docker exec $containerName createdb -U postgres $unsafeDatabase

@@ -4,6 +4,8 @@ export const DUPLICATE_ERROR_MESSAGE = '已有相同記錄，請勿重複建立�
 export const LEAVE_SESSION_ERROR_MESSAGE = '這名學生沒有報讀所選課堂的班別，或該課堂已取消、已開始或不再接受請假。請重新選擇。';
 export const TEACHER_IDENTITY_ERROR_MESSAGE = '此登入身份已連結其他機構或其他職員角色，不能改為導師。';
 export const IDEMPOTENCY_ERROR_MESSAGE = '表單內容已在提交後改變。請重新整理頁面，再重新操作。';
+export const COHORT_COURSE_REQUIRED_MESSAGE = '此班別尚未連結課程，請先選擇所屬課程。';
+export const SAME_COURSE_ENROLLMENT_MESSAGE = '學生已報讀此課程的另一班別。如需更換，請使用轉班。';
 
 type ErrorLike = {
   code?: unknown;
@@ -79,6 +81,36 @@ export function safeErrorMessage(
   if (/idempotency key payload mismatch/.test(message)) {
     logSafeFailure(operation, error, referenceId);
     return IDEMPOTENCY_ERROR_MESSAGE;
+  }
+
+  if (/cohort course is not linked/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return COHORT_COURSE_REQUIRED_MESSAGE;
+  }
+
+  if (/student already has active membership in this course/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return SAME_COURSE_ENROLLMENT_MESSAGE;
+  }
+
+  if (/transfer confirmation required/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return '請確認轉班資料及影響後再提交。';
+  }
+
+  if (/transfer cohorts must differ|transfer cohorts must belong to the same course|active source enrollment not found|target cohort is unavailable for transfer/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return '轉班資料已變更或不符合課程規則，請重新整理後再試。';
+  }
+
+  if (/course link confirmation required/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return '請確認班別及課程資料後再連結。';
+  }
+
+  if (/cohort course is already linked|course link conflicts with active student enrollment/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return '此班別的課程連結不能直接更改，或會與現有在讀學生衝突。';
   }
 
   if (code === '42501' || status === 401 || status === 403 || /row-level security|permission denied|not authorized|authorization required|forbidden|unauthorized/.test(message)) {
