@@ -14,6 +14,7 @@ const sourceFiles = [
   'admin-web/lib/operations/actions.ts',
   'admin-web/lib/operations/errors.ts'
 ];
+const sourceSnapshots = new Map(sourceFiles.map((relative) => [relative, readFileSync(resolve(repoRoot, relative), 'utf8')]));
 
 const cases = [
   {
@@ -68,6 +69,7 @@ if (baseline.status !== 0) {
 }
 
 const evidence = [];
+const cleanupEvidence = [];
 for (const mutation of cases) {
   const tempRoot = mkdtempSync(resolve(tmpdir(), `tecm-teacher-attendance-${mutation.id.toLowerCase()}-`));
   try {
@@ -84,7 +86,19 @@ for (const mutation of cases) {
     if (!caught) throw new Error(`${mutation.id} was not caught by the regression suite\n${output}`);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
+    cleanupEvidence.push({ id: mutation.id, cleaned: !existsSync(tempRoot) });
   }
 }
 
-process.stdout.write(`${JSON.stringify({ result: 'passed', cases: evidence })}\n`);
+const restorationPassed = sourceFiles.every((relative) => readFileSync(resolve(repoRoot, relative), 'utf8') === sourceSnapshots.get(relative));
+const cleanupPassed = cleanupEvidence.length === cases.length && cleanupEvidence.every(({ cleaned }) => cleaned);
+if (!restorationPassed || !cleanupPassed) {
+  throw new Error(`mutation restoration/cleanup failed: restoration=${restorationPassed} cleanup=${cleanupPassed}`);
+}
+
+process.stdout.write(`${JSON.stringify({
+  result: 'passed',
+  cases: evidence,
+  restoration: restorationPassed ? 'PASS' : 'FAIL',
+  cleanup: cleanupPassed ? 'PASS' : 'FAIL'
+})}\n`);
