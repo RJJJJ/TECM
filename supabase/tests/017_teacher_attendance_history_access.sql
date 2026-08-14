@@ -13,6 +13,57 @@ insert into public.lesson_sessions (
   '10000000-0000-4000-8000-000000000000'
 ) on conflict (id) do update set starts_at = excluded.starts_at, ends_at = excluded.ends_at, status = excluded.status;
 
+do $$
+declare
+  existing_index_definition text;
+  history_index_definition text;
+  audit_index_definition text;
+begin
+  select pg_get_indexdef(i.indexrelid) into existing_index_definition
+  from pg_index i
+  join pg_class c on c.oid = i.indexrelid
+  join pg_class t on t.oid = i.indrelid
+  join pg_namespace n on n.oid = t.relnamespace
+  where n.nspname = 'public'
+    and t.relname = 'lesson_sessions'
+    and c.relname = 'idx_lesson_sessions_teacher_starts'
+    and i.indisvalid and i.indisready;
+  if existing_index_definition is null
+     or existing_index_definition not like '%(teacher_id, starts_at)%' then
+    raise exception 'existing teacher attendance index is missing or has an unexpected key';
+  end if;
+
+  select pg_get_indexdef(i.indexrelid) into history_index_definition
+  from pg_index i
+  join pg_class c on c.oid = i.indexrelid
+  join pg_class t on t.oid = i.indrelid
+  join pg_namespace n on n.oid = t.relnamespace
+  where n.nspname = 'public'
+    and t.relname = 'lesson_sessions'
+    and c.relname = 'idx_lesson_sessions_teacher_history'
+    and i.indisvalid and i.indisready;
+  if history_index_definition is null
+     or history_index_definition not like '%(teacher_id, starts_at DESC)%' then
+    raise exception 'teacher attendance history index is missing or has an unexpected key';
+  end if;
+
+  select pg_get_indexdef(i.indexrelid) into audit_index_definition
+  from pg_index i
+  join pg_class c on c.oid = i.indexrelid
+  join pg_class t on t.oid = i.indrelid
+  join pg_namespace n on n.oid = t.relnamespace
+  where n.nspname = 'public'
+    and t.relname = 'audit_logs'
+    and c.relname = 'idx_audit_logs_attendance_history'
+    and i.indisvalid and i.indisready;
+  if audit_index_definition is null
+     or audit_index_definition not like '%(organization_id, occurred_at DESC)%'
+     or audit_index_definition not like '%table_name = ''attendance_records''%' then
+    raise exception 'attendance audit history index is missing or has an unexpected predicate';
+  end if;
+end
+$$;
+
 insert into public.attendance_records (
   organization_id, session_id, student_id, status, recorded_by, recorded_at
 ) values (

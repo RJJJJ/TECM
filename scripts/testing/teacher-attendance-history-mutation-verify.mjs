@@ -7,6 +7,7 @@ const repoRoot = resolve(import.meta.dirname, '../..');
 const testPath = 'admin-web/tests/unit/teacher-attendance-history.test.ts';
 const sourceFiles = [
   testPath,
+  'supabase/tests/017_teacher_attendance_history_access.sql',
   'supabase/migrations/202608140014_teacher_attendance_history_access.sql',
   'admin-web/app/admin/attendance/page.tsx',
   'admin-web/components/teacher-attendance-form.tsx',
@@ -44,6 +45,13 @@ const cases = [
     search: 'and target_expected_updated_at is distinct from attendance_row.updated_at then',
     replacement: 'and false then',
     expected: 'teacher history corrections are guarded, idempotent, auditable, and concurrency-safe'
+  },
+  {
+    id: 'M34',
+    file: 'supabase/migrations/202608140014_teacher_attendance_history_access.sql',
+    search: 'create index if not exists idx_lesson_sessions_teacher_history\n  on public.lesson_sessions (teacher_id, starts_at desc);',
+    replacement: '-- M34 mutation removed the teacher history index',
+    expected: 'teacher attendance history index is missing'
   }
 ];
 
@@ -57,8 +65,26 @@ function copyFixture(destination) {
   }
 }
 
+function verifyIndexContract(root) {
+  const migration = readFileSync(resolve(root, 'supabase/migrations/202608140014_teacher_attendance_history_access.sql'), 'utf8');
+  const sqlSuite = readFileSync(resolve(root, 'supabase/tests/017_teacher_attendance_history_access.sql'), 'utf8');
+  if (!migration.includes('create index if not exists idx_lesson_sessions_teacher_history')) {
+    throw new Error('teacher attendance history index is missing');
+  }
+  if (!sqlSuite.includes('teacher attendance history index is missing')) {
+    throw new Error('SQL 017 is missing the teacher attendance history index assertion');
+  }
+}
+
 function runTest(root) {
-  return spawnSync(process.execPath, ['--experimental-strip-types', '--test', resolve(root, testPath)], { cwd: root, encoding: 'utf8', env: process.env });
+  const result = spawnSync(process.execPath, ['--experimental-strip-types', '--test', resolve(root, testPath)], { cwd: root, encoding: 'utf8', env: process.env });
+  if (result.status !== 0) return result;
+  try {
+    verifyIndexContract(root);
+    return result;
+  } catch (error) {
+    return { status: 1, stdout: result.stdout, stderr: `${result.stderr}\n${error.message}` };
+  }
 }
 
 const baseline = runTest(repoRoot);
@@ -75,7 +101,7 @@ for (const mutation of cases) {
   try {
     copyFixture(tempRoot);
     const target = resolve(tempRoot, mutation.file);
-    const original = readFileSync(target, 'utf8');
+    const original = readFileSync(target, 'utf8').replaceAll('\r\n', '\n');
     const matches = original.split(mutation.search).length - 1;
     if (matches !== 1) throw new Error(`${mutation.id} mutation matched ${matches} times`);
     writeFileSync(target, original.replace(mutation.search, mutation.replacement));
