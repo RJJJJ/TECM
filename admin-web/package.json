@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/unit/*.test.ts",
     "test:mutation:uat": "node ../scripts/testing/uat-core-workflows-mutation-verify.mjs",
+    "test:mutation:teacher-attendance": "node ../scripts/testing/teacher-attendance-history-mutation-verify.mjs",
     "test:sharp": "node scripts/sharp-runtime-smoke.mjs",
     "security:image-guard": "node scripts/image-processing-guard.mjs",
     "test:e2e": "playwright test",
@@ -37,7 +38,7 @@
     "typescript": "^5.5.3"
   },
   "overrides": {
-    "nanoid": "3.3.17",
+    "nanoid": "3.3.18",
     "next": {
       "postcss": "8.5.18"
     },

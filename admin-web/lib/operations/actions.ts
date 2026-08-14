@@ -73,6 +73,36 @@ export async function submitSessionAttendanceAction(_: OperationState, form: For
   } catch (error) { return fail(error); }
 }
 
+export async function submitTeacherAttendanceAction(_: OperationState, form: FormData): Promise<OperationState> {
+  try {
+    const ctx = await getOperationsContext();
+    const sessionId = value(form, 'session_id');
+    const studentId = value(form, 'student_id');
+    const status = value(form, 'status');
+    const expectedUpdatedAt = value(form, 'expected_updated_at') || null;
+    const reason = value(form, 'reason');
+    const requestId = value(form, 'request_id');
+    if (!sessionId || !studentId || !['present', 'absent', 'excused'].includes(status) || !requestId) {
+      throw userFacingError('請完整填寫點名資料後再提交。');
+    }
+    const { data, error } = await ctx.supabase.rpc('submit_teacher_attendance', {
+      target_session_id: sessionId,
+      target_student_id: studentId,
+      target_status: status,
+      target_expected_updated_at: expectedUpdatedAt,
+      target_reason: reason || null,
+      target_request_id: requestId
+    });
+    if (error) throw error;
+    revalidatePath('/admin/attendance');
+    revalidatePath('/admin/sessions');
+    revalidatePath('/admin/packages');
+    return ok(data?.changed ? '點名已更新。' : '點名沒有變更。');
+  } catch (error) {
+    return fail(error);
+  }
+}
+
 export async function decideLeaveRequestAction(_: OperationState, form: FormData): Promise<OperationState> {
   try {
     const ctx = await getOperationsContext();

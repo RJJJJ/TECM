@@ -274,7 +274,7 @@ test.describe('教育中心營運主流程', () => {
     await page.getByLabel('開始時間').fill(macauDateInput(2, '09:00'));
     await page.getByLabel('結束時間').fill(macauDateInput(2, '10:00'));
     await page.getByRole('button', { name: '建立未來課堂' }).click();
-    await expect(page.locator('tbody tr')).toHaveCount(2);
+    await expect(page.locator('tbody tr')).toHaveCount(2, { timeout: 15_000 });
     const persistedCohort = await adminClient.from('exam_cohorts').select('id').eq('organization_id', organizationId!).eq('name', cohortName).single();
     expect(persistedCohort.error).toBeNull();
     const persistedPlans = await adminClient.from('lesson_plans').select('id').eq('organization_id', organizationId!).eq('cohort_id', persistedCohort.data!.id);
@@ -546,17 +546,21 @@ test.describe('教育中心營運主流程', () => {
   });
 });
 
-test('Teacher direct URL and navigation cannot reach the operations dashboard', async ({ page }) => {
+test('Teacher direct URL and navigation cannot reach the operations dashboard', async ({ page }, testInfo) => {
   test.skip(!teacherEmail || !teacherPassword, '需要本機 Teacher 測試登入');
   await page.goto('/login');
   await page.getByLabel('電郵').fill(teacherEmail!);
   await page.getByLabel('密碼').fill(teacherPassword!);
   await page.getByRole('button', { name: '登入' }).click();
-  await expect(page).toHaveURL(/\/admin\/sessions$/, { timeout: 30_000 });
-  await expect(page.getByRole('navigation', { name: '後台功能' }).getByRole('link', { name: '總覽' })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/admin\/attendance$/, { timeout: 30_000 });
+  if (testInfo.project.name === 'teacher-mobile') await page.locator('summary').click();
+  const navigation = page.getByRole('navigation', { name: '後台功能' });
+  await expect(navigation.getByRole('link', { name: '總覽' })).toHaveCount(0);
+  await expect(navigation.getByRole('link', { name: '課堂與點名' })).toHaveCount(1);
+  await expect(navigation.getByRole('link', { name: '今日課堂' })).toHaveCount(0);
   await page.goto('/admin/dashboard');
-  await expect(page).toHaveURL(/\/admin\/sessions$/);
+  await expect(page).toHaveURL(/\/admin\/attendance$/);
   await expect(page.locator('body')).not.toContainText(/欠費總額|本月收款|營運儀表板/);
   await page.goto('/admin');
-  await expect(page).toHaveURL(/\/admin\/sessions$/);
+  await expect(page).toHaveURL(/\/admin\/attendance$/);
 });

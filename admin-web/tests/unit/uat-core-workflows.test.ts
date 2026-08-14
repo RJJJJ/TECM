@@ -52,12 +52,12 @@ test('teacher is denied the operations dashboard before sensitive queries execut
   const shell = source('admin-web/components/admin-shell.tsx');
   const actions = source('admin-web/lib/operations/actions.ts');
 
-  const guardPosition = dashboard.indexOf("if (context.role === 'teacher') redirect('/admin/sessions')");
+  const guardPosition = dashboard.indexOf("if (context.role === 'teacher') redirect('/admin/attendance')");
   const queryPosition = dashboard.indexOf('Promise.all([');
   assert.ok(guardPosition > 0 && queryPosition > guardPosition, 'teacher guard must precede dashboard queries');
-  assert.match(index, /role === 'teacher' \? '\/admin\/sessions' : '\/admin\/dashboard'/);
+  assert.match(index, /role === 'teacher' \? '\/admin\/attendance' : '\/admin\/dashboard'/);
   assert.doesNotMatch(shell, /\['總覽', '\/admin\/dashboard', \['admin', 'staff', 'teacher'\]\]/);
-  assert.match(shell, /role === 'teacher' \? '\/admin\/sessions'/);
+  assert.match(shell, /role === 'teacher' \? '\/admin\/attendance'/);
   assert.match(actions, /if \(!\['admin', 'staff'\]\.includes\(role\)\) throw userFacingError/);
 });
 
