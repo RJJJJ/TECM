@@ -15,51 +15,139 @@ insert into public.lesson_sessions (
 
 do $$
 declare
-  existing_index_definition text;
-  history_index_definition text;
-  audit_index_definition text;
+  baseline_index oid;
+  baseline_valid boolean;
+  baseline_ready boolean;
+  baseline_method text;
+  baseline_predicate pg_node_tree;
+  baseline_key_count integer;
+  baseline_first_key text;
+  baseline_second_key text;
+  audit_index oid;
+  audit_valid boolean;
+  audit_ready boolean;
+  audit_method text;
+  audit_predicate text;
+  audit_options text;
+  audit_key_count integer;
+  audit_first_key text;
+  audit_second_key text;
 begin
-  select pg_get_indexdef(i.indexrelid) into existing_index_definition
+  select
+    i.indexrelid,
+    i.indisvalid,
+    i.indisready,
+    am.amname,
+    i.indpred,
+    i.indnkeyatts,
+    pg_get_indexdef(i.indexrelid, 1, true),
+    pg_get_indexdef(i.indexrelid, 2, true)
+  into
+    baseline_index,
+    baseline_valid,
+    baseline_ready,
+    baseline_method,
+    baseline_predicate,
+    baseline_key_count,
+    baseline_first_key,
+    baseline_second_key
   from pg_index i
-  join pg_class c on c.oid = i.indexrelid
-  join pg_class t on t.oid = i.indrelid
-  join pg_namespace n on n.oid = t.relnamespace
-  where n.nspname = 'public'
-    and t.relname = 'lesson_sessions'
-    and c.relname = 'idx_lesson_sessions_teacher_starts'
-    and i.indisvalid and i.indisready;
-  if existing_index_definition is null
-     or existing_index_definition not like '%(teacher_id, starts_at)%' then
-    raise exception 'existing teacher attendance index is missing or has an unexpected key';
+  join pg_class index_rel on index_rel.oid = i.indexrelid
+  join pg_class table_rel on table_rel.oid = i.indrelid
+  join pg_namespace schema_rel on schema_rel.oid = table_rel.relnamespace
+  join pg_am am on am.oid = index_rel.relam
+  where schema_rel.nspname = 'public'
+    and table_rel.relname = 'lesson_sessions'
+    and index_rel.relname = 'idx_lesson_sessions_teacher_starts';
+
+  if baseline_index is null
+     or not baseline_valid
+     or not baseline_ready
+     or baseline_method <> 'btree'
+     or baseline_predicate is not null
+     or baseline_key_count <> 2
+     or baseline_first_key <> 'teacher_id'
+     or baseline_second_key <> 'starts_at' then
+    raise exception 'existing teacher attendance index is missing or has an unexpected contract';
   end if;
 
-  select pg_get_indexdef(i.indexrelid) into history_index_definition
-  from pg_index i
-  join pg_class c on c.oid = i.indexrelid
-  join pg_class t on t.oid = i.indrelid
-  join pg_namespace n on n.oid = t.relnamespace
-  where n.nspname = 'public'
-    and t.relname = 'lesson_sessions'
-    and c.relname = 'idx_lesson_sessions_teacher_history'
-    and i.indisvalid and i.indisready;
-  if history_index_definition is null
-     or history_index_definition not like '%(teacher_id, starts_at DESC)%' then
-    raise exception 'teacher attendance history index is missing or has an unexpected key';
+  if exists (
+    select 1
+    from pg_class index_rel
+    join pg_index i on i.indexrelid = index_rel.oid
+    join pg_class table_rel on table_rel.oid = i.indrelid
+    join pg_namespace schema_rel on schema_rel.oid = table_rel.relnamespace
+    where schema_rel.nspname = 'public'
+      and table_rel.relname = 'lesson_sessions'
+      and index_rel.relname = 'idx_lesson_sessions_teacher_history'
+  ) then
+    raise exception 'redundant teacher attendance history index exists';
   end if;
 
-  select pg_get_indexdef(i.indexrelid) into audit_index_definition
+  if exists (
+    select 1
+    from pg_index i
+    join pg_class index_rel on index_rel.oid = i.indexrelid
+    join pg_class table_rel on table_rel.oid = i.indrelid
+    join pg_namespace schema_rel on schema_rel.oid = table_rel.relnamespace
+    join pg_am am on am.oid = index_rel.relam
+    where i.indexrelid <> baseline_index
+      and schema_rel.nspname = 'public'
+      and table_rel.relname = 'lesson_sessions'
+      and am.amname = 'btree'
+      and i.indisvalid
+      and i.indisready
+      and i.indpred is null
+      and i.indexprs is null
+      and i.indnkeyatts >= 2
+      and pg_get_indexdef(i.indexrelid, 1, true) = 'teacher_id'
+      and regexp_replace(pg_get_indexdef(i.indexrelid, 2, true), '\s+(ASC|DESC)$', '', 'i') = 'starts_at'
+  ) then
+    raise exception 'redundant teacher attendance history index exists';
+  end if;
+
+  select
+    i.indexrelid,
+    i.indisvalid,
+    i.indisready,
+    am.amname,
+    pg_get_expr(i.indpred, i.indrelid),
+    i.indoption::text,
+    i.indnkeyatts,
+    pg_get_indexdef(i.indexrelid, 1, true),
+    pg_get_indexdef(i.indexrelid, 2, true)
+  into
+    audit_index,
+    audit_valid,
+    audit_ready,
+    audit_method,
+    audit_predicate,
+    audit_options,
+    audit_key_count,
+    audit_first_key,
+    audit_second_key
   from pg_index i
-  join pg_class c on c.oid = i.indexrelid
-  join pg_class t on t.oid = i.indrelid
-  join pg_namespace n on n.oid = t.relnamespace
-  where n.nspname = 'public'
-    and t.relname = 'audit_logs'
-    and c.relname = 'idx_audit_logs_attendance_history'
-    and i.indisvalid and i.indisready;
-  if audit_index_definition is null
-     or audit_index_definition not like '%(organization_id, occurred_at DESC)%'
-     or audit_index_definition not like '%table_name = ''attendance_records''%' then
-    raise exception 'attendance audit history index is missing or has an unexpected predicate';
+  join pg_class index_rel on index_rel.oid = i.indexrelid
+  join pg_class table_rel on table_rel.oid = i.indrelid
+  join pg_namespace schema_rel on schema_rel.oid = table_rel.relnamespace
+  join pg_am am on am.oid = index_rel.relam
+  where schema_rel.nspname = 'public'
+    and table_rel.relname = 'audit_logs'
+    and index_rel.relname = 'idx_audit_logs_attendance_history';
+
+  if audit_index is null
+     or not audit_valid
+     or not audit_ready
+     or audit_method <> 'btree'
+     or audit_key_count <> 2
+     or audit_first_key <> 'organization_id'
+     or audit_second_key <> 'occurred_at'
+     or audit_options <> '0 3'
+     or audit_predicate not in (
+       '(table_name = ''attendance_records''::text)',
+       '(table_name = ''attendance_records'')'
+     ) then
+    raise exception 'attendance audit history index is missing or has an unexpected contract';
   end if;
 end
 $$;

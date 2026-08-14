@@ -40,7 +40,9 @@ $setupFiles = @(
   'supabase/migrations/202608050012_uat_core_workflows.sql',
   'supabase/migrations/202608050012_uat_core_workflows.sql',
   'supabase/migrations/202608130013_course_cohort_enrollment_model.sql',
-  'supabase/migrations/202608130013_course_cohort_enrollment_model.sql'
+  'supabase/migrations/202608130013_course_cohort_enrollment_model.sql',
+  'supabase/migrations/202608140014_teacher_attendance_history_access.sql',
+  'supabase/migrations/202608140014_teacher_attendance_history_access.sql'
 )
 
 $targetAssertion = 'supabase/tests/013_admin_operations_release_gate.sql'
@@ -261,6 +263,25 @@ grant update (name, exam_date, weekday_pattern, campus_id, lead_teacher_id, stat
   return jsonb_build_object('ok', false, 'status', 'partial');
   if destination_membership.id is null then
 '@
+  },
+  [pscustomobject]@{
+    Case = 'M34'
+    Description = 'Re-add the redundant teacher attendance history index.'
+    MutationFile = 'supabase/migrations/202608140014_teacher_attendance_history_access.sql'
+    TargetAssertion = 'supabase/tests/017_teacher_attendance_history_access.sql'
+    ExpectedFailure = 'redundant teacher attendance history index exists'
+    Search = @'
+-- idx_lesson_sessions_teacher_starts already provides a (teacher_id, starts_at)
+-- B-tree. Teacher history queries constrain teacher_id by equality, and PostgreSQL
+-- can scan that B-tree backward for starts_at DESC, so no redundant index is created.
+'@
+    Replacement = @'
+-- idx_lesson_sessions_teacher_starts already provides a (teacher_id, starts_at)
+-- B-tree. Teacher history queries constrain teacher_id by equality, and PostgreSQL
+-- can scan that B-tree backward for starts_at DESC, so no redundant index is created.
+create index if not exists idx_lesson_sessions_teacher_history
+  on public.lesson_sessions (teacher_id, starts_at desc);
+'@
   }
 )
 
@@ -419,6 +440,17 @@ function Get-SanitizedFailureClass {
   return 'unexpected_assertion_failure'
 }
 
+function Get-ExpectedFailureEvidence {
+  param(
+    [Parameter(Mandatory)]$Result,
+    [Parameter(Mandatory)][string]$ExpectedFailure
+  )
+
+  return @((($Result.Stdout, $Result.Stderr) -join "`n") -split "`r?`n" |
+    Where-Object { $_.Contains($ExpectedFailure) } |
+    Select-Object -First 1)
+}
+
 function Invoke-MutationCase {
   param([Parameter(Mandatory)]$CaseDefinition)
 
@@ -438,6 +470,8 @@ function Invoke-MutationCase {
     assertion_exit_code = $null
     assertion_timed_out = $false
     restoration = $null
+    outcome = "$($CaseDefinition.Case) NOT_CAUGHT"
+    assertion_failure_evidence = @()
     cleanup = $cleanup
   }
 
@@ -447,7 +481,7 @@ function Invoke-MutationCase {
     $mutation = Apply-Mutation -CaseDefinition $CaseDefinition -TempRoot $tempRoot
     $caseEvidence.source_sha256 = $mutation.SourceSha256
     $caseEvidence.mutated_sha256 = $mutation.MutatedSha256
-    $caseEvidence.restoration = if ($mutation.Restored) { 'source_worktree_unchanged' } else { 'source_worktree_changed' }
+    $caseEvidence.restoration = if ($mutation.Restored) { 'PASS' } else { 'FAIL' }
     if (-not $mutation.Restored) {
       $caseEvidence.classification = 'source_restoration_failure'
       return [pscustomobject]$caseEvidence
@@ -488,6 +522,10 @@ function Invoke-MutationCase {
     $caseEvidence.assertion_exit_code = $assertion.ExitCode
     $caseEvidence.assertion_timed_out = $assertion.TimedOut
     $caseEvidence.classification = Get-SanitizedFailureClass -Result $assertion -ExpectedFailure $CaseDefinition.ExpectedFailure
+    $caseEvidence.assertion_failure_evidence = Get-ExpectedFailureEvidence -Result $assertion -ExpectedFailure $CaseDefinition.ExpectedFailure
+    if ($caseEvidence.classification -eq 'expected_assertion_failure') {
+      $caseEvidence.outcome = "$($CaseDefinition.Case) CAUGHT"
+    }
     return [pscustomobject]$caseEvidence
   } catch {
     $caseEvidence.classification = 'harness_failure'
@@ -542,8 +580,13 @@ try {
   $allCleanupComplete = @(
     $evidence.cases | Where-Object { -not $_.cleanup.container_removed -or -not $_.cleanup.temp_removed }
   ).Count -eq 0
+  $allRestorationComplete = @(
+    $evidence.cases | Where-Object { $_.restoration -ne 'PASS' }
+  ).Count -eq 0
+  $evidence.verification.restoration = if ($allRestorationComplete) { 'PASS' } else { 'FAIL' }
+  $evidence.verification.cleanup = if ($allCleanupComplete) { 'PASS' } else { 'FAIL' }
 
-  if ($allCasesCaught -and $allCleanupComplete -and $evidence.verification.diff_check_clean -and $evidence.verification.tracked_worktree_clean) {
+  if ($allCasesCaught -and $allRestorationComplete -and $allCleanupComplete -and $evidence.verification.diff_check_clean) {
     $evidence.final_result = 'passed'
   } elseif ($evidence.environment -ne 'docker_available') {
     $evidence.final_result = 'environment_failed_closed'

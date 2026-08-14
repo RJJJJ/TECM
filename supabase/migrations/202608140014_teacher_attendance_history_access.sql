@@ -2,27 +2,9 @@
 -- This migration leaves the existing staff/admin submission path intact while
 -- preventing a teacher from bypassing the history, audit, and concurrency rules.
 
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_index i
-    join pg_class index_rel on index_rel.oid = i.indexrelid
-    join pg_class table_rel on table_rel.oid = i.indrelid
-    join pg_namespace schema_rel on schema_rel.oid = table_rel.relnamespace
-    where schema_rel.nspname = 'public'
-      and table_rel.relname = 'lesson_sessions'
-      and index_rel.relname = 'idx_lesson_sessions_teacher_starts'
-      and i.indisvalid
-      and i.indisready
-  ) then
-    raise exception 'teacher attendance baseline index is missing or invalid';
-  end if;
-end
-$$;
-
-create index if not exists idx_lesson_sessions_teacher_history
-  on public.lesson_sessions (teacher_id, starts_at desc);
+-- idx_lesson_sessions_teacher_starts already provides a (teacher_id, starts_at)
+-- B-tree. Teacher history queries constrain teacher_id by equality, and PostgreSQL
+-- can scan that B-tree backward for starts_at DESC, so no redundant index is created.
 
 create index if not exists idx_audit_logs_attendance_history
   on public.audit_logs (organization_id, occurred_at desc)
