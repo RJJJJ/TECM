@@ -11,8 +11,7 @@ const sections: ReadonlyArray<readonly [string, string, readonly Role[]]> = [
   ['導師', '/admin/teachers', ['admin', 'staff']],
   ['課程', '/admin/courses', ['admin', 'staff']],
   ['班別', '/admin/classes', ['admin', 'staff', 'teacher']],
-  ['今日課堂', '/admin/sessions', ['admin', 'staff', 'teacher']],
-  ['點名', '/admin/attendance', ['admin', 'staff', 'teacher']],
+  ['課堂與點名', '/admin/attendance', ['admin', 'staff', 'teacher']],
   ['請假與補課', '/admin/leave-makeup', ['admin', 'staff']],
   ['套票與課堂額', '/admin/packages', ['admin', 'staff']],
   ['收費與付款', '/admin/payments', ['admin', 'staff']],
@@ -34,7 +33,7 @@ function Navigation({ role }: { role: string }) {
 }
 
 export default function AdminShell({ children, organizationName, role = 'staff' }: { children: React.ReactNode; organizationName?: string | null; role?: string }) {
-  const homeHref = role === 'teacher' ? '/admin/sessions' : '/admin/dashboard';
+  const homeHref = role === 'teacher' ? '/admin/attendance' : '/admin/dashboard';
   return (
     <div className="min-h-screen bg-slate-100">
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur lg:hidden">

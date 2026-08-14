@@ -25,10 +25,10 @@ const sourceFiles = [
 const cases = [
   {
     id: 'M20',
-    description: 'Teacher regains the Admin operations dashboard.',
+    description: 'Teacher regains the Admin operations dashboard instead of being redirected to attendance.',
     file: 'admin-web/app/admin/dashboard/page.tsx',
-    search: "if (context.role === 'teacher') redirect('/admin/sessions');",
-    replacement: "if (false) redirect('/admin/sessions');",
+    search: "if (context.role === 'teacher') redirect('/admin/attendance');",
+    replacement: "if (false) redirect('/admin/attendance');",
     expected: 'teacher guard must precede dashboard queries'
   },
   {

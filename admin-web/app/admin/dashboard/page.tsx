@@ -6,7 +6,7 @@ import { Metric, PageHeader, Panel, EmptyState } from '@/components/operations-u
 export default async function DashboardPage() {
   const context = await getOperationsContext();
   // This guard must run before any finance or organization-wide query below.
-  if (context.role === 'teacher') redirect('/admin/sessions');
+  if (context.role === 'teacher') redirect('/admin/attendance');
   const { supabase, organizationId } = context;
   const today = todayMacau();
   const monthStart = `${today.slice(0, 7)}-01T00:00:00+08:00`;

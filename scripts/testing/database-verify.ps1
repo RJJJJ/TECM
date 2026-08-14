@@ -72,6 +72,8 @@ try {
     '/workspace/supabase/migrations/202608050012_uat_core_workflows.sql',
     '/workspace/supabase/migrations/202608130013_course_cohort_enrollment_model.sql',
     '/workspace/supabase/migrations/202608130013_course_cohort_enrollment_model.sql',
+    '/workspace/supabase/migrations/202608140014_teacher_attendance_history_access.sql',
+    '/workspace/supabase/migrations/202608140014_teacher_attendance_history_access.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
@@ -89,7 +91,8 @@ try {
     '/workspace/supabase/tests/013_admin_operations_release_gate.sql',
     '/workspace/supabase/tests/014_makeup_partial_state_recovery.sql',
     '/workspace/supabase/tests/015_uat_core_workflows.sql',
-    '/workspace/supabase/tests/016_course_cohort_enrollment_model.sql'
+    '/workspace/supabase/tests/016_course_cohort_enrollment_model.sql',
+    '/workspace/supabase/tests/017_teacher_attendance_history_access.sql'
   )
 
   foreach ($file in $files) {
@@ -261,6 +264,20 @@ try {
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/000_setup.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Could not prepare concurrency fixtures.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare teacher attendance concurrency fixture.' }
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/teacher_attendance_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/teacher_attendance_second.sql' `
+    -ExpectedFirstExitCodes @(0, 3) `
+    -ExpectedSecondExitCodes @(0, 3) `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'teacher-attendance'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Teacher attendance concurrency assertion failed.' }
 
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/invite_first.sql' `

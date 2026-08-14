@@ -93,6 +93,26 @@ export function safeErrorMessage(
     return SAME_COURSE_ENROLLMENT_MESSAGE;
   }
 
+  if (/future session attendance is not allowed/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return '課堂尚未開始，暫時不能點名。';
+  }
+
+  if (/attendance correction reason is required/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return '修正已結束課堂的點名時，必須填寫修改原因。';
+  }
+
+  if (/attendance has changed; reload before submitting/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return '此點名已被其他操作更新，請重新載入後再提交。';
+  }
+
+  if (/attendance is linked to finalized leave or makeup records/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return '此點名已關聯請假或補課記錄，請由管理員處理。';
+  }
+
   if (/transfer confirmation required/.test(message)) {
     logSafeFailure(operation, error, referenceId);
     return '請確認轉班資料及影響後再提交。';
