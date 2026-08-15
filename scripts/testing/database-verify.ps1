@@ -305,9 +305,9 @@ try {
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/disable_first.sql' `
     -SecondFile '/workspace/supabase/tests/concurrency/register_second.sql' `
-    -ExpectedSecondExit 3 `
     -StartSecondDelayMilliseconds 0 `
-    -BarrierRaceName 'disable-register'
+    -BarrierRaceName 'disable-register' `
+    -ExpectedExitPairs @('0,3')
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/device_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Device concurrency assertion failed.' }
@@ -319,7 +319,8 @@ try {
     -FirstFile '/workspace/supabase/tests/concurrency/register_first.sql' `
     -SecondFile '/workspace/supabase/tests/concurrency/disable_second.sql' `
     -StartSecondDelayMilliseconds 0 `
-    -BarrierRaceName 'register-disable'
+    -BarrierRaceName 'register-disable' `
+    -ExpectedExitPairs @('0,0')
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/device_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Opposite device concurrency assertion failed.' }
