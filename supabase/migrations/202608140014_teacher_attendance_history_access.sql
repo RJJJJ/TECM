@@ -2,6 +2,31 @@
 -- This migration leaves the existing staff/admin submission path intact while
 -- preventing a teacher from bypassing the history, audit, and concurrency rules.
 
+-- Supabase CLI applies each migration in a dedicated batch on one connection.
+-- Use session settings (rather than SET LOCAL) so this remains safe even if a
+-- runner changes its transaction behavior. The RESET statements at the end
+-- ensure subsequent operations on the same connection inherit no timeout.
+set lock_timeout = '5s';
+set statement_timeout = '60s';
+
+do $$
+declare
+  actual_lock_timeout_seconds numeric;
+  actual_statement_timeout_seconds numeric;
+begin
+  -- Cast through interval so PostgreSQL-normalized values such as 5000ms and
+  -- 1min compare by duration instead of depending on display formatting.
+  actual_lock_timeout_seconds := extract(epoch from current_setting('lock_timeout')::interval);
+  actual_statement_timeout_seconds := extract(epoch from current_setting('statement_timeout')::interval);
+
+  if actual_lock_timeout_seconds <> 5
+     or actual_statement_timeout_seconds <> 60
+     or actual_lock_timeout_seconds >= actual_statement_timeout_seconds then
+    raise exception 'migration 014 session timeout assertion failed';
+  end if;
+end
+$$;
+
 -- idx_lesson_sessions_teacher_starts already provides a (teacher_id, starts_at)
 -- B-tree. Teacher history queries constrain teacher_id by equality, and PostgreSQL
 -- can scan that B-tree backward for starts_at DESC, so no redundant index is created.
@@ -336,3 +361,6 @@ revoke all on function public.get_teacher_attendance_sessions() from public;
 revoke all on function public.submit_teacher_attendance(uuid,uuid,text,timestamptz,text,text) from public;
 grant execute on function public.get_teacher_attendance_sessions() to authenticated;
 grant execute on function public.submit_teacher_attendance(uuid,uuid,text,timestamptz,text,text) to authenticated;
+
+reset lock_timeout;
+reset statement_timeout;

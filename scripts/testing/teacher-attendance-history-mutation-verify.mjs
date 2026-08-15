@@ -76,9 +76,13 @@ for (const mutation of cases) {
     copyFixture(tempRoot);
     const target = resolve(tempRoot, mutation.file);
     const original = readFileSync(target, 'utf8');
-    const matches = original.split(mutation.search).length - 1;
+    // Fixtures preserve the checkout's line endings. Normalize only the
+    // disposable copy so mutation coverage is invariant across Windows and
+    // POSIX checkouts; the source blob remains byte-for-byte untouched.
+    const normalized = original.replace(/\r\n/g, '\n');
+    const matches = normalized.split(mutation.search).length - 1;
     if (matches !== 1) throw new Error(`${mutation.id} mutation matched ${matches} times`);
-    writeFileSync(target, original.replace(mutation.search, mutation.replacement));
+    writeFileSync(target, normalized.replace(mutation.search, mutation.replacement));
     const result = runTest(tempRoot);
     const output = `${result.stdout}\n${result.stderr}`;
     const caught = result.status !== 0 && output.includes(mutation.expected);
