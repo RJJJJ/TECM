@@ -347,6 +347,14 @@ try {
     -f '/workspace/supabase/tests/concurrency/dispatch_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Dispatch concurrency assertion failed.' }
 
+  $teacherLinkTargetA = '44000000-0000-4000-8000-000000000001'
+  $teacherLinkTargetB = '44000000-0000-4000-8000-000000000002'
+  $organizationA = '10000000-0000-4000-8000-000000000000'
+  $organizationB = '20000000-0000-4000-8000-000000000000'
+  if ($teacherLinkTargetA -eq $teacherLinkTargetB) {
+    throw 'Teacher-link scenario targets must differ.'
+  }
+
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/admin_ops_race_setup.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Could not prepare Admin operations race fixtures.' }
@@ -356,26 +364,41 @@ try {
     -StartSecondDelayMilliseconds 0 `
     -BarrierRaceName 'teacher-link-a-wins' `
     -ExpectedExitPairs @('0,3') `
-    -FirstPsqlVariables @('race_name=teacher-link-a-wins', 'winner_lock=true') `
-    -SecondPsqlVariables @('race_name=teacher-link-a-wins', 'winner_lock=false')
-  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
-    -f '/workspace/supabase/tests/concurrency/teacher_link_assert.sql'
+    -FirstPsqlVariables @('race_name=teacher-link-a-wins', 'winner_lock=true', "target_user_id=$teacherLinkTargetA") `
+    -SecondPsqlVariables @('race_name=teacher-link-a-wins', 'winner_lock=false', "target_user_id=$teacherLinkTargetA")
+  $teacherLinkAAssertionArguments = @(
+    'exec', $containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
+    '-v', "target_user_id=$teacherLinkTargetA",
+    '-v', "expected_winner_organization_id=$organizationA",
+    '-v', "expected_loser_organization_id=$organizationB",
+    '-U', 'postgres', '-d', $database,
+    '-f', '/workspace/supabase/tests/concurrency/teacher_link_assert.sql'
+  )
+  & docker @teacherLinkAAssertionArguments
   if ($LASTEXITCODE -ne 0) { throw 'Teacher link concurrency assertion failed.' }
 
-  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
-    -f '/workspace/supabase/tests/concurrency/admin_ops_race_setup.sql'
-  if ($LASTEXITCODE -ne 0) { throw 'Could not reset Admin operations race fixtures for teacher-link B winner.' }
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/teacher_link_first.sql' `
     -SecondFile '/workspace/supabase/tests/concurrency/teacher_link_second.sql' `
     -StartSecondDelayMilliseconds 0 `
     -BarrierRaceName 'teacher-link-b-wins' `
     -ExpectedExitPairs @('3,0') `
-    -FirstPsqlVariables @('race_name=teacher-link-b-wins', 'winner_lock=false') `
-    -SecondPsqlVariables @('race_name=teacher-link-b-wins', 'winner_lock=true')
-  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
-    -f '/workspace/supabase/tests/concurrency/teacher_link_assert.sql'
+    -FirstPsqlVariables @('race_name=teacher-link-b-wins', 'winner_lock=false', "target_user_id=$teacherLinkTargetB") `
+    -SecondPsqlVariables @('race_name=teacher-link-b-wins', 'winner_lock=true', "target_user_id=$teacherLinkTargetB")
+  $teacherLinkBAssertionArguments = @(
+    'exec', $containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
+    '-v', "target_user_id=$teacherLinkTargetB",
+    '-v', "expected_winner_organization_id=$organizationB",
+    '-v', "expected_loser_organization_id=$organizationA",
+    '-U', 'postgres', '-d', $database,
+    '-f', '/workspace/supabase/tests/concurrency/teacher_link_assert.sql'
+  )
+  & docker @teacherLinkBAssertionArguments
   if ($LASTEXITCODE -ne 0) { throw 'Teacher link reverse-order concurrency assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_link_combined_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Teacher link combined scenario isolation assertion failed.' }
 
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/makeup_booking_first.sql' `

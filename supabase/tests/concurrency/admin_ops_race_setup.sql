@@ -1,13 +1,20 @@
 \set ON_ERROR_STOP on
 
 insert into auth.users (id, email) values
-  ('44000000-0000-4000-8000-000000000001', 'race-teacher@tecm.test')
+  ('44000000-0000-4000-8000-000000000001', 'teacher-link-a@fixture.invalid'),
+  ('44000000-0000-4000-8000-000000000002', 'teacher-link-b@fixture.invalid')
 on conflict (id) do update set email = excluded.email;
 
 delete from public.teacher_profiles
-where user_id = '44000000-0000-4000-8000-000000000001';
+where user_id in (
+  '44000000-0000-4000-8000-000000000001',
+  '44000000-0000-4000-8000-000000000002'
+);
 delete from public.organization_members
-where user_id = '44000000-0000-4000-8000-000000000001';
+where user_id in (
+  '44000000-0000-4000-8000-000000000001',
+  '44000000-0000-4000-8000-000000000002'
+);
 
 insert into public.leave_requests (
   id, organization_id, student_id, lesson_session_id, requested_by, reason, status, reviewed_by,

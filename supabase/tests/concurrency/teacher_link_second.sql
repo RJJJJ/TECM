@@ -3,13 +3,13 @@ set role authenticated;
 select set_config('request.jwt.claim.sub', '20000000-0000-4000-8000-000000000001', false);
 \if :winner_lock
 begin;
-select pg_advisory_xact_lock(hashtextextended('teacher:44000000-0000-4000-8000-000000000001', 0));
+select pg_advisory_xact_lock(hashtextextended('teacher:' || :'target_user_id', 0));
 \endif
 select public.__test_race_ready(:'race_name', 'second');
 select public.__test_race_wait(:'race_name', 'second');
 select public.link_teacher_profile(
   '20000000-0000-4000-8000-000000000000',
-  '44000000-0000-4000-8000-000000000001',
+  :'target_user_id',
   'Race Teacher B',
   null
 );
