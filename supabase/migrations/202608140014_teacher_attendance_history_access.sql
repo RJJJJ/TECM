@@ -2,8 +2,9 @@
 -- This migration leaves the existing staff/admin submission path intact while
 -- preventing a teacher from bypassing the history, audit, and concurrency rules.
 
-create index if not exists idx_lesson_sessions_teacher_history
-  on public.lesson_sessions (teacher_id, starts_at desc);
+-- idx_lesson_sessions_teacher_starts already provides a (teacher_id, starts_at)
+-- B-tree. Teacher history queries constrain teacher_id by equality, and PostgreSQL
+-- can scan that B-tree backward for starts_at DESC, so no redundant index is created.
 
 create index if not exists idx_audit_logs_attendance_history
   on public.audit_logs (organization_id, occurred_at desc)

@@ -171,27 +171,36 @@ try {
       [switch]$ReleaseOutboxBarrier,
       [string]$BarrierRaceName,
       [int[]]$ExpectedFirstExitCodes = @(),
-      [int[]]$ExpectedSecondExitCodes = @()
+      [int[]]$ExpectedSecondExitCodes = @(),
+      [string[]]$ExpectedExitPairs = @(),
+      [string[]]$FirstPsqlVariables = @(),
+      [string[]]$SecondPsqlVariables = @()
     )
 
     Write-Host "[RACE] $FirstFile <> $SecondFile"
     $raceJobs = @()
     try {
       $first = Start-Job -Name 'race-first' -ScriptBlock {
-        param($Name,$Db,$File)
-        & docker exec $Name psql -q -v ON_ERROR_STOP=1 -U postgres -d $Db -f $File 2>&1
+        param($Name,$Db,$File,$PsqlVariables)
+        $arguments = @('exec', $Name, 'psql', '-q', '-v', 'ON_ERROR_STOP=1')
+        foreach ($variable in $PsqlVariables) { $arguments += @('-v', $variable) }
+        $arguments += @('-U', 'postgres', '-d', $Db, '-f', $File)
+        & docker @arguments 2>&1
         [pscustomobject]@{ ExitCode = $LASTEXITCODE }
-      } -ArgumentList $containerName,$database,$FirstFile
+      } -ArgumentList $containerName,$database,$FirstFile,$FirstPsqlVariables
       $raceJobs += $first
       if (-not $BarrierRaceName -and $StartSecondDelayMilliseconds -gt 0) {
         Start-Sleep -Milliseconds $StartSecondDelayMilliseconds
       }
       $second = Start-Job -Name 'race-second' -ScriptBlock {
-        param($Name,$Db,$File,$Hang,$HangSeconds)
+        param($Name,$Db,$File,$Hang,$HangSeconds,$PsqlVariables)
         if ($Hang) { Start-Sleep -Seconds $HangSeconds }
-        & docker exec $Name psql -q -v ON_ERROR_STOP=1 -U postgres -d $Db -f $File 2>&1
+        $arguments = @('exec', $Name, 'psql', '-q', '-v', 'ON_ERROR_STOP=1')
+        foreach ($variable in $PsqlVariables) { $arguments += @('-v', $variable) }
+        $arguments += @('-U', 'postgres', '-d', $Db, '-f', $File)
+        & docker @arguments 2>&1
         [pscustomobject]@{ ExitCode = $LASTEXITCODE }
-      } -ArgumentList $containerName,$database,$SecondFile,$InjectConcurrencyHang,($ConcurrencyTimeoutSeconds + 5)
+      } -ArgumentList $containerName,$database,$SecondFile,$InjectConcurrencyHang,($ConcurrencyTimeoutSeconds + 5),$SecondPsqlVariables
       $raceJobs += $second
 
       if ($BarrierRaceName) {
@@ -244,11 +253,15 @@ try {
       if ($allowedFirstExits.Count -eq 0) { $allowedFirstExits = @($ExpectedFirstExit) }
       $allowedSecondExits = @($ExpectedSecondExitCodes)
       if ($allowedSecondExits.Count -eq 0) { $allowedSecondExits = @($ExpectedSecondExit) }
-      if ($firstExit -notin $allowedFirstExits -or $secondExit -notin $allowedSecondExits) {
+      $actualExitPair = "$firstExit,$secondExit"
+      $pairAccepted = $ExpectedExitPairs.Count -gt 0 -and $actualExitPair -in $ExpectedExitPairs
+      $individualExitsAccepted = $ExpectedExitPairs.Count -eq 0 -and $firstExit -in $allowedFirstExits -and $secondExit -in $allowedSecondExits
+      if (-not $pairAccepted -and -not $individualExitsAccepted) {
         Write-Host "[RACE OUTPUT] first:`n$($firstOutput | Out-String)"
         Write-Host "[RACE OUTPUT] second:`n$($secondOutput | Out-String)"
-        throw "Unexpected race exits: first=$firstExit second=$secondExit"
+        throw "Unexpected race exit pair: $actualExitPair"
       }
+      Write-Host "[RACE PASS] exit pair: $actualExitPair"
     } finally {
       # This also covers a failure between starting the two jobs. The helper's
       # cleanup is intentionally idempotent, so completed races remain safe.
@@ -292,9 +305,9 @@ try {
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/disable_first.sql' `
     -SecondFile '/workspace/supabase/tests/concurrency/register_second.sql' `
-    -ExpectedSecondExit 3 `
     -StartSecondDelayMilliseconds 0 `
-    -BarrierRaceName 'disable-register'
+    -BarrierRaceName 'disable-register' `
+    -ExpectedExitPairs @('0,3')
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/device_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Device concurrency assertion failed.' }
@@ -306,7 +319,8 @@ try {
     -FirstFile '/workspace/supabase/tests/concurrency/register_first.sql' `
     -SecondFile '/workspace/supabase/tests/concurrency/disable_second.sql' `
     -StartSecondDelayMilliseconds 0 `
-    -BarrierRaceName 'register-disable'
+    -BarrierRaceName 'register-disable' `
+    -ExpectedExitPairs @('0,0')
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/device_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Opposite device concurrency assertion failed.' }
@@ -334,18 +348,58 @@ try {
     -f '/workspace/supabase/tests/concurrency/dispatch_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Dispatch concurrency assertion failed.' }
 
+  $teacherLinkTargetA = '44000000-0000-4000-8000-000000000001'
+  $teacherLinkTargetB = '44000000-0000-4000-8000-000000000002'
+  $organizationA = '10000000-0000-4000-8000-000000000000'
+  $organizationB = '20000000-0000-4000-8000-000000000000'
+  if ($teacherLinkTargetA -eq $teacherLinkTargetB) {
+    throw 'Teacher-link scenario targets must differ.'
+  }
+
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/admin_ops_race_setup.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Could not prepare Admin operations race fixtures.' }
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/teacher_link_first.sql' `
     -SecondFile '/workspace/supabase/tests/concurrency/teacher_link_second.sql' `
-    -ExpectedSecondExit 3 `
     -StartSecondDelayMilliseconds 0 `
-    -BarrierRaceName 'teacher-link'
-  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
-    -f '/workspace/supabase/tests/concurrency/teacher_link_assert.sql'
+    -BarrierRaceName 'teacher-link-a-wins' `
+    -ExpectedExitPairs @('0,3') `
+    -FirstPsqlVariables @('race_name=teacher-link-a-wins', 'winner_lock=true', "target_user_id=$teacherLinkTargetA") `
+    -SecondPsqlVariables @('race_name=teacher-link-a-wins', 'winner_lock=false', "target_user_id=$teacherLinkTargetA")
+  $teacherLinkAAssertionArguments = @(
+    'exec', $containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
+    '-v', "target_user_id=$teacherLinkTargetA",
+    '-v', "expected_winner_organization_id=$organizationA",
+    '-v', "expected_loser_organization_id=$organizationB",
+    '-U', 'postgres', '-d', $database,
+    '-f', '/workspace/supabase/tests/concurrency/teacher_link_assert.sql'
+  )
+  & docker @teacherLinkAAssertionArguments
   if ($LASTEXITCODE -ne 0) { throw 'Teacher link concurrency assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/teacher_link_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/teacher_link_second.sql' `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'teacher-link-b-wins' `
+    -ExpectedExitPairs @('3,0') `
+    -FirstPsqlVariables @('race_name=teacher-link-b-wins', 'winner_lock=false', "target_user_id=$teacherLinkTargetB") `
+    -SecondPsqlVariables @('race_name=teacher-link-b-wins', 'winner_lock=true', "target_user_id=$teacherLinkTargetB")
+  $teacherLinkBAssertionArguments = @(
+    'exec', $containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
+    '-v', "target_user_id=$teacherLinkTargetB",
+    '-v', "expected_winner_organization_id=$organizationB",
+    '-v', "expected_loser_organization_id=$organizationA",
+    '-U', 'postgres', '-d', $database,
+    '-f', '/workspace/supabase/tests/concurrency/teacher_link_assert.sql'
+  )
+  & docker @teacherLinkBAssertionArguments
+  if ($LASTEXITCODE -ne 0) { throw 'Teacher link reverse-order concurrency assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_link_combined_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Teacher link combined scenario isolation assertion failed.' }
 
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/makeup_booking_first.sql' `
@@ -445,7 +499,7 @@ try {
     throw 'Blocked migration partially applied mutable DDL before preflight.'
   }
 
-  Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-016, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
+  Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-017, deterministic teacher-link A/B winner races, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity
