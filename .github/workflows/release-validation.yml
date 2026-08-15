@@ -26,6 +26,9 @@ jobs:
       - name: Verify Admin mutation resistance with isolated negative controls
         shell: pwsh
         run: ./scripts/testing/admin-operations-mutation-verify.ps1
+      - name: Verify migration 014 session timeout mutation resistance
+        shell: pwsh
+        run: ./scripts/testing/migration-014-session-timeouts-mutation-verify.ps1
 
   admin-web:
     runs-on: ubuntu-latest
