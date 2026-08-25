@@ -23,6 +23,7 @@ requireMatch(workflow, /supabase start --network-id "\$TECM_SUPABASE_NETWORK"\s+
 requireMatch(workflow, /supabase db reset --network-id "\$TECM_SUPABASE_NETWORK"\s+>\/dev\/null\s+2>&1/, 'Supabase reset must use the loopback-bound CI network');
 requireMatch(workflow, /bash scripts\/testing\/verify-local-supabase\.sh/, 'Supabase loopback boundary check is required');
 requireMatch(workflow, /\.\/scripts\/testing\/migration-014-session-timeouts-mutation-verify\.ps1/, 'Migration 014 session-timeout mutation verification is required');
+requireMatch(workflow, /node scripts\/testing\/attendance-function-acl-mutation-verify\.mjs/, 'Attendance function ACL mutation verification is required');
 requireMatch(workflow, /status_json="\$\(supabase status -o json\)"/, 'Supabase status must be captured, not printed');
 requireMatch(workflow, /::add-mask::\$ANON_KEY/, 'Supabase anon key must be masked');
 requireMatch(workflow, /::add-mask::\$SERVICE_ROLE_KEY/, 'Supabase service-role key must be masked');
