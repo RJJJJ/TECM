@@ -7,8 +7,12 @@ declare
   target record;
   function_count integer;
   public_execute boolean;
+  anon_direct_execute boolean;
   anon_execute boolean;
+  authenticated_direct_execute boolean;
+  authenticated_grant_option boolean;
   authenticated_execute boolean;
+  service_role_direct_execute boolean;
   service_role_execute boolean;
   fixed_search_path boolean;
 begin
@@ -29,11 +33,46 @@ begin
                and privilege.grantee = 0
                and privilege.privilege_type = 'EXECUTE'
            ),
+           exists (
+             select 1
+             from pg_proc p
+             cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) privilege
+             where p.oid = target.signature::oid
+               and privilege.grantee = (select oid from pg_roles where rolname = 'anon')
+               and privilege.privilege_type = 'EXECUTE'
+           ),
            has_function_privilege('anon', target.signature, 'EXECUTE'),
+           exists (
+             select 1
+             from pg_proc p
+             cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) privilege
+             where p.oid = target.signature::oid
+               and privilege.grantee = (select oid from pg_roles where rolname = 'authenticated')
+               and privilege.privilege_type = 'EXECUTE'
+           ),
+           exists (
+             select 1
+             from pg_proc p
+             cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) privilege
+             where p.oid = target.signature::oid
+               and privilege.grantee = (select oid from pg_roles where rolname = 'authenticated')
+               and privilege.privilege_type = 'EXECUTE'
+               and privilege.is_grantable
+           ),
            has_function_privilege('authenticated', target.signature, 'EXECUTE'),
+           exists (
+             select 1
+             from pg_proc p
+             cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) privilege
+             where p.oid = target.signature::oid
+               and privilege.grantee = (select oid from pg_roles where rolname = 'service_role')
+               and privilege.privilege_type = 'EXECUTE'
+           ),
            has_function_privilege('service_role', target.signature, 'EXECUTE'),
            bool_and(p.prosecdef and p.proconfig @> array['search_path=public'])
-      into function_count, public_execute, anon_execute, authenticated_execute, service_role_execute, fixed_search_path
+      into function_count, public_execute, anon_direct_execute, anon_execute,
+           authenticated_direct_execute, authenticated_grant_option, authenticated_execute,
+           service_role_direct_execute, service_role_execute, fixed_search_path
       from pg_proc p
       where p.oid = target.signature::oid;
 
@@ -43,13 +82,19 @@ begin
     if public_execute then
       raise exception '018 attendance function ACL: PUBLIC EXECUTE must be false for %', target.signature;
     end if;
-    if anon_execute then
+    if anon_direct_execute or anon_execute then
       raise exception '018 attendance function ACL: anon EXECUTE must be false for %', target.signature;
     end if;
     if authenticated_execute is distinct from target.authenticated_expected then
       raise exception '018 attendance function ACL: authenticated EXECUTE mismatch for %', target.signature;
     end if;
-    if service_role_execute then
+    if authenticated_direct_execute is distinct from target.authenticated_expected then
+      raise exception '018 attendance function ACL: authenticated direct EXECUTE mismatch for %', target.signature;
+    end if;
+    if authenticated_grant_option then
+      raise exception '018 attendance function ACL: authenticated grant option must be false for %', target.signature;
+    end if;
+    if service_role_direct_execute or service_role_execute then
       raise exception '018 attendance function ACL: service_role EXECUTE expanded for %', target.signature;
     end if;
     if not fixed_search_path then
