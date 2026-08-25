@@ -7,6 +7,8 @@ import { spawnSync } from 'node:child_process';
 const repoRoot = resolve(import.meta.dirname, '../..');
 const migrationPath = 'supabase/migrations/202608240015_attendance_function_execute_hardening.sql';
 const assertionPath = 'supabase/tests/018_attendance_function_execute_hardening.sql';
+const raceAssertionPath = 'supabase/tests/concurrency/teacher_attendance_assert.sql';
+const immutablePaths = [migrationPath, assertionPath, raceAssertionPath];
 const sourceFiles = [
   'supabase/tests/000_bootstrap.sql',
   'supabase/migrations/202607110000_legacy_baseline.sql',
@@ -32,20 +34,30 @@ const sourceFiles = [
   assertionPath
 ];
 const pre015Files = sourceFiles.slice(0, sourceFiles.indexOf(migrationPath));
-const sourceBytes = readFileSync(resolve(repoRoot, migrationPath));
-const sourceHash = createHash('sha256').update(sourceBytes).digest('hex');
 
-function run(command, args, cwd = repoRoot) {
-  return spawnSync(command, args, { cwd, encoding: 'utf8' });
+function run(command, args, cwd = repoRoot, options = {}) {
+  return spawnSync(command, args, { cwd, encoding: 'utf8', ...options });
 }
 
 function outputOf(process) {
   return `${process.stdout ?? ''}${process.stderr ?? ''}`;
 }
 
-const sourceGitBlob = outputOf(run('git', ['hash-object', '--', migrationPath])).trim();
-if (!/^[0-9a-f]{40}$/.test(sourceGitBlob)) {
-  throw new Error('M36/M37 could not resolve the source migration Git blob.');
+function hash(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function gitBlob(path) {
+  return outputOf(run('git', ['hash-object', '--', path])).trim();
+}
+
+const immutableSnapshots = new Map(immutablePaths.map((path) => {
+  const bytes = readFileSync(resolve(repoRoot, path));
+  return [path, { bytes, sha256: hash(bytes), git_blob: gitBlob(path) }];
+}));
+const migrationSnapshot = immutableSnapshots.get(migrationPath);
+if (!/^[0-9a-f]{40}$/.test(migrationSnapshot.git_blob)) {
+  throw new Error('Attendance ACL verifier could not resolve migration 015 Git blob.');
 }
 
 const serviceRoleGrants = [
@@ -56,26 +68,17 @@ const serviceRoleGrants = [
 ].join(' ');
 
 const scenarios = [
+  { id: 'UPGRADE-STATE', database: 'tecm_acl_upgrade', expected: 'success', pregrantServiceRole: true },
   {
-    name: 'UPGRADE-STATE',
-    database: 'tecm_acl_upgrade',
-    pregrantServiceRole: true,
-    expectedSuccess: true
-  },
-  {
-    name: 'M36',
-    database: 'tecm_m36',
+    id: 'M36', database: 'tecm_m36', expected: 'assertion',
     target: 'revoke all on function public.get_teacher_attendance_sessions() from anon;',
     replacement: 'grant execute on function public.get_teacher_attendance_sessions() to anon;',
     expectedFailure: '018 attendance function ACL: anon EXECUTE must be false for get_teacher_attendance_sessions()'
   },
   {
-    name: 'M37',
-    database: 'tecm_m37',
+    id: 'M37', database: 'tecm_m37', expected: 'assertion',
     target: 'revoke all on function public.get_teacher_attendance_sessions() from service_role;',
-    replacement: '',
-    targetSignature: 'public.get_teacher_attendance_sessions()',
-    pregrantServiceRole: true,
+    replacement: '', targetSignature: 'public.get_teacher_attendance_sessions()', pregrantServiceRole: true,
     expectedFailure: '018 attendance function ACL: service_role EXECUTE expanded for get_teacher_attendance_sessions()'
   }
 ];
@@ -84,147 +87,274 @@ function pause(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
-function executeScenario(spec) {
-  const label = spec.name;
-  const containerName = `tecm-${label.toLowerCase()}-attendance-acl-${process.pid}`;
-  const tempRoot = mkdtempSync(resolve(tmpdir(), `tecm-${label.toLowerCase()}-attendance-acl-`));
-  const result = {
-    mutation: label,
+function lifecycleError(message) {
+  const error = new Error(`LIFECYCLE FAILURE: ${message}`);
+  error.lifecycle = true;
+  return error;
+}
+
+function immutableStatus() {
+  const entries = {};
+  let passed = true;
+  for (const [path, snapshot] of immutableSnapshots) {
+    const bytes = readFileSync(resolve(repoRoot, path));
+    const current = { sha256: hash(bytes), git_blob: gitBlob(path) };
+    const match = bytes.equals(snapshot.bytes) && current.sha256 === snapshot.sha256 && current.git_blob === snapshot.git_blob;
+    entries[path] = { ...current, status: match ? 'PASS' : 'FAIL' };
+    passed &&= match;
+  }
+  return { status: passed ? 'PASS' : 'FAIL', entries };
+}
+
+function sanitize(value) {
+  return String(value).replace(/password=[^\s]+/gi, 'password=[REDACTED]').slice(-1600);
+}
+
+function containerState(containerName) {
+  const inspect = run('docker', ['inspect', '--format', '{{.State.Status}} {{.State.Running}} {{.State.ExitCode}}', containerName]);
+  return inspect.status === 0 ? inspect.stdout.trim() : 'missing';
+}
+
+function lifecycleDiagnostics(containerName) {
+  const logs = run('docker', ['logs', '--tail', '40', containerName]);
+  return { state: containerState(containerName), logs: sanitize(outputOf(logs)) };
+}
+
+function lifecycleWasLost(containerName, process) {
+  return !containerState(containerName).startsWith('running true')
+    || /database system is shutting down|server closed the connection unexpectedly|terminating connection/i.test(outputOf(process));
+}
+
+function ensureScenarioReady(containerName, database) {
+  let lastDiagnostic = 'readiness did not begin';
+  let stableChecks = 0;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const state = containerState(containerName);
+    if (!state.startsWith('running true')) {
+      throw lifecycleError(`container is not running before ${database}: ${state}; ${JSON.stringify(lifecycleDiagnostics(containerName))}`);
+    }
+    const ready = run('docker', ['exec', containerName, 'pg_isready', '-q', '-U', 'postgres', '-d', database]);
+    const probe = run('docker', ['exec', containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', database, '-Atc', 'select 1']);
+    const identity = run('docker', ['exec', containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', database, '-Atc', 'select current_database()']);
+    if (ready.status === 0 && probe.status === 0 && probe.stdout.trim() === '1' && identity.status === 0 && identity.stdout.trim() === database) {
+      stableChecks += 1;
+      if (stableChecks >= 2) return;
+    } else {
+      stableChecks = 0;
+      lastDiagnostic = `state=${state}; pg_isready=${ready.status}; probe=${probe.status}:${sanitize(outputOf(probe))}; identity=${identity.status}:${sanitize(outputOf(identity))}`;
+    }
+    pause(250);
+  }
+  throw lifecycleError(`bounded readiness failed for ${database}: ${lastDiagnostic}; ${JSON.stringify(lifecycleDiagnostics(containerName))}`);
+}
+
+function copyFixture(workspace, relative) {
+  const source = resolve(repoRoot, relative);
+  const destination = resolve(workspace, relative);
+  if (!existsSync(source)) throw new Error(`Missing attendance ACL verifier input: ${relative}`);
+  mkdirSync(dirname(destination), { recursive: true });
+  cpSync(source, destination);
+}
+
+function scenarioResult(spec) {
+  return {
+    mutation: spec.id,
     caught: false,
     target: spec.targetSignature ?? null,
-    expected_failure: spec.name === 'M37' ? 'service_role EXECUTE' : spec.expectedFailure ?? null,
-    source_sha256: sourceHash,
-    git_blob: sourceGitBlob,
-    restoration: 'FAIL',
-    cleanup: { container: 'PENDING', temporary_workspace: 'PENDING' },
+    expected_failure: spec.id === 'M37' ? 'service_role EXECUTE' : spec.expectedFailure ?? null,
+    source_sha256: migrationSnapshot.sha256,
+    git_blob: migrationSnapshot.git_blob,
+    lifecycle_failure: false,
+    restoration: 'PENDING',
+    cleanup: { container: 'PENDING', database: 'PENDING', temporary_workspace: 'PENDING' },
     final_result: 'FAIL'
   };
+}
+
+function executeScenario(spec, context) {
+  const result = scenarioResult(spec);
+  const workspace = resolve(context.workspaceRoot, spec.id.toLowerCase());
   let failure;
-
-  function copyFixture(relative) {
-    const source = resolve(repoRoot, relative);
-    const destination = resolve(tempRoot, relative);
-    if (!existsSync(source)) throw new Error(`${label} missing mutation input: ${relative}`);
-    mkdirSync(dirname(destination), { recursive: true });
-    cpSync(source, destination);
-  }
-
-  function runPsqlFile(relative) {
-    return run('docker', [
-      'exec', containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
-      '-U', 'postgres', '-d', spec.database, '-f', `/workspace/${relative}`
-    ]);
-  }
-
-  function runPsqlSql(sql) {
-    return run('docker', [
-      'exec', containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
-      '-U', 'postgres', '-d', spec.database, '-c', sql
-    ]);
-  }
-
+  let databaseCreated = false;
   try {
-    const docker = run('docker', ['info', '--format', '{{.ServerVersion}}']);
-    if (docker.status !== 0) throw new Error(`${label} requires Docker Desktop.`);
-
-    for (const file of sourceFiles) copyFixture(file);
-    const fixtureMigration = resolve(tempRoot, migrationPath);
+    mkdirSync(workspace, { recursive: true });
+    for (const file of sourceFiles) copyFixture(workspace, file);
+    const fixtureMigration = resolve(workspace, migrationPath);
     if (spec.target) {
       const fixtureSource = readFileSync(fixtureMigration, 'utf8');
       const matches = fixtureSource.split(spec.target).length - 1;
-      if (matches !== 1) throw new Error(`${label} expected one mutation target, found ${matches}.`);
+      if (matches !== 1) throw new Error(`${spec.id} expected one mutation target, found ${matches}.`);
       writeFileSync(fixtureMigration, fixtureSource.replace(spec.target, spec.replacement));
-      if (createHash('sha256').update(readFileSync(fixtureMigration)).digest('hex') === sourceHash) {
-        throw new Error(`${label} mutation did not change the disposable migration bytes.`);
+      if (hash(readFileSync(fixtureMigration)) === migrationSnapshot.sha256) {
+        throw new Error(`${spec.id} mutation did not change disposable migration bytes.`);
       }
     }
 
-    const start = run('docker', [
-      'run', '--name', containerName,
-      '-e', 'POSTGRES_PASSWORD=postgres',
-      '-e', `POSTGRES_DB=${spec.database}`,
-      '-v', `${tempRoot}:/workspace:ro`,
-      '-d', 'postgres:15-alpine'
+    const create = run('docker', ['exec', context.containerName, 'createdb', '-U', 'postgres', spec.database]);
+    if (create.status !== 0) throw lifecycleError(`could not create ${spec.database}: ${sanitize(outputOf(create))}`);
+    databaseCreated = true;
+    ensureScenarioReady(context.containerName, spec.database);
+
+    if (context.injectLifecycleShutdown) {
+      const stop = run('docker', ['stop', '--time', '0', context.containerName]);
+      if (stop.status !== 0) throw lifecycleError(`could not deliberately stop lifecycle-control container: ${sanitize(outputOf(stop))}`);
+      ensureScenarioReady(context.containerName, spec.database);
+    }
+
+    const runPsqlFile = (relative) => run('docker', [
+      'exec', context.containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', spec.database,
+      '-f', `/workspace/${spec.id.toLowerCase()}/${relative}`
     ]);
-    if (start.status !== 0) throw new Error(`${label} could not start PostgreSQL: ${outputOf(start)}`);
-
-    let ready = false;
-    let stableReadyChecks = 0;
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      if (run('docker', ['exec', containerName, 'pg_isready', '-q', '-U', 'postgres', '-d', spec.database]).status === 0) {
-        stableReadyChecks += 1;
-        if (stableReadyChecks >= 2) {
-          ready = true;
-          break;
-        }
-      } else {
-        stableReadyChecks = 0;
-      }
-      pause(250);
-    }
-    if (!ready) throw new Error(`${label} PostgreSQL container did not become ready.`);
-
+    const runPsqlSql = (sql) => run('docker', [
+      'exec', context.containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', spec.database, '-c', sql
+    ]);
     for (const file of pre015Files) {
       const setup = runPsqlFile(file);
-      if (setup.status !== 0) throw new Error(`${label} prerequisite failed: ${file}\n${outputOf(setup)}`);
+      if (setup.status !== 0) {
+        if (lifecycleWasLost(context.containerName, setup)) {
+          throw lifecycleError(`${spec.id} prerequisite ${file} lost container lifecycle; ${JSON.stringify(lifecycleDiagnostics(context.containerName))}`);
+        }
+        throw new Error(`${spec.id} prerequisite failed: ${file}\n${sanitize(outputOf(setup))}`);
+      }
     }
     if (spec.pregrantServiceRole) {
       const grants = runPsqlSql(serviceRoleGrants);
-      if (grants.status !== 0) throw new Error(`${label} could not seed direct service_role grants.\n${outputOf(grants)}`);
+      if (grants.status !== 0 && lifecycleWasLost(context.containerName, grants)) {
+        throw lifecycleError(`${spec.id} direct service_role grant lost container lifecycle; ${JSON.stringify(lifecycleDiagnostics(context.containerName))}`);
+      }
+      if (grants.status !== 0) throw new Error(`${spec.id} could not seed direct service_role grants.\n${sanitize(outputOf(grants))}`);
     }
     const migration = runPsqlFile(migrationPath);
-    if (migration.status !== 0) throw new Error(`${label} migration 015 failed.\n${outputOf(migration)}`);
+    if (migration.status !== 0 && lifecycleWasLost(context.containerName, migration)) {
+      throw lifecycleError(`${spec.id} migration 015 lost container lifecycle; ${JSON.stringify(lifecycleDiagnostics(context.containerName))}`);
+    }
+    if (migration.status !== 0) throw new Error(`${spec.id} migration 015 failed.\n${sanitize(outputOf(migration))}`);
     const repeatSeed = runPsqlFile('supabase/seed.sql');
-    if (repeatSeed.status !== 0) throw new Error(`${label} repeat seed failed.\n${outputOf(repeatSeed)}`);
-
+    if (repeatSeed.status !== 0 && lifecycleWasLost(context.containerName, repeatSeed)) {
+      throw lifecycleError(`${spec.id} repeat seed lost container lifecycle; ${JSON.stringify(lifecycleDiagnostics(context.containerName))}`);
+    }
+    if (repeatSeed.status !== 0) throw new Error(`${spec.id} repeat seed failed.\n${sanitize(outputOf(repeatSeed))}`);
     const assertion = runPsqlFile(assertionPath);
-    const assertionOutput = outputOf(assertion);
-    if (spec.expectedSuccess) {
-      if (assertion.status !== 0) throw new Error(`${label} ACL assertions failed.\n${assertionOutput}`);
+    if (assertion.status !== 0 && lifecycleWasLost(context.containerName, assertion)) {
+      throw lifecycleError(`${spec.id} SQL018 lost container lifecycle; ${JSON.stringify(lifecycleDiagnostics(context.containerName))}`);
+    }
+    const assertionOutput = sanitize(outputOf(assertion));
+    if (spec.expected === 'success') {
+      if (assertion.status !== 0) throw new Error(`${spec.id} ACL assertions failed.\n${assertionOutput}`);
       result.caught = true;
       process.stdout.write('UPGRADE-STATE PASS\n');
-    } else {
-      if (assertion.status === 0 || !assertionOutput.includes(spec.expectedFailure)) {
-        throw new Error(`${label} was not caught by its targeted ACL assertion (exit=${assertion.status}).\n${assertionOutput}`);
-      }
+    } else if (assertion.status !== 0 && assertionOutput.includes(spec.expectedFailure)) {
       result.caught = true;
-      process.stdout.write(`${label} CAUGHT\n`);
+      process.stdout.write(`${spec.id} CAUGHT\n`);
+    } else {
+      throw new Error(`${spec.id} was not caught by its targeted ACL assertion (exit=${assertion.status}).\n${assertionOutput}`);
     }
   } catch (error) {
     failure = error;
+    result.lifecycle_failure = Boolean(error.lifecycle);
+    result.error_classification = error.lifecycle ? 'lifecycle_or_prerequisite_failure' : 'test_or_setup_failure';
+    if (error.lifecycle) result.lifecycle_diagnostics = lifecycleDiagnostics(context.containerName);
+    result.error = sanitize(error.message);
+  } finally {
+    if (databaseCreated && containerState(context.containerName).startsWith('running true')) {
+      const drop = run('docker', ['exec', context.containerName, 'dropdb', '-U', 'postgres', '--if-exists', spec.database]);
+      const exists = run('docker', ['exec', context.containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', 'postgres', '-Atc', `select count(*) from pg_database where datname = '${spec.database}'`]);
+      result.cleanup.database = drop.status === 0 && exists.status === 0 && exists.stdout.trim() === '0' ? 'PASS' : 'FAIL';
+    }
+    rmSync(workspace, { recursive: true, force: true });
+    result.cleanup.temporary_workspace = existsSync(workspace) ? 'FAIL' : 'PASS';
+  }
+  return { result, failure };
+}
+
+function runVerifier({ injectLifecycleShutdown = false } = {}) {
+  const workspaceRoot = mkdtempSync(resolve(tmpdir(), 'tecm-attendance-acl-shared-'));
+  const containerName = `tecm-attendance-acl-${process.pid}`;
+  const activeScenarios = injectLifecycleShutdown
+    ? [{ id: 'LIFECYCLE-CONTROL', database: 'tecm_acl_lifecycle', expected: 'success' }]
+    : scenarios;
+  const results = [];
+  let runnerFailure;
+  try {
+    const docker = run('docker', ['info', '--format', '{{.ServerVersion}}']);
+    if (docker.status !== 0) throw lifecycleError('Docker Desktop is unavailable.');
+    const start = run('docker', [
+      'run', '--name', containerName, '-e', 'POSTGRES_PASSWORD=postgres', '-v', `${workspaceRoot}:/workspace:ro`, '-d', 'postgres:15-alpine'
+    ]);
+    if (start.status !== 0) throw lifecycleError(`could not start shared PostgreSQL container: ${sanitize(outputOf(start))}`);
+    ensureScenarioReady(containerName, 'postgres');
+    for (const spec of activeScenarios) {
+      const scenario = executeScenario(spec, { containerName, workspaceRoot, injectLifecycleShutdown });
+      results.push(scenario.result);
+      if (scenario.failure) {
+        runnerFailure = scenario.failure;
+        break;
+      }
+    }
+  } catch (error) {
+    runnerFailure = error;
   } finally {
     const remove = run('docker', ['rm', '-f', containerName]);
     const remaining = run('docker', ['ps', '-a', '--format', '{{.Names}}']);
-    result.cleanup.container = remove.status === 0 && remaining.status === 0 && !remaining.stdout.split(/\r?\n/).includes(containerName)
-      ? 'PASS'
-      : 'FAIL';
-
-    const restoredBytes = readFileSync(resolve(repoRoot, migrationPath));
-    const restoredHash = createHash('sha256').update(restoredBytes).digest('hex');
-    const restoredGitBlob = outputOf(run('git', ['hash-object', '--', migrationPath])).trim();
-    result.restoration = restoredBytes.equals(sourceBytes) && restoredHash === sourceHash && restoredGitBlob === sourceGitBlob
-      ? 'PASS'
-      : 'FAIL';
-
-    rmSync(tempRoot, { recursive: true, force: true });
-    result.cleanup.temporary_workspace = existsSync(tempRoot) ? 'FAIL' : 'PASS';
-    result.final_result = result.caught && result.restoration === 'PASS'
-      && result.cleanup.container === 'PASS' && result.cleanup.temporary_workspace === 'PASS'
-      ? 'PASS'
-      : 'FAIL';
-    if (label === 'M37') {
-      process.stdout.write(`caught=${result.caught}\ntarget=${result.target}\nexpected_failure=${result.expected_failure}\nrestoration=${result.restoration}\ncleanup=${result.cleanup.container === 'PASS' && result.cleanup.temporary_workspace === 'PASS' ? 'PASS' : 'FAIL'}\nfinal_result=${result.final_result}\n`);
+    const containerClean = remove.status === 0 && remaining.status === 0 && !remaining.stdout.split(/\r?\n/).includes(containerName);
+    const immutable = immutableStatus();
+    for (const result of results) {
+      result.cleanup.container = containerClean ? 'PASS' : 'FAIL';
+      if (result.cleanup.database === 'PENDING') result.cleanup.database = containerClean ? 'PASS' : 'FAIL';
+      result.restoration = immutable.status;
+      result.final_result = result.caught && !result.lifecycle_failure && result.restoration === 'PASS'
+        && Object.values(result.cleanup).every((value) => value === 'PASS') ? 'PASS' : 'FAIL';
+      if (result.mutation === 'M37') {
+        process.stdout.write(`caught=${result.caught}\ntarget=${result.target}\nexpected_failure=${result.expected_failure}\nrestoration=${result.restoration}\ncleanup=${Object.values(result.cleanup).every((value) => value === 'PASS') ? 'PASS' : 'FAIL'}\nfinal_result=${result.final_result}\n`);
+      }
+      process.stdout.write(`${JSON.stringify(result)}\n`);
     }
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    rmSync(workspaceRoot, { recursive: true, force: true });
+    if (existsSync(workspaceRoot)) runnerFailure ??= new Error('Attendance ACL shared temporary workspace was not removed.');
+    if (!containerClean) runnerFailure ??= new Error('Attendance ACL shared PostgreSQL container cleanup failed.');
+    if (immutable.status !== 'PASS') runnerFailure ??= new Error('Attendance ACL immutable security artifact changed.');
   }
+  return { passed: !runnerFailure && results.length === activeScenarios.length && results.every((result) => result.final_result === 'PASS'), results, error: runnerFailure };
+}
 
-  if (failure) throw failure;
-  if (result.final_result !== 'PASS') throw new Error(`${label} final result was not PASS.`);
+function runLifecycleNegativeControl() {
+  const child = run(process.execPath, [process.argv[1]], repoRoot, {
+    env: { ...process.env, TECM_ATTENDANCE_ACL_LIFECYCLE_CONTROL: 'shutdown-after-readiness' }
+  });
+  const childOutput = outputOf(child);
+  const resultLine = childOutput.split(/\r?\n/).find((line) => line.includes('"mutation":"LIFECYCLE-CONTROL"'));
+  let result;
+  try { result = JSON.parse(resultLine); } catch { throw new Error('Lifecycle negative control did not emit machine-readable result.'); }
+  const cleanupPass = Object.values(result.cleanup ?? {}).every((value) => value === 'PASS');
+  if (child.status === 0 || result.caught || !result.lifecycle_failure || result.restoration !== 'PASS' || !cleanupPass
+    || /M36 CAUGHT|M37 CAUGHT/.test(childOutput)) {
+    throw new Error(`Lifecycle negative control was not fail-closed: exit=${child.status}; ${sanitize(childOutput)}`);
+  }
+  process.stdout.write('LIFECYCLE NEGATIVE CONTROL PASS\n');
+  process.stdout.write(`${JSON.stringify({
+    lifecycle_negative_control: 'PASS',
+    caught: false,
+    lifecycle_failure: result.lifecycle_failure,
+    classification: result.error_classification,
+    diagnostic: result.lifecycle_diagnostics,
+    restoration: result.restoration,
+    cleanup: result.cleanup
+  })}\n`);
 }
 
 try {
-  for (const scenario of scenarios) executeScenario(scenario);
+  if (process.env.TECM_ATTENDANCE_ACL_LIFECYCLE_CONTROL === 'shutdown-after-readiness') {
+    const outcome = runVerifier({ injectLifecycleShutdown: true });
+    if (outcome.passed) throw new Error('Lifecycle control unexpectedly passed.');
+    process.exitCode = 1;
+  } else if (process.argv.includes('--lifecycle-negative-control')) {
+    runLifecycleNegativeControl();
+  } else {
+    runLifecycleNegativeControl();
+    const outcome = runVerifier();
+    if (!outcome.passed) throw outcome.error ?? new Error('Attendance ACL verifier failed.');
+  }
 } catch (error) {
-  process.stderr.write(`${error.message}\n`);
-  process.exit(1);
+  process.stderr.write(`${sanitize(error.message)}\n`);
+  process.exitCode = 1;
 }
