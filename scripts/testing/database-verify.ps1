@@ -74,6 +74,8 @@ try {
     '/workspace/supabase/migrations/202608130013_course_cohort_enrollment_model.sql',
     '/workspace/supabase/migrations/202608140014_teacher_attendance_history_access.sql',
     '/workspace/supabase/migrations/202608140014_teacher_attendance_history_access.sql',
+    '/workspace/supabase/migrations/202608240015_attendance_function_execute_hardening.sql',
+    '/workspace/supabase/migrations/202608240015_attendance_function_execute_hardening.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
@@ -92,7 +94,8 @@ try {
     '/workspace/supabase/tests/014_makeup_partial_state_recovery.sql',
     '/workspace/supabase/tests/015_uat_core_workflows.sql',
     '/workspace/supabase/tests/016_course_cohort_enrollment_model.sql',
-    '/workspace/supabase/tests/017_teacher_attendance_history_access.sql'
+    '/workspace/supabase/tests/017_teacher_attendance_history_access.sql',
+    '/workspace/supabase/tests/018_attendance_function_execute_hardening.sql'
   )
 
   foreach ($file in $files) {
@@ -499,7 +502,7 @@ try {
     throw 'Blocked migration partially applied mutable DDL before preflight.'
   }
 
-  Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-017, deterministic teacher-link A/B winner races, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
+  Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-018, deterministic teacher-link A/B winner races, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity
