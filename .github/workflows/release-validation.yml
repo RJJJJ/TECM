@@ -29,7 +29,7 @@ jobs:
       - name: Verify migration 014 session timeout mutation resistance
         shell: pwsh
         run: ./scripts/testing/migration-014-session-timeouts-mutation-verify.ps1
-      - name: Verify attendance function ACL mutation resistance
+      - name: Verify attendance function ACL M36/M37 mutation resistance
         run: node scripts/testing/attendance-function-acl-mutation-verify.mjs
 
   admin-web:
