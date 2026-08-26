@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import {
   assertCredentialedE2EEnvironment,
   credentialedE2EEnvironment,
@@ -395,8 +395,9 @@ test.describe('教育中心營運主流程', () => {
     await page.getByLabel('原課堂').selectOption(leaveSession!);
     await page.getByLabel('請假原因').fill('家庭安排');
     await page.getByRole('button', { name: '提交請假' }).click();
+    await expect(page.getByRole('status')).toContainText('請假申請已建立。', { timeout: 30_000 });
     const leaveRow = page.getByRole('row').filter({ hasText: studentName }).filter({ hasText: '家庭安排' });
-    await expect(leaveRow).toBeVisible();
+    await expect(leaveRow).toBeVisible({ timeout: 30_000 });
     await leaveRow.getByRole('button', { name: '批准及建立補課額' }).click();
     const entitlementValue = await page.getByLabel('可用補課額').locator('option').filter({ hasText: studentName }).getAttribute('value');
     await page.getByLabel('可用補課額').selectOption(entitlementValue!);
@@ -563,4 +564,150 @@ test('Teacher direct URL and navigation cannot reach the operations dashboard', 
   await expect(page.locator('body')).not.toContainText(/欠費總額|本月收款|營運儀表板/);
   await page.goto('/admin');
   await expect(page).toHaveURL(/\/admin\/attendance$/);
+});
+
+async function signInTeacher(page: Page) {
+  await page.goto('/login');
+  await page.getByLabel('電郵').fill(teacherEmail!);
+  await page.getByLabel('密碼').fill(teacherPassword!);
+  await page.getByRole('button', { name: '登入' }).click();
+  await expect(page).toHaveURL(/\/admin\/attendance$/, { timeout: 30_000 });
+}
+
+test('Teacher stale attendance page is rejected and refresh receives the new revision', async ({ browser }, testInfo) => {
+  test.setTimeout(180_000);
+  test.skip(
+    !teacherEmail || !teacherPassword || !supabaseUrl || !serviceRoleKey || !organizationId,
+    '需要本機 Teacher 測試登入及 Supabase fixture 管理環境'
+  );
+
+  const fixtureClient = createClient(supabaseUrl!, serviceRoleKey!, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+  const sessionId = crypto.randomUUID();
+  const studentId = '15000000-0000-4000-8000-000000000001';
+  const requestPrefix = `teacher-stale-${canonicalRunId}-${testInfo.project.name}`;
+  const requestA = `${requestPrefix}-a`;
+  const requestB = `${requestPrefix}-b`;
+  const requestRefresh = `${requestPrefix}-refresh`;
+  const startsAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const endsAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const countRows = async (table: 'notifications' | 'notification_outbox') => {
+    const result = await fixtureClient.from(table).select('id', { count: 'exact', head: true });
+    expect(result.error).toBeNull();
+    return result.count ?? 0;
+  };
+  const notificationCount = await countRows('notifications');
+  const outboxCount = await countRows('notification_outbox');
+
+  const sessionInsert = await fixtureClient.from('lesson_sessions').insert({
+    id: sessionId,
+    organization_id: organizationId!,
+    cohort_id: '1a000000-0000-4000-8000-000000000001',
+    lesson_plan_id: '1c000000-0000-4000-8000-000000000001',
+    teacher_id: '19000000-0000-4000-8000-000000000001',
+    starts_at: startsAt,
+    ends_at: endsAt,
+    status: 'completed'
+  });
+  expect(sessionInsert.error).toBeNull();
+  const attendanceInsert = await fixtureClient.from('attendance_records').insert({
+    organization_id: organizationId!,
+    session_id: sessionId,
+    student_id: studentId,
+    status: 'present',
+    recorded_at: endsAt
+  }).select('id,revision').single();
+  expect(attendanceInsert.error).toBeNull();
+  expect(attendanceInsert.data?.revision).toBe(1);
+
+  const contextA = await browser.newContext();
+  const contextB = await browser.newContext();
+  const pageA = await contextA.newPage();
+  const pageB = await contextB.newPage();
+  const formFor = (page: Page) => page.locator(
+    `form:has(input[name="session_id"][value="${sessionId}"]):has(input[name="student_id"][value="${studentId}"])`
+  );
+
+  try {
+    await Promise.all([signInTeacher(pageA), signInTeacher(pageB)]);
+    await Promise.all([
+      pageA.goto('/admin/attendance?range=all'),
+      pageB.goto('/admin/attendance?range=all')
+    ]);
+    const formA = formFor(pageA);
+    const formB = formFor(pageB);
+    await expect(formA).toHaveCount(1);
+    await expect(formB).toHaveCount(1);
+    await expect(formA.locator('input[name="expected_revision"]')).toHaveValue('1');
+    await expect(formB.locator('input[name="expected_revision"]')).toHaveValue('1');
+
+    await formA.locator('input[name="reason"]').fill('Playwright T8 A');
+    await formA.locator('input[name="request_id"]').evaluate((element, requestId) => {
+      (element as HTMLInputElement).value = requestId;
+    }, requestA);
+    await formA.getByText('缺席', { exact: true }).click();
+    await expect(formA.getByRole('radio', { name: '缺席' })).toBeChecked();
+    await formA.getByRole('button', { name: '更新點名' }).click();
+    await expect.poll(async () => {
+      const result = await fixtureClient.from('attendance_records')
+        .select('status,revision').eq('session_id', sessionId).eq('student_id', studentId).single();
+      return result.error ? `error:${result.error.code}` : `${result.data.status}:${result.data.revision}`;
+    }, { timeout: 30_000 }).toBe('absent:2');
+
+    await formB.locator('input[name="reason"]').fill('Playwright T8 B stale');
+    await formB.locator('input[name="request_id"]').evaluate((element, requestId) => {
+      (element as HTMLInputElement).value = requestId;
+    }, requestB);
+    await formB.getByText('請假', { exact: true }).click();
+    await expect(formB.getByRole('radio', { name: '請假' })).toBeChecked();
+    await formB.getByRole('button', { name: '更新點名' }).click();
+    await expect(formFor(pageB).getByRole('status')).toContainText('此點名已被其他操作更新，請重新載入後再提交。', { timeout: 30_000 });
+    await expect(pageB.locator('body')).not.toContainText(/PGRST|SQLSTATE|uuid|token|@|UserFacingOperationError|stack trace/i);
+
+    const afterConflict = await fixtureClient.from('attendance_records')
+      .select('status,revision').eq('session_id', sessionId).eq('student_id', studentId).single();
+    expect(afterConflict.error).toBeNull();
+    expect(afterConflict.data).toMatchObject({ status: 'absent', revision: 2 });
+    const auditA = await fixtureClient.from('audit_logs').select('id', { count: 'exact', head: true })
+      .contains('new_data', { attendance_history: { request_id: requestA } });
+    const auditB = await fixtureClient.from('audit_logs').select('id', { count: 'exact', head: true })
+      .contains('new_data', { attendance_history: { request_id: requestB } });
+    expect(auditA.error).toBeNull();
+    expect(auditB.error).toBeNull();
+    expect(auditA.count).toBe(1);
+    expect(auditB.count).toBe(0);
+    expect(await countRows('notifications')).toBe(notificationCount);
+    expect(await countRows('notification_outbox')).toBe(outboxCount);
+
+    await pageB.reload();
+    const refreshedForm = formFor(pageB);
+    await expect(refreshedForm.locator('input[name="expected_revision"]')).toHaveValue('2');
+    await expect(refreshedForm.getByRole('radio', { name: '缺席' })).toBeChecked();
+    await refreshedForm.locator('input[name="reason"]').fill('Playwright T8 refreshed');
+    await refreshedForm.locator('input[name="request_id"]').evaluate((element, requestId) => {
+      (element as HTMLInputElement).value = requestId;
+    }, requestRefresh);
+    await refreshedForm.getByText('出席', { exact: true }).click();
+    await expect(refreshedForm.getByRole('radio', { name: '出席' })).toBeChecked();
+    await refreshedForm.getByRole('button', { name: '更新點名' }).click();
+    await expect.poll(async () => {
+      const result = await fixtureClient.from('attendance_records')
+        .select('status,revision').eq('session_id', sessionId).eq('student_id', studentId).single();
+      return result.error ? `error:${result.error.code}` : `${result.data.status}:${result.data.revision}`;
+    }, { timeout: 30_000 }).toBe('present:3');
+    const afterRefresh = await fixtureClient.from('attendance_records')
+      .select('status,revision').eq('session_id', sessionId).eq('student_id', studentId).single();
+    expect(afterRefresh.error).toBeNull();
+    expect(afterRefresh.data).toMatchObject({ status: 'present', revision: 3 });
+  } finally {
+    await Promise.allSettled([contextA.close(), contextB.close()]);
+    const attendance = await fixtureClient.from('attendance_records')
+      .select('id').eq('session_id', sessionId).eq('student_id', studentId).maybeSingle();
+    if (attendance.data?.id) {
+      await fixtureClient.from('attendance_records').delete().eq('id', attendance.data.id);
+      await fixtureClient.from('audit_logs').delete().eq('record_id', attendance.data.id);
+    }
+    await fixtureClient.from('lesson_sessions').delete().eq('id', sessionId);
+  }
 });

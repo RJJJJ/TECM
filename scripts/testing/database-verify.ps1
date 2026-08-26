@@ -76,6 +76,8 @@ try {
     '/workspace/supabase/migrations/202608140014_teacher_attendance_history_access.sql',
     '/workspace/supabase/migrations/202608240015_attendance_function_execute_hardening.sql',
     '/workspace/supabase/migrations/202608240015_attendance_function_execute_hardening.sql',
+    '/workspace/supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql',
+    '/workspace/supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
@@ -95,7 +97,8 @@ try {
     '/workspace/supabase/tests/015_uat_core_workflows.sql',
     '/workspace/supabase/tests/016_course_cohort_enrollment_model.sql',
     '/workspace/supabase/tests/017_teacher_attendance_history_access.sql',
-    '/workspace/supabase/tests/018_attendance_function_execute_hardening.sql'
+    '/workspace/supabase/tests/018_attendance_function_execute_hardening.sql',
+    '/workspace/supabase/tests/019_teacher_attendance_revision_guard.sql'
   )
 
   foreach ($file in $files) {
@@ -287,13 +290,25 @@ try {
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/teacher_attendance_first.sql' `
     -SecondFile '/workspace/supabase/tests/concurrency/teacher_attendance_second.sql' `
-    -ExpectedFirstExitCodes @(0, 3) `
-    -ExpectedSecondExitCodes @(0, 3) `
+    -ExpectedExitPairs @('0,3', '3,0') `
     -StartSecondDelayMilliseconds 0 `
     -BarrierRaceName 'teacher-attendance'
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/teacher_attendance_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Teacher attendance concurrency assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_existing_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare existing teacher attendance concurrency fixture.' }
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/teacher_attendance_existing_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/teacher_attendance_existing_second.sql' `
+    -ExpectedExitPairs @('0,3', '3,0') `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'teacher-attendance-existing'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_existing_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Existing teacher attendance concurrency assertion failed.' }
 
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/invite_first.sql' `
@@ -502,7 +517,7 @@ try {
     throw 'Blocked migration partially applied mutable DDL before preflight.'
   }
 
-  Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-018, deterministic teacher-link A/B winner races, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
+  Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-019, existing/absent teacher-attendance races, deterministic teacher-link A/B winner races, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity

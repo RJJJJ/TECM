@@ -20,7 +20,7 @@ begin
     select * from (values
       ('public.capture_attendance_history_audit()'::regprocedure, false),
       ('public.get_teacher_attendance_sessions()'::regprocedure, true),
-      ('public.submit_teacher_attendance(uuid,uuid,text,timestamptz,text,text)'::regprocedure, true),
+      ('public.submit_teacher_attendance(uuid,uuid,text,bigint,text,text)'::regprocedure, true),
       ('public.submit_attendance(uuid,jsonb)'::regprocedure, true)
     ) as expected(signature, authenticated_expected)
   loop

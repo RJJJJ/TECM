@@ -79,17 +79,19 @@ export async function submitTeacherAttendanceAction(_: OperationState, form: For
     const sessionId = value(form, 'session_id');
     const studentId = value(form, 'student_id');
     const status = value(form, 'status');
-    const expectedUpdatedAt = value(form, 'expected_updated_at') || null;
+    const expectedRevisionValue = value(form, 'expected_revision');
+    const expectedRevision = expectedRevisionValue ? Number(expectedRevisionValue) : null;
     const reason = value(form, 'reason');
     const requestId = value(form, 'request_id');
-    if (!sessionId || !studentId || !['present', 'absent', 'excused'].includes(status) || !requestId) {
+    if (!sessionId || !studentId || !['present', 'absent', 'excused'].includes(status) || !requestId
+      || (expectedRevision !== null && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1))) {
       throw userFacingError('請完整填寫點名資料後再提交。');
     }
     const { data, error } = await ctx.supabase.rpc('submit_teacher_attendance', {
       target_session_id: sessionId,
       target_student_id: studentId,
       target_status: status,
-      target_expected_updated_at: expectedUpdatedAt,
+      target_expected_revision: expectedRevision,
       target_reason: reason || null,
       target_request_id: requestId
     });
