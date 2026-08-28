@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { safeErrorMessage } from '../../lib/operations/errors.ts';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const read = (relative: string) => readFileSync(`${root}/${relative}`, 'utf8');
@@ -51,7 +52,11 @@ test('teacher history corrections are guarded, idempotent, auditable, and concur
   );
   assert.match(revisionMigration, /attendance correction reason is required/);
   assert.match(revisionMigration, /attendance has changed; reload before submitting/);
-  assert.match(revisionMigration, /pg_advisory_xact_lock/);
+  assert.match(
+    revisionMigration,
+    /if not pg_try_advisory_xact_lock\(hashtextextended\([\s\S]+?raise exception 'attendance update is already in progress'/,
+    'M40 non-blocking attendance contention guard missing'
+  );
   assert.match(revisionMigration, /request_seen := found/);
   assert.match(revisionMigration, /'idempotent_replay', true/);
   assert.match(revisionMigration, /attendance is linked to finalized leave or makeup records/);
@@ -66,6 +71,7 @@ test('teacher history corrections are guarded, idempotent, auditable, and concur
   assert.match(migration, /return jsonb_build_object\('changed', false/);
   assert.match(errors, /課堂尚未開始，暫時不能點名。/);
   assert.match(errors, /請重新載入後再提交。/);
+  assert.match(errors, /此點名資料正在由另一位使用者更新，請重新整理後再試。/);
 });
 
 test('teacher UI exposes Chinese filters and never renders raw identity values', () => {
@@ -83,4 +89,19 @@ test('teacher UI exposes Chinese filters and never renders raw identity values',
   assert.match(actions, /rpc\('submit_teacher_attendance'/);
   assert.match(actions, /target_expected_revision: expectedRevision/);
   assert.match(shell, /\['課堂與點名', '\/admin\/attendance'/);
+});
+
+test('attendance contention maps to one sanitized operator message', () => {
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  try {
+    const message = safeErrorMessage({
+      code: 'P0001',
+      message: 'attendance update is already in progress: internal SQL tenant row token'
+    });
+    assert.equal(message, '此點名資料正在由另一位使用者更新，請重新整理後再試。');
+    assert.doesNotMatch(message, /SQL|tenant|row|token|P0001/i);
+  } finally {
+    console.error = originalConsoleError;
+  }
 });

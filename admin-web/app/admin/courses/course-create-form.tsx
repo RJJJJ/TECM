@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useState } from 'react';
 import { useFormStatus } from 'react-dom';
+import { useRouter } from 'next/navigation';
 import { createCourseAction, type CreateCourseFormState } from './actions';
 
 type CampusOption = {
@@ -43,19 +44,21 @@ function clientValidate(formData: FormData) {
 }
 
 export default function CourseCreateForm({ campuses }: Props) {
+  const router = useRouter();
   const [state, action] = useActionState(createCourseAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [showSavedHint, setShowSavedHint] = useState(false);
 
   useEffect(() => {
     if (state.status === 'success') {
+      router.refresh();
       setShowSavedHint(true);
       const timer = window.setTimeout(() => setShowSavedHint(false), 2600);
       return () => window.clearTimeout(timer);
     }
 
     return undefined;
-  }, [state.status]);
+  }, [router, state.status]);
 
   return (
     <form

@@ -1,6 +1,5 @@
 'use server';
 
-import { revalidatePath } from 'next/cache';
 import type { OperationState } from '@/lib/operations/actions';
 import { getOperationsContext } from '@/lib/operations/context';
 import { safeOperationMessage, UserFacingOperationError, userFacingError } from '@/lib/operations/errors';
@@ -21,9 +20,6 @@ export async function createCampusAction(_: OperationState, form: FormData): Pro
       is_active: true
     });
     if (error) throw error;
-    revalidatePath('/admin/settings');
-    revalidatePath('/admin/courses');
-    revalidatePath('/admin/dashboard');
     return { status: 'success', message: '校區已建立。' };
   } catch (error) {
     return { status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '建立校區失敗，請稍後再試。', 'create-campus') };

@@ -1,6 +1,7 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { createExamCohortAction, type ExamCohortFormState } from './actions';
 
 type Option = { id: string; label: string | null };
@@ -9,9 +10,15 @@ const initial: ExamCohortFormState = { status: 'idle' };
 const field = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm';
 
 export default function CohortCreateForm({ teachers, courses, campuses }: { teachers: Option[]; courses: CourseOption[]; campuses: Option[] }) {
-  const [state, action] = useActionState(createExamCohortAction, initial);
+  const router = useRouter();
+  const [state, action, pending] = useActionState(createExamCohortAction, initial);
   const [courseId, setCourseId] = useState('');
   const selectedCourse = courses.find(course => course.id === courseId);
+
+  useEffect(() => {
+    if (state.status === 'success') router.refresh();
+  }, [router, state.status]);
+
   return <form action={action} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
     <select className={field} name="course_id" aria-label="所屬課程" value={courseId} onChange={event => setCourseId(event.target.value)} required><option value="" disabled>選擇所屬課程</option>{courses.map(course => <option key={course.id} value={course.id}>{course.title} · {course.category ?? '未設定類別'} · {course.level ?? '未設定程度'}</option>)}</select>
     <input className={field} name="name" placeholder="班別名稱" aria-label="班別名稱" required />
@@ -23,6 +30,6 @@ export default function CohortCreateForm({ teachers, courses, campuses }: { teac
     <select className={field} name="status" aria-label="班別狀態" defaultValue="active"><option value="active">使用中（可招生）</option><option value="draft">草稿</option></select>
     {teachers.length === 0 ? <p className="text-sm text-amber-700 sm:col-span-2 lg:col-span-3">目前沒有可選導師；你可以先建立班別，稍後在設定導師後再安排課堂。</p> : null}
     {courses.length === 0 ? <p className="text-sm text-amber-700 sm:col-span-2 lg:col-span-3">目前沒有資料完整的啟用課程，請先建立或更新課程。</p> : null}
-    <div className="flex items-center gap-3 sm:col-span-2 lg:col-span-3"><button disabled={!courses.length} className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-300" type="submit">建立班別</button>{state.message ? <p role="status" className={`text-sm ${state.status === 'success' ? 'text-emerald-700' : 'text-rose-700'}`}>{state.message}</p> : null}</div>
+    <div className="flex items-center gap-3 sm:col-span-2 lg:col-span-3"><button disabled={!courses.length || pending} className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-300" type="submit">{pending ? '建立中…' : '建立班別'}</button>{state.message ? <p role="status" className={`text-sm ${state.status === 'success' ? 'text-emerald-700' : 'text-rose-700'}`}>{state.message}</p> : null}</div>
   </form>;
 }

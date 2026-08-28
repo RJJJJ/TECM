@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import {
   assertCredentialedE2EEnvironment,
   credentialedE2EEnvironment,
@@ -52,6 +52,17 @@ const canonicalRunId = JSON.parse(execFileSync(
 test.beforeAll(() => {
   assertCredentialedE2EEnvironment(credentialedEnvironment);
 });
+
+async function precompileAdminRoutes(request: APIRequestContext, paths: string[]) {
+  for (const path of paths) {
+    const response = await request.get(path);
+    await response.body();
+  }
+}
+
+function activeTableRow(page: Page, name: string, status = '使用中') {
+  return page.getByRole('row').filter({ hasText: name }).filter({ hasText: status });
+}
 
 type CreatedFixture = {
   prefix: string;
@@ -180,7 +191,7 @@ test.describe('教育中心營運主流程', () => {
     fixture = null;
   });
 
-  test('招生、報讀、收費、點名、扣堂、請假、補課及跟進', async ({ page }, testInfo) => {
+  test('招生、報讀、收費、點名、扣堂、請假、補課及跟進', async ({ page, request }, testInfo) => {
     const fixtureScope = `${canonicalRunId}-${testInfo.project.name}-${testInfo.retry}`
       .replace(/[^a-z0-9_-]/gi, '_');
     const prefix = `TEST_ADMIN_UX_${fixtureScope}`;
@@ -202,11 +213,30 @@ test.describe('教育中心營運主流程', () => {
       expect(data?.length ?? 0).toBeGreaterThan(0);
     };
 
+    await precompileAdminRoutes(request, [
+      '/admin/dashboard',
+      '/admin/settings',
+      '/admin/courses',
+      '/admin/packages',
+      '/admin/exam-cohorts',
+      '/admin/exam-cohorts/00000000-0000-4000-8000-000000000000',
+      '/admin/exam-cohorts/00000000-0000-4000-8000-000000000000/lesson-plans',
+      '/admin/exam-cohorts/00000000-0000-4000-8000-000000000000/lesson-sessions',
+      '/admin/students',
+      '/admin/payments',
+      '/admin/guardians',
+      '/admin/attendance',
+      '/admin/leave-makeup',
+      '/admin/makeup',
+      '/admin/makeup/00000000-0000-4000-8000-000000000000',
+      '/admin/follow-ups'
+    ]);
     await page.goto('/login');
     await page.getByLabel('電郵').fill(email!);
     await page.getByLabel('密碼').fill(password!);
     await page.getByRole('button', { name: '登入' }).click();
     await expect(page).toHaveURL(/\/admin\/dashboard$/, { timeout: 30_000 });
+    await expect(page.getByRole('heading', { name: '營運儀表板' })).toBeVisible();
 
     await page.goto('/admin/settings');
     await page.getByLabel('校區名稱').fill(campusName);
@@ -214,7 +244,7 @@ test.describe('教育中心營運主流程', () => {
     await page.getByRole('button', { name: '建立校區' }).click();
     await expect(page.getByRole('status')).toContainText('校區已建立');
     await page.reload();
-    await expect(page.getByText(campusName)).toBeVisible();
+    await expect(activeTableRow(page, campusName)).toHaveCount(1);
 
     await page.goto('/admin/courses');
     await page.getByLabel('課程名稱').fill(courseName);
@@ -224,7 +254,7 @@ test.describe('教育中心營運主流程', () => {
     await page.getByRole('button', { name: '新增課程' }).click();
     await expect(page.getByRole('status')).toContainText('課程已新增');
     await page.reload();
-    await expect(page.getByText(courseName)).toBeVisible();
+    await expect(activeTableRow(page, courseName, '啟用')).toHaveCount(1);
 
     await page.goto('/admin/packages');
     await page.getByLabel('套票名稱').fill(feePlanName);
@@ -234,7 +264,7 @@ test.describe('教育中心營運主流程', () => {
     await page.getByRole('button', { name: '建立套票' }).click();
     await expect(page.getByRole('status')).toContainText('套票已建立');
     await page.reload();
-    await expect(page.getByText(feePlanName)).toBeVisible();
+    await expect(activeTableRow(page, feePlanName)).toHaveCount(1);
 
     await page.goto('/admin/exam-cohorts');
     const courseOption = page.getByLabel('所屬課程').locator('option').filter({ hasText: courseName });
@@ -252,7 +282,7 @@ test.describe('教育中心營運主流程', () => {
     await assertPersisted('courses', { title: courseName });
     await assertPersisted('fee_plans', { name: feePlanName });
     await assertPersisted('exam_cohorts', { name: cohortName });
-    const cohortRow = page.getByRole('row').filter({ hasText: cohortName });
+    const cohortRow = activeTableRow(page, cohortName);
     const cohortHref = await cohortRow.getByRole('link', { name: '開啟班別' }).getAttribute('href');
     expect(cohortHref).toBeTruthy();
 
@@ -295,6 +325,7 @@ test.describe('教育中心營運主流程', () => {
     await page.getByLabel('要加入的學生').selectOption({ label: enrollmentStudentName });
     await page.getByRole('button', { name: '加入班別' }).click();
     await expect(page.getByRole('status')).toContainText('學生已加入班別');
+    await expect(page.getByLabel('要加入的學生').locator('option').filter({ hasText: enrollmentStudentName })).toHaveCount(0);
     await page.reload();
     await expect(page.getByText(enrollmentStudentName)).toBeVisible();
 
@@ -316,6 +347,7 @@ test.describe('教育中心營運主流程', () => {
     await page.getByLabel('要加入的學生').selectOption({ label: enrollmentStudentName });
     await page.getByRole('button', { name: '加入班別' }).click();
     await expect(page.getByRole('status')).toContainText('舊報讀記錄已恢復');
+    await expect(page.getByLabel('要加入的學生').locator('option').filter({ hasText: enrollmentStudentName })).toHaveCount(0);
     await page.reload();
     await expect(page.getByText(enrollmentStudentName)).toBeVisible();
 
@@ -431,12 +463,17 @@ test.describe('教育中心營運主流程', () => {
     await expect(page.locator('main h2')).toBeVisible();
   });
 
-  test('核心營運頁不會顯示內部錯誤或元件名稱', async ({ page }) => {
+  test('核心營運頁不會顯示內部錯誤或元件名稱', async ({ page, request }) => {
+    await precompileAdminRoutes(request, [
+      '/admin/dashboard', '/admin/students', '/admin/courses', '/admin/exam-cohorts',
+      '/admin/leave-makeup', '/admin/makeup'
+    ]);
     await page.goto('/login');
     await page.getByLabel('電郵').fill(email!);
     await page.getByLabel('密碼').fill(password!);
     await page.getByRole('button', { name: '登入' }).click();
     await expect(page).toHaveURL(/\/admin\/dashboard$/, { timeout: 30_000 });
+    await expect(page.getByRole('heading', { name: '營運儀表板' })).toBeVisible();
 
     for (const path of ['/admin/students', '/admin/courses', '/admin/exam-cohorts', '/admin/leave-makeup', '/admin/makeup']) {
       await page.goto(path);
@@ -445,7 +482,7 @@ test.describe('教育中心營運主流程', () => {
     }
   });
 
-  test('同一學生可跨課程報讀，並須透過確認流程在同課程轉班', async ({ page }, testInfo) => {
+  test('同一學生可跨課程報讀，並須透過確認流程在同課程轉班', async ({ page, request }, testInfo) => {
     test.setTimeout(300_000);
     const scope = `${canonicalRunId}-${testInfo.project.name}-${testInfo.retry}`.replace(/[^a-z0-9_-]/gi, '_');
     const prefix = `TEST_COURSE_MODEL_${scope}`;
@@ -462,11 +499,16 @@ test.describe('教育中心營運主流程', () => {
     };
     const adminClient = createClient(supabaseUrl!, serviceRoleKey!, { auth: { persistSession: false, autoRefreshToken: false } });
 
+    await precompileAdminRoutes(request, [
+      '/admin/dashboard', '/admin/courses', '/admin/exam-cohorts',
+      '/admin/exam-cohorts/00000000-0000-4000-8000-000000000000'
+    ]);
     await page.goto('/login');
     await page.getByLabel('電郵').fill(email!);
     await page.getByLabel('密碼').fill(password!);
     await page.getByRole('button', { name: '登入' }).click();
     await expect(page).toHaveURL(/\/admin\/dashboard$/, { timeout: 30_000 });
+    await expect(page.getByRole('heading', { name: '營運儀表板' })).toBeVisible();
 
     const createCourse = async (title: string, category: string, level: string) => {
       await page.goto('/admin/courses');
@@ -475,6 +517,7 @@ test.describe('教育中心營運主流程', () => {
       await page.getByLabel('程度').fill(level);
       await page.getByRole('button', { name: '新增課程' }).click();
       await expect(page.getByRole('status')).toContainText('課程已新增', { timeout: 15_000 });
+      await expect(activeTableRow(page, title, '啟用')).toHaveCount(1);
     };
     await createCourse(pythonCourse, 'Python', '三級');
     await createCourse(scratchCourse, 'Scratch', '一級');
@@ -489,6 +532,7 @@ test.describe('教育中心營運主流程', () => {
       await page.getByLabel('班別狀態').selectOption('active');
       await page.getByRole('button', { name: '建立班別' }).click();
       await expect(page.getByRole('status')).toContainText('班別已建立', { timeout: 15_000 });
+      await expect(activeTableRow(page, cohortName)).toHaveCount(1);
     };
     await createCohort(pythonCourse, pythonA, 'saturday');
     await createCohort(pythonCourse, pythonB, 'sunday');
@@ -509,11 +553,13 @@ test.describe('教育中心營運主流程', () => {
     await page.getByLabel('要加入的學生').selectOption({ label: studentName });
     await page.getByRole('button', { name: '加入班別' }).click();
     await expect(page.getByRole('status')).toContainText('學生已加入班別。', { timeout: 15_000 });
+    await expect(page.getByLabel('要加入的學生').locator('option').filter({ hasText: studentName })).toHaveCount(0);
 
     await openCohort(scratchA);
     await page.getByLabel('要加入的學生').selectOption({ label: studentName });
     await page.getByRole('button', { name: '加入班別' }).click();
     await expect(page.getByRole('status')).toContainText('學生已加入班別。', { timeout: 15_000 });
+    await expect(page.getByLabel('要加入的學生').locator('option').filter({ hasText: studentName })).toHaveCount(0);
 
     const sessionClient = createClient(supabaseUrl!, anonKey!, { auth: { persistSession: false, autoRefreshToken: false } });
     expect((await sessionClient.auth.signInWithPassword({ email: email!, password: password! })).error).toBeNull();
@@ -547,8 +593,9 @@ test.describe('教育中心營運主流程', () => {
   });
 });
 
-test('Teacher direct URL and navigation cannot reach the operations dashboard', async ({ page }, testInfo) => {
+test('Teacher direct URL and navigation cannot reach the operations dashboard', async ({ page, request }, testInfo) => {
   test.skip(!teacherEmail || !teacherPassword, '需要本機 Teacher 測試登入');
+  await precompileAdminRoutes(request, ['/admin/attendance', '/admin/dashboard', '/admin']);
   await page.goto('/login');
   await page.getByLabel('電郵').fill(teacherEmail!);
   await page.getByLabel('密碼').fill(teacherPassword!);
@@ -574,7 +621,7 @@ async function signInTeacher(page: Page) {
   await expect(page).toHaveURL(/\/admin\/attendance$/, { timeout: 30_000 });
 }
 
-test('Teacher stale attendance page is rejected and refresh receives the new revision', async ({ browser }, testInfo) => {
+test('Teacher stale attendance page is rejected and refresh receives the new revision', async ({ browser, request }, testInfo) => {
   test.setTimeout(180_000);
   test.skip(
     !teacherEmail || !teacherPassword || !supabaseUrl || !serviceRoleKey || !organizationId,
@@ -584,6 +631,7 @@ test('Teacher stale attendance page is rejected and refresh receives the new rev
   const fixtureClient = createClient(supabaseUrl!, serviceRoleKey!, {
     auth: { persistSession: false, autoRefreshToken: false }
   });
+  await precompileAdminRoutes(request, ['/admin/attendance']);
   const sessionId = crypto.randomUUID();
   const studentId = '15000000-0000-4000-8000-000000000001';
   const requestPrefix = `teacher-stale-${canonicalRunId}-${testInfo.project.name}`;

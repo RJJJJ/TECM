@@ -23,7 +23,13 @@ const sourceFiles = [
   'admin-web/components/teacher-attendance-form.tsx',
   'admin-web/components/admin-shell.tsx',
   'admin-web/lib/operations/actions.ts',
-  'admin-web/lib/operations/errors.ts'
+  'admin-web/lib/operations/errors.ts',
+  'scripts/testing/database-verify.ps1',
+  'supabase/tests/concurrency/teacher_attendance_contention_setup.sql',
+  'supabase/tests/concurrency/teacher_attendance_contention_holder.sql',
+  'supabase/tests/concurrency/teacher_attendance_contention_competitor.sql',
+  'supabase/tests/concurrency/teacher_attendance_contention_assert.sql',
+  'supabase/tests/concurrency/teacher_attendance_contention_retry_cleanup.sql'
 ];
 
 const cases = [
@@ -70,6 +76,16 @@ const cases = [
     replacement: '        or false then',
     expectedTest: 'teacher history corrections are guarded, idempotent, auditable, and concurrency-safe',
     expectedFailure: 'M39 stale revision equality guard missing'
+  },
+  {
+    id: 'M40',
+    file: 'supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql',
+    search: "  if not pg_try_advisory_xact_lock(hashtextextended(\n    'teacher-attendance:' || session_row.organization_id::text || ':' || target_session_id::text || ':' || target_student_id::text,\n    0\n  )) then\n    raise exception 'attendance update is already in progress';\n  end if;",
+    replacement: "  perform pg_advisory_xact_lock(hashtextextended(\n    'teacher-attendance:' || session_row.organization_id::text || ':' || target_session_id::text || ':' || target_student_id::text,\n    0\n  ));",
+    expectedTest: 'database existing/absent attendance contention proof',
+    expectedFailure: 'M40 bounded contention classification missing',
+    databaseProbe: true,
+    mutationTarget: 'non-blocking identity-scoped pg_try_advisory_xact_lock guard'
   }
 ];
 
@@ -214,6 +230,23 @@ function runTest(root, testNamePattern) {
   });
 }
 
+function runDatabaseProbe(migrationPath) {
+  return spawnSync('pwsh', [
+    '-NoLogo', '-NoProfile', '-File', resolve(repoRoot, 'scripts/testing/database-verify.ps1'),
+    '-TeacherAttendanceContentionOnly',
+    '-RevisionGuardMigrationOverride', migrationPath,
+    '-ConcurrencyTimeoutSeconds', '15',
+    '-ContentionHardTimeoutSeconds', '10'
+  ], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: process.env,
+    timeout: 240_000,
+    windowsHide: true,
+    maxBuffer: 8 * 1024 * 1024
+  });
+}
+
 function outputOf(result) {
   return `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
 }
@@ -239,6 +272,27 @@ function testFailureClassification(result, mutation) {
   };
 }
 
+function databaseFailureClassification(result, mutation) {
+  const output = outputOf(result);
+  const timedOut = result.error?.code === 'ETIMEDOUT';
+  const expectedSafetyFailure = output.includes(mutation.expectedFailure);
+  const databaseCleanup = /\[CLEANUP\] database=PASS container=PASS/.test(output);
+  const containerCleanup = databaseCleanup;
+  const lifecycleFailure = timedOut || Boolean(result.signal)
+    || /Docker Desktop is not available|Could not start PostgreSQL|PostgreSQL did not become ready|cleanup failed/i.test(output)
+    || !databaseCleanup || !containerCleanup;
+  return {
+    caught: result.status !== 0 && expectedSafetyFailure && !lifecycleFailure,
+    exit_code: result.status,
+    timed_out: timedOut,
+    signal: result.signal ?? null,
+    expected_safety_failure: expectedSafetyFailure,
+    lifecycle_failure: lifecycleFailure,
+    database_cleanup: databaseCleanup ? 'PASS' : 'FAIL',
+    container_cleanup: containerCleanup ? 'PASS' : 'FAIL'
+  };
+}
+
 function runBaseline() {
   const result = runTest(repoRoot);
   if (result.status !== 0 || result.error?.code === 'ETIMEDOUT' || result.signal) {
@@ -246,6 +300,24 @@ function runBaseline() {
       exit_code: result.status,
       timed_out: result.error?.code === 'ETIMEDOUT',
       signal: result.signal ?? null
+    });
+  }
+}
+
+function runDatabaseBaseline() {
+  const migrationPath = resolve(repoRoot, 'supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql');
+  const result = runDatabaseProbe(migrationPath);
+  const output = outputOf(result);
+  if (result.status !== 0 || result.error?.code === 'ETIMEDOUT' || result.signal
+      || !/\[PASS\] bounded existing\/absent attendance contention/.test(output)
+      || !/\[CLEANUP\] database=PASS container=PASS/.test(output)) {
+    throw new VerifierError('DATABASE_BASELINE_FAILED', 'M40 database baseline must prove bounded contention and cleanup', {
+      exit_code: result.status,
+      timed_out: result.error?.code === 'ETIMEDOUT',
+      signal: result.signal ?? null,
+      bounded_contention: /\[PASS\] bounded existing\/absent attendance contention/.test(output),
+      database_cleanup: /\[CLEANUP\] database=PASS/.test(output),
+      container_cleanup: /container=PASS/.test(output)
     });
   }
 }
@@ -271,8 +343,12 @@ function runMutation(mutation, options = {}) {
     const original = snapshot(readFileSync(target), mutation.file);
     const mutated = mutateBytes(original.bytes, mutation);
     writeFileSync(target, mutated.bytes);
-    const result = runTest(tempRoot, mutation.expectedTest);
-    const classification = testFailureClassification(result, mutation);
+    const result = mutation.databaseProbe
+      ? runDatabaseProbe(target)
+      : runTest(tempRoot, mutation.expectedTest);
+    const classification = mutation.databaseProbe
+      ? databaseFailureClassification(result, mutation)
+      : testFailureClassification(result, mutation);
     if (!classification.caught) {
       throw new VerifierError(
         'WRONG_FAILURE_CLASSIFICATION',
@@ -292,7 +368,11 @@ function runMutation(mutation, options = {}) {
       source_sha256: original.sha256,
       source_git_blob: original.gitBlob,
       source_raw_git_blob: original.rawGitBlob,
-      semantic_mapping: mutation.semanticMapping ?? null
+      semantic_mapping: mutation.semanticMapping ?? null,
+      mutation_target: mutation.mutationTarget ?? mutation.file,
+      lifecycle_failure: classification.lifecycle_failure ?? false,
+      database_cleanup: classification.database_cleanup ?? 'NOT_APPLICABLE',
+      container_cleanup: classification.container_cleanup ?? 'NOT_APPLICABLE'
     };
 
     writeFileSync(target, original.bytes);
@@ -331,7 +411,13 @@ function runMutation(mutation, options = {}) {
     }
   }
   if (failure) throw failure;
-  return { ...evidence, restoration: restored ? 'PASS' : 'FAIL', cleanup: cleaned ? 'PASS' : 'FAIL' };
+  return {
+    ...evidence,
+    restoration: restored ? 'PASS' : 'FAIL',
+    workspace_cleanup: cleaned ? 'PASS' : 'FAIL',
+    cleanup: cleaned ? 'PASS' : 'FAIL',
+    final_result: restored && cleaned ? 'PASS' : 'FAIL'
+  };
 }
 
 function runUnrelatedFailureControl(m31) {
@@ -366,6 +452,7 @@ function runUnrelatedFailureControl(m31) {
 
 function controlMode(name) {
   const m31 = cases.find(({ id }) => id === 'M31');
+  const m40 = cases.find(({ id }) => id === 'M40');
   runBaseline();
   if (name === 'zero-match') {
     return runMutation({ ...m31, search: '__M31_ZERO_MATCH_CONTROL__' });
@@ -384,6 +471,18 @@ function controlMode(name) {
   if (name === 'crlf') return runMutation(m31, { fixtureTransform: (bytes) => transformLineEndings(bytes, 'CRLF') });
   if (name === 'utf8-bom') return runMutation(m31, { fixtureTransform: (bytes) => transformLineEndings(bytes, 'LF', true) });
   if (name === 'restoration-mismatch') return runMutation(m31, { injectRestorationMismatch: true });
+  if (name === 'm40-zero-match') {
+    return runMutation({ ...m40, search: '__M40_ZERO_MATCH_CONTROL__' });
+  }
+  if (name === 'm40-multiple-match') {
+    return runMutation(m40, {
+      fixtureTransform: (bytes, mutation) => {
+        const shape = textShape(bytes);
+        const normalized = shape.text.replace(/\r\n/g, '\n');
+        return encodeText(`${normalized}\n${mutation.search}\n`, shape);
+      }
+    });
+  }
   throw new VerifierError('UNKNOWN_CONTROL', `Unknown M31 control: ${name}`);
 }
 
@@ -404,7 +503,9 @@ function runM31Controls() {
     { name: 'lf', exit: 'zero' },
     { name: 'crlf', exit: 'zero' },
     { name: 'utf8-bom', exit: 'zero' },
-    { name: 'restoration-mismatch', exit: 'nonzero', code: 'RESTORATION_MISMATCH' }
+    { name: 'restoration-mismatch', exit: 'nonzero', code: 'RESTORATION_MISMATCH' },
+    { name: 'm40-zero-match', exit: 'nonzero', code: 'MATCH_COUNT' },
+    { name: 'm40-multiple-match', exit: 'nonzero', code: 'MATCH_COUNT' }
   ];
   return controls.map((control) => {
     const child = spawnSync(process.execPath, [resolve(repoRoot, verifierPath), `--control=${control.name}`], {
@@ -468,6 +569,7 @@ function main() {
   runBaseline();
   const selected = focused ? cases.filter(({ id }) => id === focused) : cases;
   if (selected.length === 0) throw new VerifierError('UNKNOWN_MUTATION', `Unknown mutation case: ${focused}`);
+  if (selected.some(({ databaseProbe }) => databaseProbe)) runDatabaseBaseline();
   const controls = focused ? null : runM31Controls();
   const evidence = selected.map((mutation) => runMutation(mutation));
   successOutput({ cases: evidence, controls });

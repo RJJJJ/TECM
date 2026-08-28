@@ -78,6 +78,24 @@ begin
   if target_expected_revision is not null and target_expected_revision < 1 then raise exception 'invalid attendance revision'; end if;
   if length(normalized_request_id) not between 1 and 200 then raise exception 'invalid attendance request id'; end if;
 
+  -- Resolve only the immutable attendance identity before taking any blocking
+  -- row lock. The identity-scoped advisory lock must be attempted first so a
+  -- concurrent write to the same attendance row can fail immediately.
+  select * into session_row
+  from public.lesson_sessions
+  where id = target_session_id;
+  if session_row.id is null then raise exception 'lesson session not found'; end if;
+
+  if not pg_try_advisory_xact_lock(hashtextextended(
+    'teacher-attendance:' || session_row.organization_id::text || ':' || target_session_id::text || ':' || target_student_id::text,
+    0
+  )) then
+    raise exception 'attendance update is already in progress';
+  end if;
+
+  -- Re-read under the existing row lock after the non-blocking identity lock.
+  -- This preserves the original session-state serialization and ensures every
+  -- authorization and lifecycle check below uses the locked current row.
   select * into session_row
   from public.lesson_sessions
   where id = target_session_id
@@ -114,14 +132,6 @@ begin
       and s.organization_id = session_row.organization_id
       and s.status = 'active'
   ) then raise exception 'student is not active in this session cohort'; end if;
-
-  -- The identity-scoped transaction lock covers both an existing row and the
-  -- initially-absent sentinel. The revision comparison happens only after the
-  -- lock, so two callers starting from the same state cannot both mutate.
-  perform pg_advisory_xact_lock(hashtextextended(
-    'teacher-attendance:' || session_row.organization_id::text || ':' || target_session_id::text || ':' || target_student_id::text,
-    0
-  ));
 
   select * into attendance_row
   from public.attendance_records

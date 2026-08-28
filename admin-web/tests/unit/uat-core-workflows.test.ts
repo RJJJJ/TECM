@@ -6,9 +6,14 @@ import test from 'node:test';
 const root = resolve(import.meta.dirname, '../../..');
 const source = (path: string) => readFileSync(resolve(root, path), 'utf8');
 
-test('cohort enrollment uses the guarded idempotent state transition and refreshes every listing', () => {
+test('cohort enrollment uses the guarded idempotent state transition and commits feedback before refresh', () => {
   const migration = source('supabase/migrations/202608050012_uat_core_workflows.sql');
-  const action = source('admin-web/app/admin/exam-cohorts/actions.ts');
+  const actions = source('admin-web/app/admin/exam-cohorts/actions.ts');
+  const action = actions.slice(
+    actions.indexOf('export async function addCohortStudentAction'),
+    actions.indexOf('export async function saveLessonPlanAction')
+  );
+  const form = source('admin-web/app/admin/exam-cohorts/cohort-student-form.tsx');
   const detail = source('admin-web/app/admin/exam-cohorts/[id]/page.tsx');
 
   assert.match(migration, /create or replace function public\.enroll_student_in_cohort/);
@@ -21,9 +26,9 @@ test('cohort enrollment uses the guarded idempotent state transition and refresh
   assert.match(migration, /s\.organization_id = target_organization_id/);
   assert.match(action, /rpc\('enroll_student_in_cohort'/);
   assert.doesNotMatch(action, /from\('cohort_students'\)\.insert/);
-  for (const path of ['/admin/exam-cohorts', '/admin/classes', '/admin/students', '/admin/dashboard']) {
-    assert.match(action, new RegExp(`revalidatePath\\('${path.replaceAll('/', '\\/')}`));
-  }
+  assert.doesNotMatch(action, /revalidatePath\(/);
+  assert.match(form, /if \(state\.status === 'success'\) router\.refresh\(\)/);
+  assert.match(form, /\[router, state\]/);
   assert.match(detail, /\.eq\('status', 'active'\)\.order\('created_at'\)/);
 });
 

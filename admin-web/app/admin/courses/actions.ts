@@ -1,6 +1,5 @@
 'use server';
 
-import { revalidatePath } from 'next/cache';
 import { getOperationsContext } from '@/lib/operations/context';
 import { safeOperationMessage, UserFacingOperationError, userFacingError } from '@/lib/operations/errors';
 
@@ -73,8 +72,6 @@ export async function createCourseAction(
 
     if (error || !data) throw error ?? new Error('course insert returned no row');
 
-    revalidatePath('/admin/courses');
-    revalidatePath('/admin/dashboard');
     return { status: 'success', message: '課程已新增。' };
   } catch (error) {
     return { status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '新增課程失敗，請稍後再試。', 'create-course') };
