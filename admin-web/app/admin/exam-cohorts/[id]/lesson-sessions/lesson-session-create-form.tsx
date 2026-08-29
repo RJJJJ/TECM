@@ -1,7 +1,8 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useEffect } from 'react';
 import { useFormStatus } from 'react-dom';
+import { useRouter } from 'next/navigation';
 import { createLessonSessionAction, type ExamCohortFormState } from '../../actions';
 
 type LessonPlanOption = {
@@ -40,7 +41,12 @@ function SubmitButton() {
 }
 
 export function LessonSessionCreateForm({ cohortId, lessons, teachers }: LessonSessionCreateFormProps) {
+  const router = useRouter();
   const [state, action] = useActionState(createLessonSessionAction.bind(null, cohortId), initialState);
+
+  useEffect(() => {
+    if (state.status === 'success') router.refresh();
+  }, [router, state]);
 
   return (
     <form action={action} className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-5">

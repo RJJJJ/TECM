@@ -134,6 +134,23 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium webkit
+      - name: Prepare non-echoing Admin E2E fixture environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          status_json="$(supabase status -o json)"
+          mask_file="${RUNNER_TEMP}/tecm-admin-e2e-masks"
+          trap 'rm -f "$mask_file"' EXIT
+          TECM_E2E_SUPABASE_STATUS_JSON="$status_json" \
+          TECM_E2E_MASK_DESTINATION="$mask_file" \
+            node scripts/testing/prepare-admin-e2e-env.mjs
+          test -s "$mask_file"
+          while IFS= read -r mask; do
+            test -n "$mask"
+            echo "::add-mask::$mask"
+          done <"$mask_file"
+          rm -f "$mask_file"
+          trap - EXIT
       - name: Run live Playwright flows and verify zero skips
         working-directory: .
         shell: bash
@@ -143,50 +160,33 @@ jobs:
           canonical_id="$(jq -er .canonicalId <<<"$identity_json")"
           test "$(jq -er .source <<<"$identity_json")" = 'github-actions'
           test "$canonical_id" = "$TECM_TEST_RUN_ID"
-          status_json="$(supabase status -o json)"
-          API_URL="$(jq -er .API_URL <<<"$status_json")"
-          ANON_KEY="$(jq -er .ANON_KEY <<<"$status_json")"
-          SERVICE_ROLE_KEY="$(jq -er .SERVICE_ROLE_KEY <<<"$status_json")"
-          case "$API_URL" in
-            http://127.0.0.1:*) ;;
-            *) echo "Refusing non-local Supabase URL" >&2; exit 1 ;;
-          esac
-          test -n "$ANON_KEY"
-          test -n "$SERVICE_ROLE_KEY"
-          echo "::add-mask::$ANON_KEY"
-          echo "::add-mask::$SERVICE_ROLE_KEY"
-          LOCAL_E2E_PASSWORD="$(openssl rand -hex 32)"
-          echo "::add-mask::$LOCAL_E2E_PASSWORD"
-          for user_id in \
-            10000000-0000-4000-8000-000000000001 \
-            10000000-0000-4000-8000-000000000003 \
-            10000000-0000-4000-8000-000000000004; do
+          test -n "$NEXT_PUBLIC_SUPABASE_URL"
+          test -n "$NEXT_PUBLIC_SUPABASE_ANON_KEY"
+          test -n "$SUPABASE_SERVICE_ROLE_KEY"
+          test -n "$LOCAL_E2E_PASSWORD"
+          test -n "$TECM_ORGANIZATION_ID"
+          test -n "$TECM_E2E_AUTH_IDS"
+          for user_id in $TECM_E2E_AUTH_IDS; do
             curl --fail --silent --show-error \
               --request PUT \
-              --header "apikey: $SERVICE_ROLE_KEY" \
-              --header "Authorization: Bearer $SERVICE_ROLE_KEY" \
+              --header "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              --header "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
               --header 'Content-Type: application/json' \
               --data "$(jq -cn --arg password "$LOCAL_E2E_PASSWORD" '{password: $password, email_confirm: true}')" \
-              "$API_URL/auth/v1/admin/users/$user_id" >/dev/null
+              "$NEXT_PUBLIC_SUPABASE_URL/auth/v1/admin/users/$user_id" >/dev/null
           done
-          export NEXT_PUBLIC_SUPABASE_URL="$API_URL"
-          export NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY"
-          export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
-          export TECM_ORGANIZATION_ID='10000000-0000-4000-8000-000000000000'
-          export PLAYWRIGHT_ADMIN_EMAIL='admin@tecm.local'
-          export PLAYWRIGHT_ADMIN_PASSWORD="$LOCAL_E2E_PASSWORD"
-          export PLAYWRIGHT_TEACHER_EMAIL='teacher-a@tecm.test'
-          export PLAYWRIGHT_TEACHER_PASSWORD="$LOCAL_E2E_PASSWORD"
-          export PLAYWRIGHT_PARENT_EMAIL='guardian-a@tecm.test'
-          export PLAYWRIGHT_PARENT_PASSWORD="$LOCAL_E2E_PASSWORD"
-          export PLAYWRIGHT_BASE_URL='http://127.0.0.1:3000'
-          export PLAYWRIGHT_RUN_ID="$TECM_TEST_RUN_ID"
-          export PLAYWRIGHT_RESULT_FILE="test-results/playwright-results-${TECM_TEST_RUN_ID}.json"
-          export PLAYWRIGHT_EXPECTED_TESTS=12
           cd admin-web
           npm run test:e2e
           npm run test:e2e:verify
-          unset SERVICE_ROLE_KEY LOCAL_E2E_PASSWORD PLAYWRIGHT_ADMIN_PASSWORD PLAYWRIGHT_TEACHER_PASSWORD PLAYWRIGHT_PARENT_PASSWORD
+          for variable in \
+            NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY \
+            SUPABASE_SERVICE_ROLE_KEY TECM_ORGANIZATION_ID TECM_E2E_AUTH_IDS \
+            LOCAL_E2E_PASSWORD PLAYWRIGHT_ADMIN_EMAIL PLAYWRIGHT_ADMIN_PASSWORD \
+            PLAYWRIGHT_TEACHER_EMAIL PLAYWRIGHT_TEACHER_PASSWORD \
+            PLAYWRIGHT_PARENT_EMAIL PLAYWRIGHT_PARENT_PASSWORD PLAYWRIGHT_BASE_URL \
+            PLAYWRIGHT_RUN_ID PLAYWRIGHT_RESULT_FILE PLAYWRIGHT_EXPECTED_TESTS; do
+            printf '%s=\n' "$variable" >> "$GITHUB_ENV"
+          done
 
   ios:
     runs-on: macos-15
@@ -222,6 +222,7 @@ jobs:
         shell: bash
         run: |
           app_path='${{ runner.temp }}/TECM-DerivedData/Build/Products/Debug-iphonesimulator/TECM.app'
+          bash scripts/testing/test-ios-launch-metadata-harness.sh TECM/Info.plist
           bash scripts/testing/validate-ios-launch-metadata.sh "$app_path"
           bash scripts/testing/test-ios-launch-metadata-mutation.sh "$app_path"
       - name: Run Swift tests when a test target exists

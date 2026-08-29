@@ -83,9 +83,6 @@ export async function createExamCohortAction(
     });
     if (error) throw error;
 
-    revalidatePath('/admin/exam-cohorts');
-    revalidatePath('/admin/classes');
-    revalidatePath('/admin/dashboard');
     return { status: 'success', message: '班別已建立。' };
   } catch (error) {
     return { status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '建立班別失敗，請稍後再試。', 'create-cohort') };
@@ -169,13 +166,6 @@ export async function addCohortStudentAction(
     });
     if (error) throw error;
 
-    revalidatePath('/admin/exam-cohorts');
-    revalidatePath(`/admin/exam-cohorts/${cohortId}`);
-    revalidatePath('/admin/classes');
-    revalidatePath('/admin/students');
-    revalidatePath('/admin/sessions');
-    revalidatePath('/admin/attendance');
-    revalidatePath('/admin/dashboard');
     const result = data as { status?: string } | null;
     const message = result?.status === 'reactivated'
       ? '學生的舊報讀記錄已恢復，現已重新加入班別。'
@@ -271,10 +261,6 @@ export async function createLessonSessionAction(
     });
     if (error) throw error;
 
-    revalidatePath(`/admin/exam-cohorts/${cohortId}`);
-    revalidatePath(`/admin/exam-cohorts/${cohortId}/lesson-sessions`);
-    revalidatePath('/admin/sessions');
-    revalidatePath('/admin/dashboard');
     return { status: 'success', message: '未來課堂已建立。' };
   } catch (error) {
     return { status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '建立課堂失敗，請稍後再試。', 'create-lesson-session') };

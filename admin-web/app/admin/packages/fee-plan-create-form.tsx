@@ -1,6 +1,7 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import type { OperationState } from '@/lib/operations/actions';
 import { createFeePlanAction } from './actions';
 
@@ -9,7 +10,13 @@ const initial: OperationState = { status: 'idle' };
 const field = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100';
 
 export default function FeePlanCreateForm({ courses }: { courses: Option[] }) {
+  const router = useRouter();
   const [state, action, pending] = useActionState(createFeePlanAction, initial);
+
+  useEffect(() => {
+    if (state.status === 'success') router.refresh();
+  }, [router, state]);
+
   return <form action={action} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
     <input aria-label="套票名稱" className={field} name="name" placeholder="套票名稱" required maxLength={120} />
     <select aria-label="適用課程" className={field} name="course_id" defaultValue=""><option value="">所有課程</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.label}</option>)}</select>

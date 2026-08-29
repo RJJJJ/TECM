@@ -177,8 +177,8 @@ select set_config('request.jwt.claim.sub', '10000000-0000-4000-8000-000000000004
 
 do $$
 declare
-  first_version timestamptz;
-  second_version timestamptz;
+  first_version bigint;
+  second_version bigint;
   result jsonb;
 begin
   if not exists (select 1 from public.get_teacher_attendance_sessions() where session_id = '1d000000-0000-4000-8000-000000000017') then
@@ -188,7 +188,7 @@ begin
     raise exception 'assigned teacher could not read future session';
   end if;
 
-  select updated_at into first_version from public.attendance_records
+  select revision into first_version from public.attendance_records
   where session_id = '1d000000-0000-4000-8000-000000000017' and student_id = '15000000-0000-4000-8000-000000000001';
 
   result := public.submit_teacher_attendance(
@@ -196,7 +196,7 @@ begin
     'excused', first_version, '補登請假原因', 'teacher-history-017-first'
   );
   if result->>'changed' <> 'true' then raise exception 'historical correction unexpectedly became a no-op'; end if;
-  select updated_at into second_version from public.attendance_records
+  select revision into second_version from public.attendance_records
   where session_id = '1d000000-0000-4000-8000-000000000017' and student_id = '15000000-0000-4000-8000-000000000001';
 
   perform public.submit_teacher_attendance(
@@ -267,9 +267,9 @@ insert into public.leave_requests (
 set role authenticated;
 select set_config('request.jwt.claim.sub', '10000000-0000-4000-8000-000000000004', false);
 do $$
-declare current_version timestamptz;
+declare current_version bigint;
 begin
-  select updated_at into current_version from public.attendance_records
+  select revision into current_version from public.attendance_records
   where session_id = '1d000000-0000-4000-8000-000000000017' and student_id = '15000000-0000-4000-8000-000000000001';
   begin
     perform public.submit_teacher_attendance(

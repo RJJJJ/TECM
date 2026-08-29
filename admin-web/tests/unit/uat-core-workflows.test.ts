@@ -6,9 +6,35 @@ import test from 'node:test';
 const root = resolve(import.meta.dirname, '../../..');
 const source = (path: string) => readFileSync(resolve(root, path), 'utf8');
 
-test('cohort enrollment uses the guarded idempotent state transition and refreshes every listing', () => {
+test('admin create forms refresh for every successful action result, not only a status transition', () => {
+  const createForms = [
+    'admin-web/app/admin/courses/course-create-form.tsx',
+    'admin-web/app/admin/exam-cohorts/cohort-create-form.tsx',
+    'admin-web/app/admin/packages/fee-plan-create-form.tsx',
+    'admin-web/app/admin/settings/campus-create-form.tsx'
+  ];
+  const comparisonForms = [
+    'admin-web/app/admin/exam-cohorts/cohort-student-form.tsx',
+    'admin-web/app/admin/exam-cohorts/[id]/lesson-sessions/lesson-session-create-form.tsx'
+  ];
+
+  for (const path of [...createForms, ...comparisonForms]) {
+    const form = source(path);
+    assert.match(form, /if \(state\.status === 'success'\)\s*\{?\s*router\.refresh\(\)/);
+    assert.equal(form.match(/router\.refresh\(\)/g)?.length, 1, `${path} must not refresh failure results`);
+    assert.match(form, /\}, \[router, state\]\);/);
+    assert.doesNotMatch(form, /\[router, state\.status\]/);
+  }
+});
+
+test('cohort enrollment uses the guarded idempotent state transition and commits feedback before refresh', () => {
   const migration = source('supabase/migrations/202608050012_uat_core_workflows.sql');
-  const action = source('admin-web/app/admin/exam-cohorts/actions.ts');
+  const actions = source('admin-web/app/admin/exam-cohorts/actions.ts');
+  const action = actions.slice(
+    actions.indexOf('export async function addCohortStudentAction'),
+    actions.indexOf('export async function saveLessonPlanAction')
+  );
+  const form = source('admin-web/app/admin/exam-cohorts/cohort-student-form.tsx');
   const detail = source('admin-web/app/admin/exam-cohorts/[id]/page.tsx');
 
   assert.match(migration, /create or replace function public\.enroll_student_in_cohort/);
@@ -21,9 +47,9 @@ test('cohort enrollment uses the guarded idempotent state transition and refresh
   assert.match(migration, /s\.organization_id = target_organization_id/);
   assert.match(action, /rpc\('enroll_student_in_cohort'/);
   assert.doesNotMatch(action, /from\('cohort_students'\)\.insert/);
-  for (const path of ['/admin/exam-cohorts', '/admin/classes', '/admin/students', '/admin/dashboard']) {
-    assert.match(action, new RegExp(`revalidatePath\\('${path.replaceAll('/', '\\/')}`));
-  }
+  assert.doesNotMatch(action, /revalidatePath\(/);
+  assert.match(form, /if \(state\.status === 'success'\) router\.refresh\(\)/);
+  assert.match(form, /\[router, state\]/);
   assert.match(detail, /\.eq\('status', 'active'\)\.order\('created_at'\)/);
 });
 

@@ -42,7 +42,7 @@ test.describe('家長 App 帳戶與通知', () => {
     '需要本機 Supabase、service role 測試 fixture 及 seed admin credentials'
   );
 
-  test('邀請、原子停用、範本、公告、投遞摘要及跨 tenant 防護', async ({ page }, testInfo) => {
+  test('邀請、原子停用、範本、公告、投遞摘要及跨 tenant 防護', async ({ page, request }, testInfo) => {
     test.setTimeout(180_000);
     const runId = `${canonicalRunId}-${testInfo.project.name.replace(/[^a-z0-9]/gi, '-')}`;
     const runKey = runId.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
@@ -64,6 +64,10 @@ test.describe('家長 App 帳戶與通知', () => {
     const service = createClient(apiUrl!, serviceRoleKey!, {
       auth: { autoRefreshToken: false, persistSession: false }
     });
+    for (const path of ['/admin/dashboard', '/admin/guardians', '/admin/notifications']) {
+      const response = await request.get(path);
+      await response.body();
+    }
     let guardianId: string | undefined;
     let linkedAuthUserId: string | undefined;
     let announcementId: string | undefined;
@@ -142,6 +146,7 @@ test.describe('家長 App 帳戶與通知', () => {
     await page.getByLabel('密碼').fill(adminPassword!);
     await page.getByRole('button', { name: '登入' }).click();
     await expect(page).toHaveURL(/\/admin\/dashboard$/, { timeout: 30_000 });
+    await expect(page.getByRole('heading', { name: '營運儀表板' })).toBeVisible();
 
     await page.goto('/admin/guardians');
     const guardianRow = page.getByRole('row').filter({ hasText: guardianName });

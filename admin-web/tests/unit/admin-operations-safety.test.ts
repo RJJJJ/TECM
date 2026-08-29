@@ -41,6 +41,46 @@ test('admin writes carry the active organization and validate tenant-owned refer
   assert.doesNotMatch(source('lib/operations/actions.ts'), /from\('leave_requests'\)\.insert/);
 });
 
+test('cohort creation commits feedback before refreshing the current list', () => {
+  const actions = source('app/admin/exam-cohorts/actions.ts');
+  const createAction = actions.slice(
+    actions.indexOf('export async function createExamCohortAction'),
+    actions.indexOf('export async function transferCohortStudentAction')
+  );
+  const form = source('app/admin/exam-cohorts/cohort-create-form.tsx');
+  const createSessionAction = actions.slice(actions.indexOf('export async function createLessonSessionAction'));
+  const sessionForm = source('app/admin/exam-cohorts/[id]/lesson-sessions/lesson-session-create-form.tsx');
+  const addStudentAction = actions.slice(
+    actions.indexOf('export async function addCohortStudentAction'),
+    actions.indexOf('export async function saveLessonPlanAction')
+  );
+  const studentForm = source('app/admin/exam-cohorts/cohort-student-form.tsx');
+
+  assert.doesNotMatch(createAction, /revalidatePath\(/);
+  assert.match(form, /if \(state\.status === 'success'\) router\.refresh\(\)/);
+  assert.match(form, /disabled=\{!courses\.length \|\| pending\}/);
+  assert.doesNotMatch(createSessionAction, /revalidatePath\(/);
+  assert.match(sessionForm, /if \(state\.status === 'success'\) router\.refresh\(\)/);
+  assert.match(sessionForm, /\[router, state\]/);
+  assert.doesNotMatch(addStudentAction, /revalidatePath\(/);
+  assert.match(studentForm, /if \(state\.status === 'success'\) router\.refresh\(\)/);
+  assert.match(studentForm, /\[router, state\]/);
+  assert.match(studentForm, /disabled=\{!students\.length \|\| pending\}/);
+});
+
+test('setup creation forms commit feedback before refreshing their current lists', () => {
+  const cases = [
+    ['app/admin/settings/actions.ts', 'app/admin/settings/campus-create-form.tsx'],
+    ['app/admin/courses/actions.ts', 'app/admin/courses/course-create-form.tsx'],
+    ['app/admin/packages/actions.ts', 'app/admin/packages/fee-plan-create-form.tsx']
+  ] as const;
+
+  for (const [actionPath, formPath] of cases) {
+    assert.doesNotMatch(source(actionPath), /revalidatePath\(/);
+    assert.match(source(formPath), /state\.status === 'success'[\s\S]*router\.refresh\(\)/);
+  }
+});
+
 test('safe operation errors do not expose provider messages or internal UI identifiers', () => {
   const errors = source('lib/operations/errors.ts');
   const ui = source('components/operations-ui.tsx');
@@ -217,7 +257,7 @@ test('credentialed Admin E2E is loopback-only and release results cannot silentl
   assert.match(identity, /local-only/);
   assert.match(reporter, /configuredProjects/);
   assert.match(reporter, /counts/);
-  assert.match(workflow, /TECM_ORGANIZATION_ID='10000000-0000-4000-8000-000000000000'/);
+  assert.match(workflow, /node scripts\/testing\/prepare-admin-e2e-env\.mjs/);
   assert.match(workflow, /npm run test:e2e:verify/);
   assert.match(workflow, /docker network create[\s\S]*com\.docker\.network\.bridge\.host_binding_ipv4=127\.0\.0\.1/);
   assert.match(workflow, /supabase start --network-id "\$TECM_SUPABASE_NETWORK"\s+>\/dev\/null 2>&1/);
@@ -227,8 +267,8 @@ test('credentialed Admin E2E is loopback-only and release results cannot silentl
   assert.match(workflow, /TECM_EXPECTED_GITHUB_RUN_ATTEMPT:\s*\$\{\{\s*github\.run_attempt\s*\}\}/);
   assert.match(workflow, /node admin-web\/scripts\/test-run-identity\.mjs/);
   assert.doesNotMatch(workflow, /node scripts\/test-run-identity\.mjs/);
-  assert.match(workflow, /PLAYWRIGHT_RUN_ID=\"\$TECM_TEST_RUN_ID\"/);
-  assert.match(workflow, /PLAYWRIGHT_PARENT_PASSWORD=\"\$LOCAL_E2E_PASSWORD\"/);
+  assert.match(workflow, /test -n \"\$TECM_ORGANIZATION_ID\"/);
+  assert.match(workflow, /test -n \"\$LOCAL_E2E_PASSWORD\"/);
   assert.match(source('../supabase/seed.sql'), /Parent credentials are intentionally not persisted in Git/);
   assert.match(workflow, /TECM_SUPABASE_NETWORK=\"tecm-local-only-\$\{TECM_TEST_RUN_ID\}\"/);
   assert.match(workflow, /status_json="\$\(supabase status -o json\)"/);

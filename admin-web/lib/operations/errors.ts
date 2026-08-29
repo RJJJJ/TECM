@@ -108,6 +108,11 @@ export function safeErrorMessage(
     return '此點名已被其他操作更新，請重新載入後再提交。';
   }
 
+  if (/attendance update is already in progress/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return '此點名資料正在由另一位使用者更新，請重新整理後再試。';
+  }
+
   if (/attendance is linked to finalized leave or makeup records/.test(message)) {
     logSafeFailure(operation, error, referenceId);
     return '此點名已關聯請假或補課記錄，請由管理員處理。';

@@ -7,7 +7,7 @@ type Student = {
   id: string;
   label: string;
   status: 'present' | 'absent' | 'excused' | null;
-  updatedAt: string | null;
+  revision: number | null;
 };
 
 const initial: OperationState = { status: 'idle' };
@@ -36,7 +36,7 @@ export function TeacherAttendanceForm({
     <form action={action} onSubmit={prepareRequest} className="grid gap-2 border-t border-slate-100 px-4 py-3 sm:grid-cols-[minmax(10rem,1fr)_auto_auto] sm:items-center">
       <input type="hidden" name="session_id" value={sessionId}/>
       <input type="hidden" name="student_id" value={student.id}/>
-      <input type="hidden" name="expected_updated_at" value={student.updatedAt ?? ''}/>
+      <input type="hidden" name="expected_revision" value={student.revision ?? ''}/>
       <input type="hidden" name="request_id" defaultValue=""/>
       <div>
         <p className="font-medium text-slate-900">{student.label}</p>

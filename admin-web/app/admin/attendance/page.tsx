@@ -17,7 +17,7 @@ type TeacherSession = {
   roster_count: number;
 };
 type RosterStudent = { student_id: string; display_name: string; attendance_status: 'present' | 'absent' | 'excused' | null };
-type Attendance = { student_id: string; updated_at: string };
+type Attendance = { student_id: string; revision: number };
 
 const macauDate = (value: string) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Macau', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
 const statusLabel = (status: string) => ({ scheduled: '已排課', completed: '已完成', cancelled: '已取消' }[status] ?? '課堂狀態');
@@ -79,12 +79,12 @@ function TeacherPage({ sessions, rosters, attendance, search }: {
       const isFuture = new Date(session.starts_at).getTime() > now;
       const requiresReason = new Date(session.ends_at).getTime() < now;
       const roster = (rosters[session.session_id] ?? []).filter((student) => !query || student.display_name.toLocaleLowerCase('zh-Hant').includes(query));
-      const updated = new Map((attendance[session.session_id] ?? []).map((record) => [record.student_id, record.updated_at]));
+      const revisions = new Map((attendance[session.session_id] ?? []).map((record) => [record.student_id, record.revision]));
       return <Panel key={session.session_id} title={`${formatMacauDateTime(session.starts_at)} · ${session.course_title || session.cohort_name}`}>
         <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600"><span>班別：{session.cohort_name}</span><span>狀態：{statusLabel(session.session_status)}</span><span>已點名 {session.attended_count}／未點名 {Math.max(0, session.roster_count - session.attended_count)}</span></div>
         {isFuture ? <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">課堂尚未開始，可以查看名單，但不能提前點名。</p> : null}
         {requiresReason ? <p className="mb-3 rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">修正已結束課堂的點名時，請填寫非空白的修改原因。</p> : null}
-        {roster.length === 0 ? <EmptyState>沒有符合條件的學生。</EmptyState> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">{roster.map((student) => <TeacherAttendanceForm key={student.student_id} sessionId={session.session_id} student={{ id: student.student_id, label: student.display_name, status: student.attendance_status, updatedAt: updated.get(student.student_id) ?? null }} requiresReason={requiresReason} disabled={isFuture || session.session_status === 'cancelled'}/>)}</div>}
+        {roster.length === 0 ? <EmptyState>沒有符合條件的學生。</EmptyState> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">{roster.map((student) => <TeacherAttendanceForm key={student.student_id} sessionId={session.session_id} student={{ id: student.student_id, label: student.display_name, status: student.attendance_status, revision: revisions.get(student.student_id) ?? null }} requiresReason={requiresReason} disabled={isFuture || session.session_status === 'cancelled'}/>)}</div>}
       </Panel>;
     })}</div>}
   </>;
@@ -120,7 +120,7 @@ export default async function AttendancePage({ searchParams }: { searchParams: P
   const rosterEntries = await Promise.all(sessions.map(async (session) => {
     const [roster, records] = await Promise.all([
       context.supabase.rpc('get_lesson_session_students', { target_session_id: session.session_id }),
-      context.supabase.from('attendance_records').select('student_id,updated_at').eq('session_id', session.session_id)
+      context.supabase.from('attendance_records').select('student_id,revision').eq('session_id', session.session_id)
     ]);
     return [session.session_id, (roster.data ?? []) as RosterStudent[], (records.data ?? []) as Attendance[]] as const;
   }));

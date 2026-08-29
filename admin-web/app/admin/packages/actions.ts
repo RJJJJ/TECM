@@ -1,6 +1,5 @@
 'use server';
 
-import { revalidatePath } from 'next/cache';
 import type { OperationState } from '@/lib/operations/actions';
 import { getOperationsContext } from '@/lib/operations/context';
 import { safeOperationMessage, UserFacingOperationError, userFacingError } from '@/lib/operations/errors';
@@ -23,9 +22,6 @@ export async function createFeePlanAction(_: OperationState, form: FormData): Pr
     }
     const { error } = await context.supabase.from('fee_plans').insert({ organization_id: context.organizationId, name, course_id: courseId || null, credit_units: creditUnits, amount_minor: amountMinor, currency_code: 'MOP', is_active: true });
     if (error) throw error;
-    revalidatePath('/admin/packages');
-    revalidatePath('/admin/students');
-    revalidatePath('/admin/dashboard');
     return { status: 'success', message: '套票已建立。' };
   } catch (error) {
     return { status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '建立套票失敗，請稍後再試。', 'create-fee-plan') };

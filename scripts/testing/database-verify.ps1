@@ -9,25 +9,49 @@ param(
     }
   ),
   # Test-only switch for proving the bounded wait path. It is intentionally opt-in.
-  [switch]$InjectConcurrencyHang
+  [switch]$InjectConcurrencyHang,
+  [ValidateRange(2, 30)]
+  [int]$ContentionHardTimeoutSeconds = 10,
+  [switch]$TeacherAttendanceContentionOnly,
+  [string]$RevisionGuardMigrationOverride
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $containerName = "tecm-db-verify-$PID"
 $database = 'tecm_verify'
+$unsafeDatabase = 'tecm_unsafe_preflight'
+$containerStarted = $false
+$revisionGuardMigration = '/workspace/supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql'
+$overrideDirectory = $null
 
-docker info --format '{{.ServerVersion}}' | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop is not available.' }
-
-docker run --name $containerName `
-  -e POSTGRES_PASSWORD=postgres `
-  -e POSTGRES_DB=$database `
-  -v "${repoRoot}:/workspace:ro" `
-  -d $PostgresImage | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Could not start PostgreSQL verification container.' }
+if ($RevisionGuardMigrationOverride) {
+  $overridePath = (Resolve-Path -LiteralPath $RevisionGuardMigrationOverride).Path
+  if (-not (Test-Path -LiteralPath $overridePath -PathType Leaf)) {
+    throw 'Revision guard migration override must be an existing file.'
+  }
+  $overrideDirectory = Split-Path -Parent $overridePath
+  $revisionGuardMigration = '/revision-override/' + [IO.Path]::GetFileName($overridePath)
+}
 
 try {
+  docker info --format '{{.ServerVersion}}' | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop is not available.' }
+
+  $dockerRunArguments = @(
+    'run', '--name', $containerName,
+    '-e', 'POSTGRES_PASSWORD=postgres',
+    '-e', "POSTGRES_DB=$database",
+    '-v', "${repoRoot}:/workspace:ro"
+  )
+  if ($overrideDirectory) {
+    $dockerRunArguments += @('-v', "${overrideDirectory}:/revision-override:ro")
+  }
+  $dockerRunArguments += @('-d', $PostgresImage)
+  & docker @dockerRunArguments | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Could not start PostgreSQL verification container.' }
+  $containerStarted = $true
+
   $ready = $false
   $stableReadyChecks = 0
   for ($attempt = 0; $attempt -lt 60; $attempt++) {
@@ -76,6 +100,8 @@ try {
     '/workspace/supabase/migrations/202608140014_teacher_attendance_history_access.sql',
     '/workspace/supabase/migrations/202608240015_attendance_function_execute_hardening.sql',
     '/workspace/supabase/migrations/202608240015_attendance_function_execute_hardening.sql',
+    $revisionGuardMigration,
+    $revisionGuardMigration,
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
@@ -95,7 +121,8 @@ try {
     '/workspace/supabase/tests/015_uat_core_workflows.sql',
     '/workspace/supabase/tests/016_course_cohort_enrollment_model.sql',
     '/workspace/supabase/tests/017_teacher_attendance_history_access.sql',
-    '/workspace/supabase/tests/018_attendance_function_execute_hardening.sql'
+    '/workspace/supabase/tests/018_attendance_function_execute_hardening.sql',
+    '/workspace/supabase/tests/019_teacher_attendance_revision_guard.sql'
   )
 
   foreach ($file in $files) {
@@ -277,9 +304,131 @@ try {
     }
   }
 
+  function Invoke-TeacherAttendanceContention {
+    param(
+      [Parameter(Mandatory)]
+      [string]$RaceName,
+      [Parameter(Mandatory)]
+      [string]$SessionId,
+      [Parameter(Mandatory)]
+      [AllowEmptyString()]
+      [string]$ExpectedRevision,
+      [Parameter(Mandatory)]
+      [string]$TargetStatus,
+      [Parameter(Mandatory)]
+      [string]$RequestId
+    )
+
+    Write-Host "[CONTENTION] $RaceName"
+    $holder = $null
+    $competitor = $null
+    $released = $false
+    try {
+      $holder = Start-Job -Name "${RaceName}-holder" -ScriptBlock {
+        param($Name,$Db,$Race,$Session)
+        & docker exec $Name psql -q -v ON_ERROR_STOP=1 `
+          -v "race_name=$Race" -v "session_id=$Session" `
+          -U postgres -d $Db `
+          -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_holder.sql' 2>&1
+        [pscustomobject]@{ ExitCode = $LASTEXITCODE }
+      } -ArgumentList $containerName,$database,$RaceName,$SessionId
+
+      $holderReady = $false
+      $readinessAttempts = [Math]::Max(1, $ContentionHardTimeoutSeconds * 10)
+      for ($attempt = 0; $attempt -lt $readinessAttempts; $attempt++) {
+        $readyCount = docker exec $containerName psql -q -U postgres -d $database -Atc `
+          "select public.__test_race_ready_count('$RaceName')"
+        if ($LASTEXITCODE -ne 0) { throw "Could not inspect contention holder readiness: $RaceName" }
+        if ($readyCount -eq '1') { $holderReady = $true; break }
+        Start-Sleep -Milliseconds 100
+      }
+      if (-not $holderReady) {
+        throw "Contention holder did not acquire the exact attendance identity lock: $RaceName"
+      }
+
+      $competitor = Start-Job -Name "${RaceName}-competitor" -ScriptBlock {
+        param($Name,$Db,$Race,$Session,$Revision,$Status,$Request)
+        & docker exec $Name psql -q -v ON_ERROR_STOP=1 `
+          -v "race_name=$Race" -v "session_id=$Session" `
+          -v "expected_revision=$Revision" -v "target_status=$Status" `
+          -v "request_id=$Request" `
+          -U postgres -d $Db `
+          -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_competitor.sql' 2>&1
+        [pscustomobject]@{ ExitCode = $LASTEXITCODE }
+      } -ArgumentList $containerName,$database,$RaceName,$SessionId,$ExpectedRevision,$TargetStatus,$RequestId
+
+      $competitorResults = @(Wait-DatabaseRaceJobs -Jobs @($competitor) -TimeoutSeconds $ContentionHardTimeoutSeconds)
+      $competitorOutput = $competitorResults[0].Output
+      $competitorExit = ($competitorOutput | Where-Object { $null -ne $_.ExitCode } | Select-Object -Last 1).ExitCode
+      if ($null -eq $competitorExit -or $competitorExit -ne 0) {
+        Write-Host "[CONTENTION OUTPUT] competitor:`n$($competitorOutput | Out-String)"
+        throw "M40 bounded contention classification missing for $RaceName (exit $competitorExit)"
+      }
+
+      $assertArguments = @(
+        'exec', $containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
+        '-v', "race_name=$RaceName",
+        '-U', 'postgres', '-d', $database,
+        '-f', '/workspace/supabase/tests/concurrency/teacher_attendance_contention_assert.sql'
+      )
+      & docker @assertArguments
+      if ($LASTEXITCODE -ne 0) { throw "Contention no-side-effect assertion failed: $RaceName" }
+
+      docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -c `
+        "insert into public.__test_race_barrier(race, worker, released_at) values ('$RaceName','first',statement_timestamp()) on conflict (race, worker) do update set released_at=excluded.released_at" | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "Could not release contention holder: $RaceName" }
+      $released = $true
+
+      $holderResults = @(Wait-DatabaseRaceJobs -Jobs @($holder) -TimeoutSeconds $ContentionHardTimeoutSeconds)
+      $holderOutput = $holderResults[0].Output
+      $holderExit = ($holderOutput | Where-Object { $null -ne $_.ExitCode } | Select-Object -Last 1).ExitCode
+      if ($null -eq $holderExit -or $holderExit -ne 0) {
+        Write-Host "[CONTENTION OUTPUT] holder:`n$($holderOutput | Out-String)"
+        throw "Contention holder did not release cleanly: $RaceName"
+      }
+      Write-Host "[CONTENTION PASS] $RaceName bounded classification and no-side-effect proof"
+    } finally {
+      if (-not $released) {
+        docker exec $containerName psql -q -U postgres -d $database -c `
+          "insert into public.__test_race_barrier(race, worker, released_at) values ('$RaceName','first',statement_timestamp()) on conflict (race, worker) do update set released_at=excluded.released_at" 2>$null | Out-Null
+      }
+      foreach ($job in @($competitor,$holder)) {
+        if ($null -eq $job) { continue }
+        if ($job.State -notin @('Completed', 'Failed', 'Stopped')) {
+          Stop-Job -Job $job -ErrorAction SilentlyContinue
+        }
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/000_setup.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Could not prepare concurrency fixtures.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare bounded attendance contention fixtures.' }
+  Invoke-TeacherAttendanceContention `
+    -RaceName 'teacher-attendance-contention-existing' `
+    -SessionId '1d000000-0000-4000-8000-000000000025' `
+    -ExpectedRevision '1' `
+    -TargetStatus 'absent' `
+    -RequestId 'teacher-attendance-contention-existing-rejected'
+  Invoke-TeacherAttendanceContention `
+    -RaceName 'teacher-attendance-contention-absent' `
+    -SessionId '1d000000-0000-4000-8000-000000000026' `
+    -ExpectedRevision '' `
+    -TargetStatus 'excused' `
+    -RequestId 'teacher-attendance-contention-absent-rejected'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_retry_cleanup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Attendance contention retry or cleanup assertion failed.' }
+
+  if ($TeacherAttendanceContentionOnly) {
+    Write-Host '[PASS] bounded existing/absent attendance contention, deliberate retries, and fixture cleanup'
+    return
+  }
 
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/teacher_attendance_setup.sql'
@@ -287,13 +436,25 @@ try {
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/teacher_attendance_first.sql' `
     -SecondFile '/workspace/supabase/tests/concurrency/teacher_attendance_second.sql' `
-    -ExpectedFirstExitCodes @(0, 3) `
-    -ExpectedSecondExitCodes @(0, 3) `
+    -ExpectedExitPairs @('0,3', '3,0') `
     -StartSecondDelayMilliseconds 0 `
     -BarrierRaceName 'teacher-attendance'
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/teacher_attendance_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Teacher attendance concurrency assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_existing_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare existing teacher attendance concurrency fixture.' }
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/teacher_attendance_existing_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/teacher_attendance_existing_second.sql' `
+    -ExpectedExitPairs @('0,3', '3,0') `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'teacher-attendance-existing'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_existing_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Existing teacher attendance concurrency assertion failed.' }
 
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/invite_first.sql' `
@@ -476,7 +637,6 @@ try {
     -f '/workspace/supabase/tests/concurrency/course_link_first_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Link-first Course enrollment race assertion failed.' }
 
-  $unsafeDatabase = 'tecm_unsafe_preflight'
   docker exec $containerName createdb -U postgres $unsafeDatabase
   if ($LASTEXITCODE -ne 0) { throw 'Could not create unsafe preflight database.' }
   $unsafeFiles = @(
@@ -502,7 +662,7 @@ try {
     throw 'Blocked migration partially applied mutable DDL before preflight.'
   }
 
-  Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-018, deterministic teacher-link A/B winner races, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
+  Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-019, bounded existing/absent attendance contention and races, deterministic teacher-link A/B winner races, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity
@@ -515,5 +675,26 @@ try {
      union all select 'completed_makeup',count(*) from makeup_sessions where organization_id='10000000-0000-4000-8000-000000000000' and status='completed';"
   if ($LASTEXITCODE -ne 0) { throw 'Could not read final verification counts.' }
 } finally {
-  docker rm -f $containerName 2>$null | Out-Null
+  if ($containerStarted) {
+    $databaseCleanupPassed = $true
+    foreach ($cleanupDatabase in @($unsafeDatabase,$database)) {
+      docker exec $containerName dropdb -U postgres --if-exists $cleanupDatabase 2>$null | Out-Null
+      if ($LASTEXITCODE -ne 0) { $databaseCleanupPassed = $false }
+    }
+    $remainingDatabases = docker exec $containerName psql -q -U postgres -d postgres -Atc `
+      "select count(*) from pg_database where datname in ('$database','$unsafeDatabase')" 2>$null
+    if ($LASTEXITCODE -ne 0 -or $remainingDatabases -ne '0') { $databaseCleanupPassed = $false }
+
+    docker rm -f $containerName 2>$null | Out-Null
+    $containerCleanupPassed = $LASTEXITCODE -eq 0
+    $remainingContainer = docker ps -a -q --filter "name=^/${containerName}$" 2>$null
+    if ($LASTEXITCODE -ne 0 -or $remainingContainer) { $containerCleanupPassed = $false }
+
+    $databaseCleanupLabel = if ($databaseCleanupPassed) { 'PASS' } else { 'FAIL' }
+    $containerCleanupLabel = if ($containerCleanupPassed) { 'PASS' } else { 'FAIL' }
+    Write-Host "[CLEANUP] database=$databaseCleanupLabel container=$containerCleanupLabel"
+    if (-not $databaseCleanupPassed -or -not $containerCleanupPassed) {
+      throw 'Database verification cleanup failed.'
+    }
+  }
 }
