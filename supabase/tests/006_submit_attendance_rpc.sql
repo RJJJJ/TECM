@@ -9,11 +9,15 @@ insert into public.teacher_profiles (id, user_id, display_name, is_active, organ
 values ('29000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', 'Org B teacher', true, '20000000-0000-4000-8000-000000000000')
 on conflict (id) do update set is_active = true;
 
+insert into public.courses (id, title, category, level, is_active, organization_id)
+values ('28000000-0000-4000-8000-000000000001', 'Org B Python', 'Python', 'Foundation', true, '20000000-0000-4000-8000-000000000000')
+on conflict (id) do update set is_active = true;
+
 insert into public.exam_cohorts (
-  id, name, subject, level, exam_date, weekday_pattern, lead_teacher_id, status, organization_id
+  id, name, subject, level, exam_date, weekday_pattern, course_id, lead_teacher_id, status, organization_id
 ) values (
   '2a000000-0000-4000-8000-000000000001', 'Org B cohort', 'Python', 'Foundation',
-  '2027-06-01', 'saturday', '29000000-0000-4000-8000-000000000001', 'active',
+  '2027-06-01', 'saturday', '28000000-0000-4000-8000-000000000001', '29000000-0000-4000-8000-000000000001', 'active',
   '20000000-0000-4000-8000-000000000000'
 ) on conflict (id) do update set status = 'active';
 
@@ -220,13 +224,18 @@ begin
 end
 $$;
 
--- Assigned active teacher succeeds and can read the roster.
+-- Teachers must use the guarded history RPC, but may still read their roster.
 select set_config('request.jwt.claim.sub', '10000000-0000-4000-8000-000000000004', false);
-select public.submit_attendance(
-  '1d000000-0000-4000-8000-000000000001',
-  '[{"student_id":"15000000-0000-4000-8000-000000000001","status":"present"}]'::jsonb
-);
 do $$ begin
+  begin
+    perform public.submit_attendance(
+      '1d000000-0000-4000-8000-000000000001',
+      '[{"student_id":"15000000-0000-4000-8000-000000000001","status":"present"}]'::jsonb
+    );
+    raise exception 'teacher unexpectedly used legacy attendance RPC';
+  exception when others then
+    if sqlerrm = 'teacher unexpectedly used legacy attendance RPC' then raise; end if;
+  end;
   if (select count(*) from public.get_lesson_session_students('1d000000-0000-4000-8000-000000000001')) < 1 then
     raise exception 'assigned teacher could not read the session roster';
   end if;

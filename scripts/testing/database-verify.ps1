@@ -1,27 +1,67 @@
 param(
-  [string]$PostgresImage = 'postgres:16-alpine'
+  [string]$PostgresImage = 'postgres:15-alpine',
+  [ValidateRange(1, 3600)]
+  [int]$ConcurrencyTimeoutSeconds = $(
+    if ($env:TECM_DATABASE_RACE_TIMEOUT_SECONDS) {
+      [int]$env:TECM_DATABASE_RACE_TIMEOUT_SECONDS
+    } else {
+      60
+    }
+  ),
+  # Test-only switch for proving the bounded wait path. It is intentionally opt-in.
+  [switch]$InjectConcurrencyHang,
+  [ValidateRange(2, 30)]
+  [int]$ContentionHardTimeoutSeconds = 10,
+  [switch]$TeacherAttendanceContentionOnly,
+  [string]$RevisionGuardMigrationOverride
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $containerName = "tecm-db-verify-$PID"
 $database = 'tecm_verify'
+$unsafeDatabase = 'tecm_unsafe_preflight'
+$containerStarted = $false
+$revisionGuardMigration = '/workspace/supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql'
+$overrideDirectory = $null
 
-docker info --format '{{.ServerVersion}}' | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop is not available.' }
-
-docker run --name $containerName `
-  -e POSTGRES_PASSWORD=postgres `
-  -e POSTGRES_DB=$database `
-  -v "${repoRoot}:/workspace:ro" `
-  -d $PostgresImage | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Could not start PostgreSQL verification container.' }
+if ($RevisionGuardMigrationOverride) {
+  $overridePath = (Resolve-Path -LiteralPath $RevisionGuardMigrationOverride).Path
+  if (-not (Test-Path -LiteralPath $overridePath -PathType Leaf)) {
+    throw 'Revision guard migration override must be an existing file.'
+  }
+  $overrideDirectory = Split-Path -Parent $overridePath
+  $revisionGuardMigration = '/revision-override/' + [IO.Path]::GetFileName($overridePath)
+}
 
 try {
+  docker info --format '{{.ServerVersion}}' | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop is not available.' }
+
+  $dockerRunArguments = @(
+    'run', '--name', $containerName,
+    '-e', 'POSTGRES_PASSWORD=postgres',
+    '-e', "POSTGRES_DB=$database",
+    '-v', "${repoRoot}:/workspace:ro"
+  )
+  if ($overrideDirectory) {
+    $dockerRunArguments += @('-v', "${overrideDirectory}:/revision-override:ro")
+  }
+  $dockerRunArguments += @('-d', $PostgresImage)
+  & docker @dockerRunArguments | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Could not start PostgreSQL verification container.' }
+  $containerStarted = $true
+
   $ready = $false
+  $stableReadyChecks = 0
   for ($attempt = 0; $attempt -lt 60; $attempt++) {
-    docker exec $containerName pg_isready -U postgres -d $database 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+    docker exec $containerName pg_isready -q -U postgres -d $database 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+      $stableReadyChecks++
+      if ($stableReadyChecks -ge 2) { $ready = $true; break }
+    } else {
+      $stableReadyChecks = 0
+    }
     Start-Sleep -Seconds 1
   }
   if (-not $ready) { throw 'PostgreSQL did not become ready.' }
@@ -32,6 +72,36 @@ try {
     '/workspace/supabase/migrations/202607110001_tenant_operations_finance.sql',
     '/workspace/supabase/migrations/202607110002_invariants_rls_rpcs.sql',
     '/workspace/supabase/migrations/202607110003_release_blockers.sql',
+    '/workspace/supabase/tests/000_legacy_parent_fixture.sql',
+    '/workspace/supabase/migrations/202607150004_parent_notifications.sql',
+    '/workspace/supabase/seed.sql',
+    '/workspace/supabase/seed.sql',
+    '/workspace/supabase/tests/000_foundation_security_fixture.sql',
+    '/workspace/supabase/migrations/202607180005_foundation_security.sql',
+    '/workspace/supabase/migrations/202607180005_foundation_security.sql',
+    '/workspace/supabase/tests/000_apns_outbox_reliability_legacy_fixture.sql',
+    '/workspace/supabase/migrations/202607180006_apns_outbox_reliability.sql',
+    '/workspace/supabase/migrations/202607180006_apns_outbox_reliability.sql',
+    '/workspace/supabase/migrations/202607180007_apns_dispatch_ambiguity.sql',
+    '/workspace/supabase/migrations/202607180007_apns_dispatch_ambiguity.sql',
+    '/workspace/supabase/migrations/202607180008_apns_completion_outcome.sql',
+    '/workspace/supabase/migrations/202607180008_apns_completion_outcome.sql',
+    '/workspace/supabase/migrations/202608020009_admin_operations_integrity.sql',
+    '/workspace/supabase/migrations/202608020009_admin_operations_integrity.sql',
+    '/workspace/supabase/migrations/202608020010_admin_operations_release_gate.sql',
+    '/workspace/supabase/migrations/202608020010_admin_operations_release_gate.sql',
+    '/workspace/supabase/migrations/202608020011_makeup_partial_state_recovery.sql',
+    '/workspace/supabase/migrations/202608020011_makeup_partial_state_recovery.sql',
+    '/workspace/supabase/migrations/202608050012_uat_core_workflows.sql',
+    '/workspace/supabase/migrations/202608050012_uat_core_workflows.sql',
+    '/workspace/supabase/migrations/202608130013_course_cohort_enrollment_model.sql',
+    '/workspace/supabase/migrations/202608130013_course_cohort_enrollment_model.sql',
+    '/workspace/supabase/migrations/202608140014_teacher_attendance_history_access.sql',
+    '/workspace/supabase/migrations/202608140014_teacher_attendance_history_access.sql',
+    '/workspace/supabase/migrations/202608240015_attendance_function_execute_hardening.sql',
+    '/workspace/supabase/migrations/202608240015_attendance_function_execute_hardening.sql',
+    $revisionGuardMigration,
+    $revisionGuardMigration,
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
@@ -39,16 +109,560 @@ try {
     '/workspace/supabase/tests/003_attendance_leave_makeup.sql',
     '/workspace/supabase/tests/004_finance_ledger.sql',
     '/workspace/supabase/tests/005_automation_audit.sql',
-    '/workspace/supabase/tests/006_submit_attendance_rpc.sql'
+    '/workspace/supabase/tests/006_submit_attendance_rpc.sql',
+    '/workspace/supabase/tests/007_parent_notifications.sql',
+    '/workspace/supabase/tests/008_foundation_security.sql',
+    '/workspace/supabase/tests/009_apns_outbox_reliability.sql',
+    '/workspace/supabase/tests/010_apns_dispatch_ambiguity.sql',
+    '/workspace/supabase/tests/011_apns_completion_outcome.sql',
+    '/workspace/supabase/tests/012_admin_operations_integrity.sql',
+    '/workspace/supabase/tests/013_admin_operations_release_gate.sql',
+    '/workspace/supabase/tests/014_makeup_partial_state_recovery.sql',
+    '/workspace/supabase/tests/015_uat_core_workflows.sql',
+    '/workspace/supabase/tests/016_course_cohort_enrollment_model.sql',
+    '/workspace/supabase/tests/017_teacher_attendance_history_access.sql',
+    '/workspace/supabase/tests/018_attendance_function_execute_hardening.sql',
+    '/workspace/supabase/tests/019_teacher_attendance_revision_guard.sql'
   )
 
   foreach ($file in $files) {
     Write-Host "[RUN] $file"
-    docker exec $containerName sh -c "psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -f '$file' 2>/dev/null"
-    if ($LASTEXITCODE -ne 0) { throw "Database verification failed: $file" }
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      $fileOutput = @(docker exec $containerName sh -c "psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -f '$file'" 2>&1)
+      $fileExit = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorAction
+    }
+    if ($fileExit -ne 0) {
+      $fileOutput | Out-String | Write-Host
+      throw "Database verification failed: $file"
+    }
+    $passedOutput = @($fileOutput | Select-String -Pattern 'passed|PASS')
+    if ($passedOutput.Count -gt 0) { $passedOutput | Out-String | Write-Host }
   }
 
-  Write-Host '[PASS] migrations, repeatable seed, RLS and six SQL suites'
+  function Wait-DatabaseRaceJobs {
+    param(
+      [Parameter(Mandatory)]
+      [System.Management.Automation.Job[]]$Jobs,
+      [Parameter(Mandatory)]
+      [int]$TimeoutSeconds
+    )
+
+    $terminalStates = @('Completed', 'Failed', 'Stopped')
+    $deadline = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+      while (@($Jobs | Where-Object { $_.State -notin $terminalStates }).Count -gt 0) {
+        if ($deadline.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+          $unfinished = @($Jobs | Where-Object { $_.State -notin $terminalStates })
+          $unfinishedSummary = ($unfinished | ForEach-Object { "$($_.Name) ($($_.State))" }) -join ', '
+          Write-Host "[TIMEOUT] Database race exceeded ${TimeoutSeconds}s. Unfinished jobs: $unfinishedSummary"
+          foreach ($job in $Jobs) {
+            $diagnosticOutput = @(Receive-Job -Job $job -Keep -ErrorAction Continue 2>&1)
+            Write-Host "[RACE OUTPUT] $($job.Name) ($($job.State))"
+            if ($diagnosticOutput.Count -gt 0) { $diagnosticOutput | Out-String | Write-Host }
+          }
+          throw "Database race timed out after ${TimeoutSeconds}s: $unfinishedSummary"
+        }
+        Start-Sleep -Milliseconds 100
+      }
+
+      return @(
+        foreach ($job in $Jobs) {
+          [pscustomobject]@{
+            Name = $job.Name
+            State = $job.State
+            Output = @(Receive-Job -Job $job -ErrorAction Continue 2>&1)
+          }
+        }
+      )
+    } finally {
+      foreach ($job in $Jobs) {
+        if ($job.State -notin $terminalStates) {
+          Stop-Job -Job $job -ErrorAction SilentlyContinue
+        }
+      }
+      foreach ($job in $Jobs) {
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  function Invoke-DatabaseRace {
+    param(
+      [string]$FirstFile,
+      [string]$SecondFile,
+      [int]$ExpectedFirstExit = 0,
+      [int]$ExpectedSecondExit = 0,
+      [int]$StartSecondDelayMilliseconds = 250,
+      [switch]$ReleaseOutboxBarrier,
+      [string]$BarrierRaceName,
+      [int[]]$ExpectedFirstExitCodes = @(),
+      [int[]]$ExpectedSecondExitCodes = @(),
+      [string[]]$ExpectedExitPairs = @(),
+      [string[]]$FirstPsqlVariables = @(),
+      [string[]]$SecondPsqlVariables = @()
+    )
+
+    Write-Host "[RACE] $FirstFile <> $SecondFile"
+    $raceJobs = @()
+    try {
+      $first = Start-Job -Name 'race-first' -ScriptBlock {
+        param($Name,$Db,$File,$PsqlVariables)
+        $arguments = @('exec', $Name, 'psql', '-q', '-v', 'ON_ERROR_STOP=1')
+        foreach ($variable in $PsqlVariables) { $arguments += @('-v', $variable) }
+        $arguments += @('-U', 'postgres', '-d', $Db, '-f', $File)
+        & docker @arguments 2>&1
+        [pscustomobject]@{ ExitCode = $LASTEXITCODE }
+      } -ArgumentList $containerName,$database,$FirstFile,$FirstPsqlVariables
+      $raceJobs += $first
+      if (-not $BarrierRaceName -and $StartSecondDelayMilliseconds -gt 0) {
+        Start-Sleep -Milliseconds $StartSecondDelayMilliseconds
+      }
+      $second = Start-Job -Name 'race-second' -ScriptBlock {
+        param($Name,$Db,$File,$Hang,$HangSeconds,$PsqlVariables)
+        if ($Hang) { Start-Sleep -Seconds $HangSeconds }
+        $arguments = @('exec', $Name, 'psql', '-q', '-v', 'ON_ERROR_STOP=1')
+        foreach ($variable in $PsqlVariables) { $arguments += @('-v', $variable) }
+        $arguments += @('-U', 'postgres', '-d', $Db, '-f', $File)
+        & docker @arguments 2>&1
+        [pscustomobject]@{ ExitCode = $LASTEXITCODE }
+      } -ArgumentList $containerName,$database,$SecondFile,$InjectConcurrencyHang,($ConcurrencyTimeoutSeconds + 5),$SecondPsqlVariables
+      $raceJobs += $second
+
+      if ($BarrierRaceName) {
+        $bothReady = $false
+        $barrierAttempts = [Math]::Max(1, $ConcurrencyTimeoutSeconds * 10)
+        for ($attempt = 0; $attempt -lt $barrierAttempts; $attempt++) {
+          $readyCount = docker exec $containerName psql -q -U postgres -d $database -Atc `
+            "select public.__test_race_ready_count('$BarrierRaceName')"
+          if ($LASTEXITCODE -ne 0) { throw "Could not inspect race barrier: $BarrierRaceName" }
+          if ($readyCount -eq '2') { $bothReady = $true; break }
+          Start-Sleep -Milliseconds 100
+        }
+        if (-not $bothReady) {
+          foreach ($job in $raceJobs) {
+            $diagnosticOutput = @(Receive-Job -Job $job -Keep -ErrorAction Continue 2>&1)
+            Write-Host "[RACE OUTPUT] $($job.Name) ($($job.State))"
+            if ($diagnosticOutput.Count -gt 0) { $diagnosticOutput | Out-String | Write-Host }
+          }
+          throw "Race workers did not both reach barrier: $BarrierRaceName"
+        }
+        docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -c `
+          "insert into public.__test_race_barrier(race, worker, released_at) values ('$BarrierRaceName','first',statement_timestamp()) on conflict (race, worker) do update set released_at=excluded.released_at" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Could not release first race barrier: $BarrierRaceName" }
+        docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -c `
+          "insert into public.__test_race_barrier(race, worker, released_at) values ('$BarrierRaceName','second',statement_timestamp()) on conflict (race, worker) do update set released_at=excluded.released_at" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Could not release second race barrier: $BarrierRaceName" }
+      }
+
+      if ($ReleaseOutboxBarrier) {
+        $bothReady = $false
+        for ($attempt = 0; $attempt -lt 100; $attempt++) {
+          $readyCount = docker exec $containerName psql -q -U postgres -d $database -Atc `
+            "select count(*) from public.__test_outbox_claim_barrier where worker in ('outbox-worker-a','outbox-worker-b')"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect outbox claim release barrier.' }
+          if ($readyCount -eq '2') { $bothReady = $true; break }
+          Start-Sleep -Milliseconds 100
+        }
+        if (-not $bothReady) { throw 'Outbox claim workers did not reach the release barrier.' }
+        docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -c `
+          "update public.__test_outbox_claim_barrier set released_at=statement_timestamp() where worker in ('outbox-worker-a','outbox-worker-b')" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not release outbox claim workers.' }
+      }
+
+      $raceResults = @(Wait-DatabaseRaceJobs -Jobs $raceJobs -TimeoutSeconds $ConcurrencyTimeoutSeconds)
+      $firstOutput = ($raceResults | Where-Object Name -eq 'race-first').Output
+      $secondOutput = ($raceResults | Where-Object Name -eq 'race-second').Output
+      $firstExit = ($firstOutput | Where-Object { $null -ne $_.ExitCode } | Select-Object -Last 1).ExitCode
+      $secondExit = ($secondOutput | Where-Object { $null -ne $_.ExitCode } | Select-Object -Last 1).ExitCode
+      $allowedFirstExits = @($ExpectedFirstExitCodes)
+      if ($allowedFirstExits.Count -eq 0) { $allowedFirstExits = @($ExpectedFirstExit) }
+      $allowedSecondExits = @($ExpectedSecondExitCodes)
+      if ($allowedSecondExits.Count -eq 0) { $allowedSecondExits = @($ExpectedSecondExit) }
+      $actualExitPair = "$firstExit,$secondExit"
+      $pairAccepted = $ExpectedExitPairs.Count -gt 0 -and $actualExitPair -in $ExpectedExitPairs
+      $individualExitsAccepted = $ExpectedExitPairs.Count -eq 0 -and $firstExit -in $allowedFirstExits -and $secondExit -in $allowedSecondExits
+      if (-not $pairAccepted -and -not $individualExitsAccepted) {
+        Write-Host "[RACE OUTPUT] first:`n$($firstOutput | Out-String)"
+        Write-Host "[RACE OUTPUT] second:`n$($secondOutput | Out-String)"
+        throw "Unexpected race exit pair: $actualExitPair"
+      }
+      Write-Host "[RACE PASS] exit pair: $actualExitPair"
+    } finally {
+      # This also covers a failure between starting the two jobs. The helper's
+      # cleanup is intentionally idempotent, so completed races remain safe.
+      foreach ($job in $raceJobs) {
+        if ($job.State -notin @('Completed', 'Failed', 'Stopped')) {
+          Stop-Job -Job $job -ErrorAction SilentlyContinue
+        }
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  function Invoke-TeacherAttendanceContention {
+    param(
+      [Parameter(Mandatory)]
+      [string]$RaceName,
+      [Parameter(Mandatory)]
+      [string]$SessionId,
+      [Parameter(Mandatory)]
+      [AllowEmptyString()]
+      [string]$ExpectedRevision,
+      [Parameter(Mandatory)]
+      [string]$TargetStatus,
+      [Parameter(Mandatory)]
+      [string]$RequestId
+    )
+
+    Write-Host "[CONTENTION] $RaceName"
+    $holder = $null
+    $competitor = $null
+    $released = $false
+    try {
+      $holder = Start-Job -Name "${RaceName}-holder" -ScriptBlock {
+        param($Name,$Db,$Race,$Session)
+        & docker exec $Name psql -q -v ON_ERROR_STOP=1 `
+          -v "race_name=$Race" -v "session_id=$Session" `
+          -U postgres -d $Db `
+          -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_holder.sql' 2>&1
+        [pscustomobject]@{ ExitCode = $LASTEXITCODE }
+      } -ArgumentList $containerName,$database,$RaceName,$SessionId
+
+      $holderReady = $false
+      $readinessAttempts = [Math]::Max(1, $ContentionHardTimeoutSeconds * 10)
+      for ($attempt = 0; $attempt -lt $readinessAttempts; $attempt++) {
+        $readyCount = docker exec $containerName psql -q -U postgres -d $database -Atc `
+          "select public.__test_race_ready_count('$RaceName')"
+        if ($LASTEXITCODE -ne 0) { throw "Could not inspect contention holder readiness: $RaceName" }
+        if ($readyCount -eq '1') { $holderReady = $true; break }
+        Start-Sleep -Milliseconds 100
+      }
+      if (-not $holderReady) {
+        throw "Contention holder did not acquire the exact attendance identity lock: $RaceName"
+      }
+
+      $competitor = Start-Job -Name "${RaceName}-competitor" -ScriptBlock {
+        param($Name,$Db,$Race,$Session,$Revision,$Status,$Request)
+        & docker exec $Name psql -q -v ON_ERROR_STOP=1 `
+          -v "race_name=$Race" -v "session_id=$Session" `
+          -v "expected_revision=$Revision" -v "target_status=$Status" `
+          -v "request_id=$Request" `
+          -U postgres -d $Db `
+          -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_competitor.sql' 2>&1
+        [pscustomobject]@{ ExitCode = $LASTEXITCODE }
+      } -ArgumentList $containerName,$database,$RaceName,$SessionId,$ExpectedRevision,$TargetStatus,$RequestId
+
+      $competitorResults = @(Wait-DatabaseRaceJobs -Jobs @($competitor) -TimeoutSeconds $ContentionHardTimeoutSeconds)
+      $competitorOutput = $competitorResults[0].Output
+      $competitorExit = ($competitorOutput | Where-Object { $null -ne $_.ExitCode } | Select-Object -Last 1).ExitCode
+      if ($null -eq $competitorExit -or $competitorExit -ne 0) {
+        Write-Host "[CONTENTION OUTPUT] competitor:`n$($competitorOutput | Out-String)"
+        throw "M40 bounded contention classification missing for $RaceName (exit $competitorExit)"
+      }
+
+      $assertArguments = @(
+        'exec', $containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
+        '-v', "race_name=$RaceName",
+        '-U', 'postgres', '-d', $database,
+        '-f', '/workspace/supabase/tests/concurrency/teacher_attendance_contention_assert.sql'
+      )
+      & docker @assertArguments
+      if ($LASTEXITCODE -ne 0) { throw "Contention no-side-effect assertion failed: $RaceName" }
+
+      docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -c `
+        "insert into public.__test_race_barrier(race, worker, released_at) values ('$RaceName','first',statement_timestamp()) on conflict (race, worker) do update set released_at=excluded.released_at" | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "Could not release contention holder: $RaceName" }
+      $released = $true
+
+      $holderResults = @(Wait-DatabaseRaceJobs -Jobs @($holder) -TimeoutSeconds $ContentionHardTimeoutSeconds)
+      $holderOutput = $holderResults[0].Output
+      $holderExit = ($holderOutput | Where-Object { $null -ne $_.ExitCode } | Select-Object -Last 1).ExitCode
+      if ($null -eq $holderExit -or $holderExit -ne 0) {
+        Write-Host "[CONTENTION OUTPUT] holder:`n$($holderOutput | Out-String)"
+        throw "Contention holder did not release cleanly: $RaceName"
+      }
+      Write-Host "[CONTENTION PASS] $RaceName bounded classification and no-side-effect proof"
+    } finally {
+      if (-not $released) {
+        docker exec $containerName psql -q -U postgres -d $database -c `
+          "insert into public.__test_race_barrier(race, worker, released_at) values ('$RaceName','first',statement_timestamp()) on conflict (race, worker) do update set released_at=excluded.released_at" 2>$null | Out-Null
+      }
+      foreach ($job in @($competitor,$holder)) {
+        if ($null -eq $job) { continue }
+        if ($job.State -notin @('Completed', 'Failed', 'Stopped')) {
+          Stop-Job -Job $job -ErrorAction SilentlyContinue
+        }
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/000_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare concurrency fixtures.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare bounded attendance contention fixtures.' }
+  Invoke-TeacherAttendanceContention `
+    -RaceName 'teacher-attendance-contention-existing' `
+    -SessionId '1d000000-0000-4000-8000-000000000025' `
+    -ExpectedRevision '1' `
+    -TargetStatus 'absent' `
+    -RequestId 'teacher-attendance-contention-existing-rejected'
+  Invoke-TeacherAttendanceContention `
+    -RaceName 'teacher-attendance-contention-absent' `
+    -SessionId '1d000000-0000-4000-8000-000000000026' `
+    -ExpectedRevision '' `
+    -TargetStatus 'excused' `
+    -RequestId 'teacher-attendance-contention-absent-rejected'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_retry_cleanup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Attendance contention retry or cleanup assertion failed.' }
+
+  if ($TeacherAttendanceContentionOnly) {
+    Write-Host '[PASS] bounded existing/absent attendance contention, deliberate retries, and fixture cleanup'
+    return
+  }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare teacher attendance concurrency fixture.' }
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/teacher_attendance_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/teacher_attendance_second.sql' `
+    -ExpectedExitPairs @('0,3', '3,0') `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'teacher-attendance'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Teacher attendance concurrency assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_existing_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare existing teacher attendance concurrency fixture.' }
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/teacher_attendance_existing_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/teacher_attendance_existing_second.sql' `
+    -ExpectedExitPairs @('0,3', '3,0') `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'teacher-attendance-existing'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_attendance_existing_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Existing teacher attendance concurrency assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/invite_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/invite_second.sql' `
+    -ExpectedSecondExit 3 `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'invite'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/invite_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Invitation concurrency assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/disable_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/register_second.sql' `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'disable-register' `
+    -ExpectedExitPairs @('0,3')
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/device_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Device concurrency assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/device_reset.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not reset device concurrency fixture.' }
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/register_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/disable_second.sql' `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'register-disable' `
+    -ExpectedExitPairs @('0,0')
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/device_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Opposite device concurrency assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/outbox_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare outbox concurrency fixture.' }
+  Invoke-DatabaseRace `
+    '/workspace/supabase/tests/concurrency/outbox_worker_a.sql' `
+    '/workspace/supabase/tests/concurrency/outbox_worker_b.sql' 0 0 0 -ReleaseOutboxBarrier
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/outbox_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Outbox claim concurrency assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/dispatch_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare dispatch concurrency fixture.' }
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/dispatch_worker_a.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/dispatch_worker_b.sql' `
+    -ExpectedSecondExit 3 `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'dispatch'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/dispatch_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Dispatch concurrency assertion failed.' }
+
+  $teacherLinkTargetA = '44000000-0000-4000-8000-000000000001'
+  $teacherLinkTargetB = '44000000-0000-4000-8000-000000000002'
+  $organizationA = '10000000-0000-4000-8000-000000000000'
+  $organizationB = '20000000-0000-4000-8000-000000000000'
+  if ($teacherLinkTargetA -eq $teacherLinkTargetB) {
+    throw 'Teacher-link scenario targets must differ.'
+  }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/admin_ops_race_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare Admin operations race fixtures.' }
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/teacher_link_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/teacher_link_second.sql' `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'teacher-link-a-wins' `
+    -ExpectedExitPairs @('0,3') `
+    -FirstPsqlVariables @('race_name=teacher-link-a-wins', 'winner_lock=true', "target_user_id=$teacherLinkTargetA") `
+    -SecondPsqlVariables @('race_name=teacher-link-a-wins', 'winner_lock=false', "target_user_id=$teacherLinkTargetA")
+  $teacherLinkAAssertionArguments = @(
+    'exec', $containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
+    '-v', "target_user_id=$teacherLinkTargetA",
+    '-v', "expected_winner_organization_id=$organizationA",
+    '-v', "expected_loser_organization_id=$organizationB",
+    '-U', 'postgres', '-d', $database,
+    '-f', '/workspace/supabase/tests/concurrency/teacher_link_assert.sql'
+  )
+  & docker @teacherLinkAAssertionArguments
+  if ($LASTEXITCODE -ne 0) { throw 'Teacher link concurrency assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/teacher_link_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/teacher_link_second.sql' `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'teacher-link-b-wins' `
+    -ExpectedExitPairs @('3,0') `
+    -FirstPsqlVariables @('race_name=teacher-link-b-wins', 'winner_lock=false', "target_user_id=$teacherLinkTargetB") `
+    -SecondPsqlVariables @('race_name=teacher-link-b-wins', 'winner_lock=true', "target_user_id=$teacherLinkTargetB")
+  $teacherLinkBAssertionArguments = @(
+    'exec', $containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
+    '-v', "target_user_id=$teacherLinkTargetB",
+    '-v', "expected_winner_organization_id=$organizationB",
+    '-v', "expected_loser_organization_id=$organizationA",
+    '-U', 'postgres', '-d', $database,
+    '-f', '/workspace/supabase/tests/concurrency/teacher_link_assert.sql'
+  )
+  & docker @teacherLinkBAssertionArguments
+  if ($LASTEXITCODE -ne 0) { throw 'Teacher link reverse-order concurrency assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/teacher_link_combined_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Teacher link combined scenario isolation assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/makeup_booking_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/makeup_booking_second.sql' `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'makeup-booking'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/makeup_booking_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Makeup booking concurrency assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/makeup_complete_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/makeup_complete_second.sql' `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'makeup-complete'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/makeup_complete_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Makeup completion concurrency assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/makeup_same_task_booking_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/makeup_same_task_completion_second.sql' `
+    -ExpectedSecondExitCodes @(0, 3) `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'makeup-same-task'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/makeup_same_task_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Makeup same-task booking/completion race assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/course_enrollment_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare Course enrollment concurrency fixtures.' }
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/course_enroll_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/course_enroll_second.sql' `
+    -ExpectedFirstExitCodes @(0, 3) `
+    -ExpectedSecondExitCodes @(0, 3) `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'course-enroll'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/course_enroll_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Course enrollment concurrency assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/course_transfer_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/course_transfer_second.sql' `
+    -ExpectedFirstExit 0 `
+    -ExpectedSecondExit 3 `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'course-transfer-enroll'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/course_transfer_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Course transfer/enrollment concurrency assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/course_link_enroll_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare Course link/enrollment race fixtures.' }
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/course_link_enroll_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/course_link_second.sql' `
+    -StartSecondDelayMilliseconds 250
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/course_link_enroll_first_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Enroll-first Course link race assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/course_link_first.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/course_link_enroll_second.sql' `
+    -StartSecondDelayMilliseconds 250
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/course_link_first_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Link-first Course enrollment race assertion failed.' }
+
+  docker exec $containerName createdb -U postgres $unsafeDatabase
+  if ($LASTEXITCODE -ne 0) { throw 'Could not create unsafe preflight database.' }
+  $unsafeFiles = @(
+    '/workspace/supabase/tests/000_bootstrap.sql',
+    '/workspace/supabase/migrations/202607110000_legacy_baseline.sql',
+    '/workspace/supabase/migrations/202607110001_tenant_operations_finance.sql',
+    '/workspace/supabase/migrations/202607110002_invariants_rls_rpcs.sql',
+    '/workspace/supabase/migrations/202607110003_release_blockers.sql',
+    '/workspace/supabase/migrations/202607150004_parent_notifications.sql',
+    '/workspace/supabase/seed.sql',
+    '/workspace/supabase/tests/000_foundation_security_unsafe_fixture.sql'
+  )
+  foreach ($file in $unsafeFiles) {
+    docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $unsafeDatabase -f $file
+    if ($LASTEXITCODE -ne 0) { throw "Unsafe preflight setup failed: $file" }
+  }
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $unsafeDatabase `
+    -f '/workspace/supabase/migrations/202607180005_foundation_security.sql'
+  if ($LASTEXITCODE -eq 0) { throw 'Unsafe legacy data did not block the foundation migration.' }
+  $expiresColumn = docker exec $containerName psql -q -U postgres -d $unsafeDatabase -Atc `
+    "select count(*) from information_schema.columns where table_schema='public' and table_name='parent_account_invitations' and column_name='expires_at'"
+  if ($LASTEXITCODE -ne 0 -or $expiresColumn -ne '0') {
+    throw 'Blocked migration partially applied mutable DDL before preflight.'
+  }
+
+  Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-019, bounded existing/absent attendance contention and races, deterministic teacher-link A/B winner races, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity
@@ -61,5 +675,26 @@ try {
      union all select 'completed_makeup',count(*) from makeup_sessions where organization_id='10000000-0000-4000-8000-000000000000' and status='completed';"
   if ($LASTEXITCODE -ne 0) { throw 'Could not read final verification counts.' }
 } finally {
-  docker rm -f $containerName 2>$null | Out-Null
+  if ($containerStarted) {
+    $databaseCleanupPassed = $true
+    foreach ($cleanupDatabase in @($unsafeDatabase,$database)) {
+      docker exec $containerName dropdb -U postgres --if-exists $cleanupDatabase 2>$null | Out-Null
+      if ($LASTEXITCODE -ne 0) { $databaseCleanupPassed = $false }
+    }
+    $remainingDatabases = docker exec $containerName psql -q -U postgres -d postgres -Atc `
+      "select count(*) from pg_database where datname in ('$database','$unsafeDatabase')" 2>$null
+    if ($LASTEXITCODE -ne 0 -or $remainingDatabases -ne '0') { $databaseCleanupPassed = $false }
+
+    docker rm -f $containerName 2>$null | Out-Null
+    $containerCleanupPassed = $LASTEXITCODE -eq 0
+    $remainingContainer = docker ps -a -q --filter "name=^/${containerName}$" 2>$null
+    if ($LASTEXITCODE -ne 0 -or $remainingContainer) { $containerCleanupPassed = $false }
+
+    $databaseCleanupLabel = if ($databaseCleanupPassed) { 'PASS' } else { 'FAIL' }
+    $containerCleanupLabel = if ($containerCleanupPassed) { 'PASS' } else { 'FAIL' }
+    Write-Host "[CLEANUP] database=$databaseCleanupLabel container=$containerCleanupLabel"
+    if (-not $databaseCleanupPassed -or -not $containerCleanupPassed) {
+      throw 'Database verification cleanup failed.'
+    }
+  }
 }

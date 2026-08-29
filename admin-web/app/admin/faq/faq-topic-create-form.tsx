@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState, useEffect, useState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { createFaqTopicAction, type CreateFaqTopicFormState } from './actions';
 
 const initialState: CreateFaqTopicFormState = {
@@ -17,7 +17,7 @@ function SubmitButton() {
       disabled={pending}
       className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
     >
-      {pending ? '新增中...' : '新增 Topic'}
+      {pending ? '新增中...' : '新增分類'}
     </button>
   );
 }
@@ -26,16 +26,16 @@ function clientValidate(formData: FormData) {
   const name = String(formData.get('name') ?? '').trim();
   const sortOrderRaw = String(formData.get('sort_order') ?? '').trim();
 
-  if (!name) return 'Topic name 為必填。';
+  if (!name) return '分類名稱為必填。';
 
   const sortOrder = Number(sortOrderRaw || '0');
-  if (!Number.isFinite(sortOrder)) return 'Sort order 必須是數字。';
+  if (!Number.isFinite(sortOrder)) return '排序必須是數字。';
 
   return null;
 }
 
 export default function FaqTopicCreateForm() {
-  const [state, action] = useFormState(createFaqTopicAction, initialState);
+  const [state, action] = useActionState(createFaqTopicAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [showSavedHint, setShowSavedHint] = useState(false);
 
@@ -67,7 +67,7 @@ export default function FaqTopicCreateForm() {
       <div className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-2">
         <div>
           <label htmlFor="topic_name" className="mb-1 block text-sm font-medium text-slate-700">
-            Topic Name
+            分類名稱
           </label>
           <input
             id="topic_name"
@@ -82,7 +82,7 @@ export default function FaqTopicCreateForm() {
 
         <div>
           <label htmlFor="topic_sort_order" className="mb-1 block text-sm font-medium text-slate-700">
-            Sort Order
+            排序
           </label>
           <input
             id="topic_sort_order"

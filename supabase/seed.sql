@@ -21,6 +21,16 @@ where id in (
   '10000000-0000-4000-8000-000000000005'
 );
 
+-- Parent credentials are intentionally not persisted in Git. Populate only
+-- the Auth metadata required for the local Admin API; credentialed E2E sets a
+-- random execution-scoped password after reset.
+update auth.users
+set email_confirmed_at = coalesce(email_confirmed_at, now()),
+    aud = 'authenticated', role = 'authenticated',
+    raw_app_meta_data = jsonb_build_object('provider','email','providers',jsonb_build_array('email')),
+    raw_user_meta_data = '{}'::jsonb
+where id = '10000000-0000-4000-8000-000000000003';
+
 -- The plain PostgreSQL verification shim has a deliberately small auth.users
 -- table. When the full Supabase Auth schema is present, add the fields and
 -- email identities that GoTrue requires for password login.
@@ -103,9 +113,9 @@ insert into public.staff_roles (id,user_id,role,is_active,organization_id) value
   ('22000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001','admin',true,'20000000-0000-4000-8000-000000000000')
 on conflict (user_id) do update set role=excluded.role,is_active=excluded.is_active,organization_id=excluded.organization_id;
 
-insert into public.parent_profiles (id,user_id,full_name,phone,organization_id) values
-('13000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000003','Guardian A','+85360000001','10000000-0000-4000-8000-000000000000')
-on conflict (id) do update set full_name=excluded.full_name;
+insert into public.parent_profiles (id,user_id,full_name,phone,organization_id,account_status,email,linked_at) values
+('13000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000003','Guardian A','+85360000001','10000000-0000-4000-8000-000000000000','active','guardian-a@tecm.test',now())
+on conflict (id) do update set full_name=excluded.full_name,account_status=excluded.account_status,email=excluded.email,linked_at=coalesce(public.parent_profiles.linked_at,excluded.linked_at);
 
 insert into public.children (id,parent_id,child_name,age,school_name,organization_id) values
 ('14000000-0000-4000-8000-000000000001','13000000-0000-4000-8000-000000000001','Student A',10,'TECM School','10000000-0000-4000-8000-000000000000')
@@ -124,8 +134,8 @@ insert into public.campuses (id,name,address,is_active,organization_id) values
 on conflict (id) do update set name=excluded.name;
 
 insert into public.courses (id,title,category,level,campus_id,is_active,organization_id) values
-('18000000-0000-4000-8000-000000000001','Python Foundations','Coding','Foundation','17000000-0000-4000-8000-000000000001',true,'10000000-0000-4000-8000-000000000000')
-on conflict (id) do update set title=excluded.title;
+('18000000-0000-4000-8000-000000000001','Python Foundations','Python','Foundation','17000000-0000-4000-8000-000000000001',true,'10000000-0000-4000-8000-000000000000')
+on conflict (id) do update set title=excluded.title,category=excluded.category,level=excluded.level;
 
 insert into public.teacher_profiles (id,user_id,display_name,is_active,organization_id) values
 ('19000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000004','陳老師',true,'10000000-0000-4000-8000-000000000000'),
@@ -165,9 +175,9 @@ on conflict (organization_id,idempotency_key) do nothing;
 update public.organizations set name='澳門 TECM 教育中心' where id='10000000-0000-4000-8000-000000000000';
 
 insert into public.courses (id,title,category,level,campus_id,is_active,organization_id) values
-('18000000-0000-4000-8000-000000000002','Scratch 創意編程','編程','入門','17000000-0000-4000-8000-000000000001',true,'10000000-0000-4000-8000-000000000000'),
-('18000000-0000-4000-8000-000000000003','C++ 算法班','編程','進階','17000000-0000-4000-8000-000000000001',true,'10000000-0000-4000-8000-000000000000')
-on conflict (id) do update set title=excluded.title;
+('18000000-0000-4000-8000-000000000002','Scratch 創意編程','Scratch','入門','17000000-0000-4000-8000-000000000001',true,'10000000-0000-4000-8000-000000000000'),
+('18000000-0000-4000-8000-000000000003','C++ 算法班','C++','進階','17000000-0000-4000-8000-000000000001',true,'10000000-0000-4000-8000-000000000000')
+on conflict (id) do update set title=excluded.title,category=excluded.category,level=excluded.level;
 
 update public.exam_cohorts set name='Python 基礎班' where id='1a000000-0000-4000-8000-000000000001';
 insert into public.exam_cohorts (id,name,subject,level,exam_date,weekday_pattern,course_id,campus_id,lead_teacher_id,status,organization_id) values

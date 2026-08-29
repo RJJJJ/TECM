@@ -1,2 +1,7 @@
 import { redirect } from 'next/navigation';
-export default function AdminPage() { redirect('/admin/dashboard'); }
+import { getOperationsContext } from '@/lib/operations/context';
+
+export default async function AdminPage() {
+  const { role } = await getOperationsContext();
+  redirect(role === 'teacher' ? '/admin/attendance' : '/admin/dashboard');
+}

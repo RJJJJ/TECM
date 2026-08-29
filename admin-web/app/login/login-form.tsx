@@ -1,6 +1,7 @@
 'use client';
 
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState, useEffect, useState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { loginAction, type LoginFormState } from './actions';
 
 const INITIAL_STATE: LoginFormState = {};
@@ -20,10 +21,15 @@ function SubmitButton() {
 }
 
 export default function LoginForm() {
-  const [state, formAction] = useFormState(loginAction, INITIAL_STATE);
+  const [state, formAction] = useActionState(loginAction, INITIAL_STATE);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
 
   return (
-    <form action={formAction} className="mt-6 space-y-4">
+    <form action={formAction} className="mt-6 space-y-4" data-hydrated={hydrated ? 'true' : 'false'}>
       <div>
         <label htmlFor="email" className="mb-1 block text-sm font-medium text-slate-700">
           電郵

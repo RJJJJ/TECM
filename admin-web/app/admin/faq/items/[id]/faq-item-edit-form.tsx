@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { updateFaqItemAction, type UpdateFaqItemFormState } from './actions';
 
 type TopicOption = {
@@ -48,19 +49,19 @@ function clientValidate(formData: FormData) {
   const answer = String(formData.get('answer') ?? '').trim();
   const sortOrderRaw = String(formData.get('sort_order') ?? '').trim();
 
-  if (!topicId) return 'Topic 為必填。';
-  if (!question) return 'Question 為必填。';
-  if (!answer) return 'Answer 為必填。';
+  if (!topicId) return '分類為必填。';
+  if (!question) return '問題為必填。';
+  if (!answer) return '答案為必填。';
 
   const sortOrder = Number(sortOrderRaw || '0');
-  if (!Number.isFinite(sortOrder)) return 'Sort order 必須是數字。';
+  if (!Number.isFinite(sortOrder)) return '排序必須是數字。';
 
   return null;
 }
 
 export default function FaqItemEditForm({ item, topics }: Props) {
   const formAction = updateFaqItemAction.bind(null, item.id);
-  const [state, action] = useFormState(formAction, initialState);
+  const [state, action] = useActionState(formAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [showSavedHint, setShowSavedHint] = useState(false);
 
@@ -77,7 +78,7 @@ export default function FaqItemEditForm({ item, topics }: Props) {
   return (
     <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div>
-        <h3 className="text-lg font-semibold text-slate-900">編輯 FAQ Item</h3>
+        <h3 className="text-lg font-semibold text-slate-900">編輯常見問題</h3>
         <p className="mt-1 text-xs text-slate-500">可更新 topic、問題、答案、熱門與啟用狀態。</p>
       </div>
 
@@ -98,7 +99,7 @@ export default function FaqItemEditForm({ item, topics }: Props) {
         <div className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-2">
           <div>
             <label htmlFor="item_topic_id" className="mb-1 block text-sm font-medium text-slate-700">
-              Topic
+              分類
             </label>
             <select
               id="item_topic_id"
@@ -117,7 +118,7 @@ export default function FaqItemEditForm({ item, topics }: Props) {
 
           <div>
             <label htmlFor="item_sort_order" className="mb-1 block text-sm font-medium text-slate-700">
-              Sort Order
+              排序
             </label>
             <input
               id="item_sort_order"
@@ -130,7 +131,7 @@ export default function FaqItemEditForm({ item, topics }: Props) {
 
           <div className="md:col-span-2">
             <label htmlFor="item_question" className="mb-1 block text-sm font-medium text-slate-700">
-              Question
+              問題
             </label>
             <input
               id="item_question"
@@ -145,7 +146,7 @@ export default function FaqItemEditForm({ item, topics }: Props) {
 
           <div className="md:col-span-2">
             <label htmlFor="item_answer" className="mb-1 block text-sm font-medium text-slate-700">
-              Answer
+              答案
             </label>
             <textarea
               id="item_answer"
@@ -159,7 +160,7 @@ export default function FaqItemEditForm({ item, topics }: Props) {
 
           <div>
             <label htmlFor="item_is_popular" className="mb-1 block text-sm font-medium text-slate-700">
-              Is Popular
+              熱門問題
             </label>
             <select
               id="item_is_popular"
@@ -167,14 +168,14 @@ export default function FaqItemEditForm({ item, topics }: Props) {
               defaultValue={item.is_popular ? 'true' : 'false'}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
             >
-              <option value="true">true</option>
-              <option value="false">false</option>
+              <option value="true">是</option>
+              <option value="false">否</option>
             </select>
           </div>
 
           <div>
             <label htmlFor="item_is_active" className="mb-1 block text-sm font-medium text-slate-700">
-              Is Active
+              啟用狀態
             </label>
             <select
               id="item_is_active"
@@ -182,8 +183,8 @@ export default function FaqItemEditForm({ item, topics }: Props) {
               defaultValue={item.is_active ? 'true' : 'false'}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
             >
-              <option value="true">true</option>
-              <option value="false">false</option>
+              <option value="true">是</option>
+              <option value="false">否</option>
             </select>
           </div>
         </div>

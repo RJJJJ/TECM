@@ -1,5 +1,7 @@
 import Link from 'next/link';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { getOperationsContext } from '@/lib/operations/context';
+import { userFacingError } from '@/lib/operations/errors';
+import { ErrorState, EmptyState, PageHeader, Panel } from '@/components/operations-ui';
 import CourseCreateForm from './course-create-form';
 
 type CourseRow = {
@@ -55,15 +57,17 @@ function boolBadge(value: boolean, trueText: string, falseText: string) {
 }
 
 export default async function AdminCoursesPage() {
-  const supabase = await createServerSupabaseClient();
+  const { supabase, organizationId, role } = await getOperationsContext();
+  if (!['admin', 'staff'].includes(role)) throw userFacingError('只有管理員或職員可以管理課程。');
 
-  const [{ data: courseData, error: courseError }, { data: campusData }] = await Promise.all([
+  const [{ data: courseData, error: courseError }, { data: campusData, error: campusError }] = await Promise.all([
     supabase
       .from('courses')
       .select('id, title, category, level, age_group, recommended, is_active, sort_order, updated_at, campuses(name)')
       .order('sort_order', { ascending: true })
+      .eq('organization_id', organizationId)
       .order('updated_at', { ascending: false }),
-    supabase.from('campuses').select('id, name, is_active').order('name', { ascending: true })
+    supabase.from('campuses').select('id, name, is_active').eq('organization_id', organizationId).order('name', { ascending: true })
   ]);
 
   const courses = (courseData ?? []) as unknown as CourseRow[];
@@ -71,30 +75,22 @@ export default async function AdminCoursesPage() {
 
   return (
     <div className="space-y-5">
-      <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-        <div>
-          <h2 className="text-2xl font-semibold text-slate-900">Course Management</h2>
-          <p className="mt-1 text-sm text-slate-600">新增課程資料（courses）</p>
-        </div>
+      <PageHeader title="課程" description="建立及管理課程；如需選擇校區，請先在設定完成校區資料。" action={<Link href="/admin/settings#campus-settings" className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium">管理校區</Link>} />
+      <div id="create-course"><Panel title="新增課程">
         <CourseCreateForm campuses={campuses} />
-      </section>
+      </Panel></div>
 
       <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-lg font-semibold text-slate-900">Course List</h3>
+          <h2 className="text-lg font-semibold text-slate-900">課程列表</h2>
           <p className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">共 {courses.length} 筆</p>
         </div>
 
-        {courseError && (
-          <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-            讀取課程失敗：{courseError.message}
-          </p>
-        )}
+        {courseError ? <ErrorState error={courseError} fallback="讀取課程失敗，請稍後再試。" /> : null}
+        {campusError ? <ErrorState error={campusError} fallback="讀取校區失敗，請稍後再試。" /> : null}
 
         {!courseError && courses.length === 0 && (
-          <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600">
-            目前尚無課程，請先新增第一門課。
-          </p>
+          <EmptyState action={<Link href="#create-course" className="font-medium text-teal-700 underline">新增第一門課</Link>}>目前尚無課程，請先新增第一門課。</EmptyState>
         )}
 
         {!courseError && courses.length > 0 && (
@@ -102,16 +98,16 @@ export default async function AdminCoursesPage() {
             <table className="min-w-full divide-y divide-slate-200 text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Title</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Category</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Level</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Age Group</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Campus</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Recommended</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Is Active</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Sort Order</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Updated At</th>
-                  <th className="px-4 py-3 text-right font-medium text-slate-600">Action</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">名稱</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">類別</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">程度</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">年齡組別</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">校區</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">推薦</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">狀態</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">排序</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">更新時間</th>
+                  <th className="px-4 py-3 text-right font-medium text-slate-600">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
@@ -124,8 +120,8 @@ export default async function AdminCoursesPage() {
                     <td className="px-4 py-3 text-slate-700">{course.level ?? '-'}</td>
                     <td className="px-4 py-3 text-slate-700">{course.age_group ?? '-'}</td>
                     <td className="px-4 py-3 text-slate-700">{course.campuses?.name ?? '-'}</td>
-                    <td className="px-4 py-3">{boolBadge(course.recommended, 'Yes', 'No')}</td>
-                    <td className="px-4 py-3">{boolBadge(course.is_active, 'Active', 'Inactive')}</td>
+                    <td className="px-4 py-3">{boolBadge(course.recommended, '是', '否')}</td>
+                    <td className="px-4 py-3">{boolBadge(course.is_active, '啟用', '停用')}</td>
                     <td className="px-4 py-3 text-slate-700">{course.sort_order}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDateTime(course.updated_at)}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-right">
@@ -133,7 +129,7 @@ export default async function AdminCoursesPage() {
                         href={`/admin/courses/${course.id}`}
                         className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
                       >
-                        Edit
+                        編輯
                       </Link>
                     </td>
                   </tr>

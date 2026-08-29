@@ -1,0 +1,264 @@
+name: Release validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - feature/ios-parent-app-push-sync
+
+permissions:
+  contents: read
+
+jobs:
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Verify checkout provenance
+        run: bash scripts/testing/verify-ci-checkout.sh
+      - name: Verify migrations, repeatable seed, RLS, and SQL suites
+        shell: pwsh
+        run: ./scripts/testing/database-verify.ps1
+      - name: Verify Admin mutation resistance with isolated negative controls
+        shell: pwsh
+        run: ./scripts/testing/admin-operations-mutation-verify.ps1
+      - name: Verify migration 014 session timeout mutation resistance
+        shell: pwsh
+        run: ./scripts/testing/migration-014-session-timeouts-mutation-verify.ps1
+      - name: Verify attendance function ACL M36/M37/M38 and lifecycle controls
+        run: node scripts/testing/attendance-function-acl-mutation-verify.mjs
+
+  admin-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: admin-web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Verify checkout provenance
+        working-directory: .
+        run: bash scripts/testing/verify-ci-checkout.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: admin-web/package-lock.json
+      - run: npm ci
+      - run: npm ls next sharp
+      - run: npm run security:image-guard
+      - run: npm run test:sharp
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:mutation:uat
+      - run: npm run test:mutation:teacher-attendance
+      - run: npm run build
+      - run: npm audit --audit-level=high
+
+  repository-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify checkout provenance
+        run: bash scripts/testing/verify-ci-checkout.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: node scripts/testing/validate-n8n.mjs
+      - run: node scripts/testing/validate-release-workflow.mjs
+      - run: node scripts/testing/repository-security-scan.mjs
+      - run: deno check supabase/functions/send-apns/index.ts
+
+  admin-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TECM_EXPECTED_GITHUB_RUN_ID: ${{ github.run_id }}
+      TECM_EXPECTED_GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Verify checkout provenance
+        run: bash scripts/testing/verify-ci-checkout.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: admin-web/package-lock.json
+      - name: Establish canonical Admin E2E identity
+        run: |
+          set -euo pipefail
+          identity_json="$(node admin-web/scripts/test-run-identity.mjs)"
+          test "$(jq -er .source <<<"$identity_json")" = 'github-actions'
+          echo "TECM_TEST_RUN_ID=$(jq -er .canonicalId <<<"$identity_json")" >> "$GITHUB_ENV"
+          echo 'TECM_TEST_RUN_SOURCE=github-actions' >> "$GITHUB_ENV"
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Start local Supabase and reset schema
+        run: |
+          TECM_SUPABASE_NETWORK="tecm-local-only-${TECM_TEST_RUN_ID}"
+          docker network create \
+            --driver bridge \
+            --opt com.docker.network.bridge.host_binding_ipv4=127.0.0.1 \
+            "$TECM_SUPABASE_NETWORK" >/dev/null
+          if ! supabase start --network-id "$TECM_SUPABASE_NETWORK" >/dev/null 2>&1; then
+            echo 'Supabase local stack start failed' >&2
+            docker ps -a --filter name=supabase_ --format 'local Supabase service: {{.Names}} {{.Status}}' >&2
+            exit 1
+          fi
+          if ! supabase db reset --network-id "$TECM_SUPABASE_NETWORK" >/dev/null 2>&1; then
+            echo 'Supabase local database reset failed' >&2
+            exit 1
+          fi
+          KONG_CONTAINER="$(docker ps --filter name=supabase_kong_ --format '{{.Names}}' | head -n 1)"
+          test -n "$KONG_CONTAINER"
+          docker restart "$KONG_CONTAINER" >/dev/null
+          bash scripts/testing/verify-local-supabase.sh
+      - name: Install Admin Web and Chromium
+        working-directory: admin-web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium webkit
+      - name: Prepare non-echoing Admin E2E fixture environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          status_json="$(supabase status -o json)"
+          mask_file="${RUNNER_TEMP}/tecm-admin-e2e-masks"
+          trap 'rm -f "$mask_file"' EXIT
+          TECM_E2E_SUPABASE_STATUS_JSON="$status_json" \
+          TECM_E2E_MASK_DESTINATION="$mask_file" \
+            node scripts/testing/prepare-admin-e2e-env.mjs
+          test -s "$mask_file"
+          while IFS= read -r mask; do
+            test -n "$mask"
+            echo "::add-mask::$mask"
+          done <"$mask_file"
+          rm -f "$mask_file"
+          trap - EXIT
+      - name: Run live Playwright flows and verify zero skips
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity_json="$(node admin-web/scripts/test-run-identity.mjs)"
+          canonical_id="$(jq -er .canonicalId <<<"$identity_json")"
+          test "$(jq -er .source <<<"$identity_json")" = 'github-actions'
+          test "$canonical_id" = "$TECM_TEST_RUN_ID"
+          test -n "$NEXT_PUBLIC_SUPABASE_URL"
+          test -n "$NEXT_PUBLIC_SUPABASE_ANON_KEY"
+          test -n "$SUPABASE_SERVICE_ROLE_KEY"
+          test -n "$LOCAL_E2E_PASSWORD"
+          test -n "$TECM_ORGANIZATION_ID"
+          test -n "$TECM_E2E_AUTH_IDS"
+          for user_id in $TECM_E2E_AUTH_IDS; do
+            curl --fail --silent --show-error \
+              --request PUT \
+              --header "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              --header "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+              --header 'Content-Type: application/json' \
+              --data "$(jq -cn --arg password "$LOCAL_E2E_PASSWORD" '{password: $password, email_confirm: true}')" \
+              "$NEXT_PUBLIC_SUPABASE_URL/auth/v1/admin/users/$user_id" >/dev/null
+          done
+          cd admin-web
+          npm run test:e2e
+          npm run test:e2e:verify
+          for variable in \
+            NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY \
+            SUPABASE_SERVICE_ROLE_KEY TECM_ORGANIZATION_ID TECM_E2E_AUTH_IDS \
+            LOCAL_E2E_PASSWORD PLAYWRIGHT_ADMIN_EMAIL PLAYWRIGHT_ADMIN_PASSWORD \
+            PLAYWRIGHT_TEACHER_EMAIL PLAYWRIGHT_TEACHER_PASSWORD \
+            PLAYWRIGHT_PARENT_EMAIL PLAYWRIGHT_PARENT_PASSWORD PLAYWRIGHT_BASE_URL \
+            PLAYWRIGHT_RUN_ID PLAYWRIGHT_RESULT_FILE PLAYWRIGHT_EXPECTED_TESTS; do
+            printf '%s=\n' "$variable" >> "$GITHUB_ENV"
+          done
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Verify checkout provenance
+        run: bash scripts/testing/verify-ci-checkout.sh
+      - name: Create an Xcode 16.4 simulator
+        id: simulator
+        shell: bash
+        run: |
+          simulator_id=$(xcrun simctl create \
+            'TECM iPhone 16 Pro' \
+            'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro' \
+            'com.apple.CoreSimulator.SimRuntime.iOS-18-5')
+          echo "id=$simulator_id" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$simulator_id"
+          xcrun simctl bootstatus "$simulator_id" -b
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project TECM.xcodeproj
+      - name: Build without signing
+        run: >-
+          xcodebuild build
+          -project TECM.xcodeproj
+          -scheme TECM
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}'
+          -derivedDataPath '${{ runner.temp }}/TECM-DerivedData'
+          CODE_SIGNING_ALLOWED=NO
+      - name: Validate built launch metadata and mutation guard
+        shell: bash
+        run: |
+          app_path='${{ runner.temp }}/TECM-DerivedData/Build/Products/Debug-iphonesimulator/TECM.app'
+          bash scripts/testing/test-ios-launch-metadata-harness.sh TECM/Info.plist
+          bash scripts/testing/validate-ios-launch-metadata.sh "$app_path"
+          bash scripts/testing/test-ios-launch-metadata-mutation.sh "$app_path"
+      - name: Run Swift tests when a test target exists
+        run: >-
+          xcodebuild test
+          -project TECM.xcodeproj
+          -scheme TECM
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}'
+          -resultBundlePath '${{ runner.temp }}/TECMTests.xcresult'
+      - name: Print XCTest bootstrap diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          result_bundle='${{ runner.temp }}/TECMTests.xcresult'
+          if [[ -d "$result_bundle" ]]; then
+            xcrun xcresulttool get test-results summary --path "$result_bundle" || true
+            xcrun xcresulttool get log --path "$result_bundle" --type console || true
+          fi
+          simulator_id='${{ steps.simulator.outputs.id }}'
+          xcrun simctl boot "$simulator_id" || true
+          xcrun simctl bootstatus "$simulator_id" -b || true
+          xcrun simctl spawn "$simulator_id" log show \
+            --last 15m \
+            --style compact \
+            --predicate 'process == "TECM" OR process == "TECMTests"' \
+            | tail -n 600 || true
+          find "$HOME/Library/Logs/DiagnosticReports" \
+            "$HOME/Library/Developer/CoreSimulator/Devices/$simulator_id/data/Library/Logs/CrashReporter" \
+            -type f \( -name 'TECM*.crash' -o -name 'TECM*.ips' \) \
+            -print -exec tail -n 400 {} \; 2>/dev/null || true
+      - name: Remove the CI simulator
+        if: always()
+        shell: bash
+        run: |
+          simulator_id='${{ steps.simulator.outputs.id }}'
+          if [[ -n "$simulator_id" ]]; then
+            xcrun simctl shutdown "$simulator_id" || true
+            xcrun simctl delete "$simulator_id" || true
+          fi
