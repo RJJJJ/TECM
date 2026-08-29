@@ -17,7 +17,7 @@ export default function CohortCreateForm({ teachers, courses, campuses }: { teac
 
   useEffect(() => {
     if (state.status === 'success') router.refresh();
-  }, [router, state.status]);
+  }, [router, state]);
 
   return <form action={action} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
     <select className={field} name="course_id" aria-label="所屬課程" value={courseId} onChange={event => setCourseId(event.target.value)} required><option value="" disabled>選擇所屬課程</option>{courses.map(course => <option key={course.id} value={course.id}>{course.title} · {course.category ?? '未設定類別'} · {course.level ?? '未設定程度'}</option>)}</select>

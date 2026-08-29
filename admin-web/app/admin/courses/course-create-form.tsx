@@ -58,7 +58,7 @@ export default function CourseCreateForm({ campuses }: Props) {
     }
 
     return undefined;
-  }, [router, state.status]);
+  }, [router, state]);
 
   return (
     <form

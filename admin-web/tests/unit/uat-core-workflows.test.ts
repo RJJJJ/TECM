@@ -6,6 +6,27 @@ import test from 'node:test';
 const root = resolve(import.meta.dirname, '../../..');
 const source = (path: string) => readFileSync(resolve(root, path), 'utf8');
 
+test('admin create forms refresh for every successful action result, not only a status transition', () => {
+  const createForms = [
+    'admin-web/app/admin/courses/course-create-form.tsx',
+    'admin-web/app/admin/exam-cohorts/cohort-create-form.tsx',
+    'admin-web/app/admin/packages/fee-plan-create-form.tsx',
+    'admin-web/app/admin/settings/campus-create-form.tsx'
+  ];
+  const comparisonForms = [
+    'admin-web/app/admin/exam-cohorts/cohort-student-form.tsx',
+    'admin-web/app/admin/exam-cohorts/[id]/lesson-sessions/lesson-session-create-form.tsx'
+  ];
+
+  for (const path of [...createForms, ...comparisonForms]) {
+    const form = source(path);
+    assert.match(form, /if \(state\.status === 'success'\)\s*\{?\s*router\.refresh\(\)/);
+    assert.equal(form.match(/router\.refresh\(\)/g)?.length, 1, `${path} must not refresh failure results`);
+    assert.match(form, /\}, \[router, state\]\);/);
+    assert.doesNotMatch(form, /\[router, state\.status\]/);
+  }
+});
+
 test('cohort enrollment uses the guarded idempotent state transition and commits feedback before refresh', () => {
   const migration = source('supabase/migrations/202608050012_uat_core_workflows.sql');
   const actions = source('admin-web/app/admin/exam-cohorts/actions.ts');

@@ -15,7 +15,7 @@ export default function FeePlanCreateForm({ courses }: { courses: Option[] }) {
 
   useEffect(() => {
     if (state.status === 'success') router.refresh();
-  }, [router, state.status]);
+  }, [router, state]);
 
   return <form action={action} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
     <input aria-label="套票名稱" className={field} name="name" placeholder="套票名稱" required maxLength={120} />

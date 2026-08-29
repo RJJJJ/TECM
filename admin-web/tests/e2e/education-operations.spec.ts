@@ -510,8 +510,8 @@ test.describe('教育中心營運主流程', () => {
     await expect(page).toHaveURL(/\/admin\/dashboard$/, { timeout: 30_000 });
     await expect(page.getByRole('heading', { name: '營運儀表板' })).toBeVisible();
 
+    await page.goto('/admin/courses');
     const createCourse = async (title: string, category: string, level: string) => {
-      await page.goto('/admin/courses');
       await page.getByLabel('課程名稱').fill(title);
       await page.getByLabel('類別').fill(category);
       await page.getByLabel('程度').fill(level);
@@ -521,6 +521,8 @@ test.describe('教育中心營運主流程', () => {
     };
     await createCourse(pythonCourse, 'Python', '三級');
     await createCourse(scratchCourse, 'Scratch', '一級');
+    await expect(activeTableRow(page, pythonCourse, '啟用')).toHaveCount(1);
+    await expect(activeTableRow(page, scratchCourse, '啟用')).toHaveCount(1);
 
     const createCohort = async (courseTitle: string, cohortName: string, weekday: 'saturday' | 'sunday') => {
       await page.goto('/admin/exam-cohorts');

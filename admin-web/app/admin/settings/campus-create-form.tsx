@@ -14,7 +14,7 @@ export default function CampusCreateForm() {
 
   useEffect(() => {
     if (state.status === 'success') router.refresh();
-  }, [router, state.status]);
+  }, [router, state]);
 
   return <form action={action} className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
     <input aria-label="校區名稱" className={field} name="name" placeholder="校區名稱" required maxLength={120} />
