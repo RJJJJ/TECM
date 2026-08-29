@@ -49,6 +49,20 @@ export function requireLoopbackUrl(raw, label) {
   return parsed.toString().replace(/\/$/, '');
 }
 
+export function parseSupabaseStatus(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    throw new Error('Supabase status is missing or invalid');
+  }
+  const value = raw.trim();
+  const jsonStart = value.indexOf('{');
+  if (jsonStart < 0) throw new Error('Supabase status is missing or invalid');
+  try {
+    return JSON.parse(value.slice(jsonStart));
+  } catch {
+    throw new Error('Supabase status is missing or invalid');
+  }
+}
+
 export function prepareAdminE2EEnvironment({
   environment = process.env,
   writeStatus = (label) => process.stdout.write(`${label}\n`)
@@ -56,15 +70,7 @@ export function prepareAdminE2EEnvironment({
   const environmentDestination = requireDestination(environment.GITHUB_ENV, 'environment');
   const maskDestination = requireDestination(environment.TECM_E2E_MASK_DESTINATION, 'mask');
   const runId = requireSingleLine(environment.TECM_TEST_RUN_ID, 'canonical run identity');
-  let status;
-  try {
-    status = JSON.parse(requireSingleLine(
-      environment.TECM_E2E_SUPABASE_STATUS_JSON,
-      'Supabase status'
-    ));
-  } catch {
-    throw new Error('Supabase status is missing or invalid');
-  }
+  const status = parseSupabaseStatus(environment.TECM_E2E_SUPABASE_STATUS_JSON);
 
   const apiUrl = requireLoopbackUrl(status.API_URL, 'Supabase API URL');
   const browserUrl = requireLoopbackUrl(

@@ -11,6 +11,8 @@ export type PreparedAdminE2EEnvironment = {
 
 export function requireLoopbackUrl(raw: string, label: string): string;
 
+export function parseSupabaseStatus(raw: unknown): Record<string, unknown>;
+
 export function prepareAdminE2EEnvironment(
   options?: AdminE2EEnvironmentOptions
 ): PreparedAdminE2EEnvironment;

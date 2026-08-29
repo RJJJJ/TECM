@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  parseSupabaseStatus,
   prepareAdminE2EEnvironment,
   requireLoopbackUrl
 } from '../../../scripts/testing/prepare-admin-e2e-env.mjs';
@@ -60,6 +61,13 @@ test('non-echoing E2E fixture helper writes every required later-step value', ()
     assert.equal(output, 'E2E_FIXTURE_ENV_READY\n');
     assert.doesNotMatch(output, /[^\s@]+@[^\s@]+|https?:\/\//i);
   });
+});
+
+test('E2E fixture helper accepts Supabase lifecycle text before JSON status', () => {
+  assert.deepEqual(
+    parseSupabaseStatus(`Stopped services: [supabase_imgproxy_tecm]\n${JSON.stringify(status)}`),
+    status
+  );
 });
 
 test('E2E fixture helper accepts explicit IPv4, IPv6, and localhost loopback targets', () => {
