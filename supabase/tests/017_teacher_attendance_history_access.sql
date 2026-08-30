@@ -228,9 +228,12 @@ begin
     if sqlerrm = 'future attendance unexpectedly succeeded' then raise; end if;
   end;
 
-  update public.attendance_records set status = 'absent'
-  where session_id = '1d000000-0000-4000-8000-000000000017';
-  if found then raise exception 'teacher direct attendance DML unexpectedly changed a row'; end if;
+  begin
+    update public.attendance_records set status = 'absent'
+    where session_id = '1d000000-0000-4000-8000-000000000017';
+    raise exception 'teacher direct attendance DML unexpectedly succeeded';
+  exception when insufficient_privilege then null;
+  end;
 end
 $$;
 

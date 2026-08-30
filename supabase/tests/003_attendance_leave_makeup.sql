@@ -41,6 +41,10 @@ begin
 end
 $$;
 
+-- The canonical authenticated path is the revisioned RPC. The remaining
+-- trigger-specific debit/reversal checks run as the database owner.
+reset role;
+
 insert into public.attendance_records(id,organization_id,session_id,student_id,status,recorded_by)
 values ('31000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000000','1d000000-0000-4000-8000-000000000001','15000000-0000-4000-8000-000000000001','present','10000000-0000-4000-8000-000000000001')
 on conflict (session_id,student_id) do update set status=excluded.status;
@@ -74,6 +78,8 @@ select public.submit_staff_leave_request(
   'Family leave',
   'leave-test-1'
 );
+set role authenticated;
+select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);
 select public.decide_leave_request((select id from public.leave_requests where idempotency_key='leave-test-1'),'approved');
 select public.decide_leave_request((select id from public.leave_requests where idempotency_key='leave-test-1'),'approved');
 

@@ -93,19 +93,25 @@ function TeacherPage({ sessions, rosters, attendance, search }: {
 async function StaffPage() {
   const { supabase, organizationId } = await getOperationsContext();
   const today = todayMacau();
-  const sessions = await supabase.from('lesson_sessions').select('id,cohort_id,starts_at,exam_cohorts(name)').eq('organization_id', organizationId).gte('starts_at', `${today}T00:00:00+08:00`).lt('starts_at', `${today}T23:59:59+08:00`).order('starts_at');
+  const sessions = await supabase.from('lesson_sessions').select('id,cohort_id,starts_at,ends_at,status,exam_cohorts(name)').eq('organization_id', organizationId).gte('starts_at', `${today}T00:00:00+08:00`).lt('starts_at', `${today}T23:59:59+08:00`).order('starts_at');
   const sessionIds = (sessions.data ?? []).map((row: any) => row.id);
   const cohortIds = (sessions.data ?? []).map((row: any) => row.cohort_id);
   const [enrollments, records] = await Promise.all([
     cohortIds.length ? supabase.from('cohort_students').select('cohort_id,student_id,students(display_name)').eq('organization_id', organizationId).eq('status', 'active').in('cohort_id', cohortIds) : Promise.resolve({ data: [], error: null }),
-    sessionIds.length ? supabase.from('attendance_records').select('session_id,student_id,status').eq('organization_id', organizationId).in('session_id', sessionIds) : Promise.resolve({ data: [], error: null })
+    sessionIds.length ? supabase.from('attendance_records').select('session_id,student_id,status,revision').eq('organization_id', organizationId).in('session_id', sessionIds) : Promise.resolve({ data: [], error: null })
   ]);
   const error = sessions.error || enrollments.error || records.error;
   return <>
-    <PageHeader title="今日點名" description="管理員及職員可維持既有的今日課堂點名流程。"/>
+    <PageHeader title="今日點名" description="管理員及職員的每筆點名均使用伺服器版本檢查；衝突後請重新載入再提交。"/>
     {error ? <ErrorState error={error} fallback="暫時無法載入點名資料。"/> : !(sessions.data ?? []).length ? <EmptyState>今天沒有課堂。</EmptyState> : <div className="grid gap-5">{(sessions.data ?? []).map((session: any) => {
-      const roster = (enrollments.data ?? []).filter((row: any) => row.cohort_id === session.cohort_id).map((row: any) => ({ id: row.student_id, label: row.students?.display_name || '未命名學生', status: (records.data ?? []).find((record: any) => record.session_id === session.id && record.student_id === row.student_id)?.status }));
-      return <Panel key={session.id} title={`${formatMacauDateTime(session.starts_at)} · ${session.exam_cohorts?.name || '班別'}`}>{roster.length ? <SessionAttendanceForm sessionId={session.id} students={roster}/> : <EmptyState>此班別沒有有效學生。</EmptyState>}</Panel>;
+      const isFuture = new Date(session.starts_at).getTime() > Date.now();
+      const requiresReason = new Date(session.ends_at).getTime() < Date.now();
+      const disabled = isFuture || session.status === 'cancelled';
+      const roster = (enrollments.data ?? []).filter((row: any) => row.cohort_id === session.cohort_id).map((row: any) => {
+        const record = (records.data ?? []).find((candidate: any) => candidate.session_id === session.id && candidate.student_id === row.student_id);
+        return { id: row.student_id, label: row.students?.display_name || '未命名學生', status: record?.status ?? null, revision: record?.revision ?? null };
+      });
+      return <Panel key={session.id} title={`${formatMacauDateTime(session.starts_at)} · ${session.exam_cohorts?.name || '班別'}`}>{isFuture ? <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">課堂尚未開始，暫時不能點名。</p> : null}{session.status === 'cancelled' ? <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">已取消課堂不能點名。</p> : null}{requiresReason && !disabled ? <p className="mb-3 rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">修正已結束課堂的點名時，請填寫修改原因。</p> : null}{roster.length ? <SessionAttendanceForm sessionId={session.id} students={roster} requiresReason={requiresReason} disabled={disabled}/> : <EmptyState>此班別沒有有效學生。</EmptyState>}</Panel>;
     })}</div>}
   </>;
 }

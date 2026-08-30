@@ -98,6 +98,11 @@ export function safeErrorMessage(
     return '課堂尚未開始，暫時不能點名。';
   }
 
+  if (/attendance cannot be submitted for a cancelled session/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return '已取消課堂不能點名。';
+  }
+
   if (/attendance correction reason is required/.test(message)) {
     logSafeFailure(operation, error, referenceId);
     return '修正已結束課堂的點名時，必須填寫修改原因。';

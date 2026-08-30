@@ -102,6 +102,8 @@ try {
     '/workspace/supabase/migrations/202608240015_attendance_function_execute_hardening.sql',
     $revisionGuardMigration,
     $revisionGuardMigration,
+    '/workspace/supabase/migrations/20260830100127_batch1_staff_attendance_operation_idempotency.sql',
+    '/workspace/supabase/migrations/20260830100127_batch1_staff_attendance_operation_idempotency.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
@@ -122,7 +124,8 @@ try {
     '/workspace/supabase/tests/016_course_cohort_enrollment_model.sql',
     '/workspace/supabase/tests/017_teacher_attendance_history_access.sql',
     '/workspace/supabase/tests/018_attendance_function_execute_hardening.sql',
-    '/workspace/supabase/tests/019_teacher_attendance_revision_guard.sql'
+    '/workspace/supabase/tests/019_teacher_attendance_revision_guard.sql',
+    '/workspace/supabase/tests/020_batch1_release_blockers.sql'
   )
 
   foreach ($file in $files) {
@@ -204,7 +207,8 @@ try {
       [int[]]$ExpectedSecondExitCodes = @(),
       [string[]]$ExpectedExitPairs = @(),
       [string[]]$FirstPsqlVariables = @(),
-      [string[]]$SecondPsqlVariables = @()
+      [string[]]$SecondPsqlVariables = @(),
+      [switch]$ReleaseFirstBeforeSecond
     )
 
     Write-Host "[RACE] $FirstFile <> $SecondFile"
@@ -254,6 +258,14 @@ try {
         docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -c `
           "insert into public.__test_race_barrier(race, worker, released_at) values ('$BarrierRaceName','first',statement_timestamp()) on conflict (race, worker) do update set released_at=excluded.released_at" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Could not release first race barrier: $BarrierRaceName" }
+        if ($ReleaseFirstBeforeSecond) {
+          $firstCompleted = $false
+          for ($attempt = 0; $attempt -lt $barrierAttempts; $attempt++) {
+            if ($first.State -in @('Completed','Failed','Stopped')) { $firstCompleted = $true; break }
+            Start-Sleep -Milliseconds 100
+          }
+          if (-not $firstCompleted) { throw "First race worker did not finish before stale-client release: $BarrierRaceName" }
+        }
         docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -c `
           "insert into public.__test_race_barrier(race, worker, released_at) values ('$BarrierRaceName','second',statement_timestamp()) on conflict (race, worker) do update set released_at=excluded.released_at" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Could not release second race barrier: $BarrierRaceName" }
@@ -455,6 +467,91 @@ try {
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/teacher_attendance_existing_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Existing teacher attendance concurrency assertion failed.' }
+
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
+    -f '/workspace/supabase/tests/concurrency/batch1_race_setup.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare Batch 1 race fixtures.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' `
+    -ExpectedExitPairs @('0,3') -ReleaseFirstBeforeSecond `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'staff-existing' `
+    -FirstPsqlVariables @('race_name=staff-existing','worker_name=first','user_id=10000000-0000-4000-8000-000000000001','session_id=1d000000-0000-4000-8000-000000000032','target_status=absent','expected_revision=1','reason=staff existing first','request_id=batch1-staff-existing-first') `
+    -SecondPsqlVariables @('race_name=staff-existing','worker_name=second','user_id=10000000-0000-4000-8000-000000000002','session_id=1d000000-0000-4000-8000-000000000032','target_status=excused','expected_revision=1','reason=staff existing second','request_id=batch1-staff-existing-second')
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 `
+    -v 'session_id=1d000000-0000-4000-8000-000000000032' -v 'winner_revision=2' `
+    -v 'first_request=batch1-staff-existing-first' -v 'second_request=batch1-staff-existing-second' `
+    -v 'race_name=staff-existing' -v 'refresh_request=batch1-staff-existing-refresh' -v 'credit_delta=2' `
+    -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_attendance_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Existing-row staff attendance race assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' `
+    -ExpectedExitPairs @('0,3') -ReleaseFirstBeforeSecond `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'staff-absent' `
+    -FirstPsqlVariables @('race_name=staff-absent','worker_name=first','user_id=10000000-0000-4000-8000-000000000001','session_id=1d000000-0000-4000-8000-000000000031','target_status=absent','expected_revision=','reason=staff absent first','request_id=batch1-staff-absent-first') `
+    -SecondPsqlVariables @('race_name=staff-absent','worker_name=second','user_id=10000000-0000-4000-8000-000000000002','session_id=1d000000-0000-4000-8000-000000000031','target_status=excused','expected_revision=','reason=staff absent second','request_id=batch1-staff-absent-second')
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 `
+    -v 'session_id=1d000000-0000-4000-8000-000000000031' -v 'winner_revision=1' `
+    -v 'first_request=batch1-staff-absent-first' -v 'second_request=batch1-staff-absent-second' `
+    -v 'race_name=staff-absent' -v 'refresh_request=batch1-staff-absent-refresh' -v 'credit_delta=1' `
+    -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_attendance_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Initially-absent staff attendance race assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/batch1_teacher_worker.sql' `
+    -ExpectedExitPairs @('0,3') -ReleaseFirstBeforeSecond `
+    -StartSecondDelayMilliseconds 0 `
+    -BarrierRaceName 'staff-cross-role' `
+    -FirstPsqlVariables @('race_name=staff-cross-role','worker_name=first','user_id=10000000-0000-4000-8000-000000000002','session_id=1d000000-0000-4000-8000-000000000033','target_status=absent','expected_revision=1','reason=cross role staff','request_id=batch1-cross-role-staff') `
+    -SecondPsqlVariables @('race_name=staff-cross-role','worker_name=second','session_id=1d000000-0000-4000-8000-000000000033','target_status=excused','expected_revision=1','reason=cross role teacher','request_id=batch1-cross-role-teacher')
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 `
+    -v 'session_id=1d000000-0000-4000-8000-000000000033' -v 'winner_revision=2' `
+    -v 'first_request=batch1-cross-role-staff' -v 'second_request=batch1-cross-role-teacher' `
+    -v 'race_name=staff-cross-role' -v 'refresh_request=batch1-cross-role-refresh' -v 'credit_delta=2' `
+    -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_attendance_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Cross-role teacher/staff attendance race assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/batch1_payment_worker.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/batch1_payment_worker.sql' `
+    -ExpectedExitPairs @('0,0') -StartSecondDelayMilliseconds 0 -BarrierRaceName 'batch1-payment-same' `
+    -FirstPsqlVariables @('race_name=batch1-payment-same','worker_name=first','charge_id=41000000-0000-4000-8000-000000000021','amount_minor=100000','method=cash','idempotency_key=batch1-payment-race-same') `
+    -SecondPsqlVariables @('race_name=batch1-payment-same','worker_name=second','charge_id=41000000-0000-4000-8000-000000000021','amount_minor=100000','method=cash','idempotency_key=batch1-payment-race-same')
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -v 'idempotency_key=batch1-payment-race-same' -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_payment_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Concurrent same-payload payment assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/batch1_payment_worker.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/batch1_payment_worker.sql' `
+    -ExpectedExitPairs @('0,3','3,0') -StartSecondDelayMilliseconds 0 -BarrierRaceName 'batch1-payment-different' `
+    -FirstPsqlVariables @('race_name=batch1-payment-different','worker_name=first','charge_id=41000000-0000-4000-8000-000000000022','amount_minor=110000','method=cash','idempotency_key=batch1-payment-race-different') `
+    -SecondPsqlVariables @('race_name=batch1-payment-different','worker_name=second','charge_id=41000000-0000-4000-8000-000000000022','amount_minor=120000','method=cash','idempotency_key=batch1-payment-race-different')
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -v 'idempotency_key=batch1-payment-race-different' -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_payment_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Concurrent changed-payload payment assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/batch1_intake_worker.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/batch1_intake_worker.sql' `
+    -ExpectedExitPairs @('0,0') -StartSecondDelayMilliseconds 0 -BarrierRaceName 'batch1-intake-same' `
+    -FirstPsqlVariables @('race_name=batch1-intake-same','worker_name=first','guardian_name=Batch1 Same Guardian','phone=+85363000001','student_name=Batch1 Same Student','idempotency_key=batch1-intake-race-same') `
+    -SecondPsqlVariables @('race_name=batch1-intake-same','worker_name=second','guardian_name=Batch1 Same Guardian','phone=+85363000001','student_name=Batch1 Same Student','idempotency_key=batch1-intake-race-same')
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -v 'idempotency_key=batch1-intake-race-same' -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_intake_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Concurrent same-payload intake assertion failed.' }
+
+  Invoke-DatabaseRace `
+    -FirstFile '/workspace/supabase/tests/concurrency/batch1_intake_worker.sql' `
+    -SecondFile '/workspace/supabase/tests/concurrency/batch1_intake_worker.sql' `
+    -ExpectedExitPairs @('0,3','3,0') -StartSecondDelayMilliseconds 0 -BarrierRaceName 'batch1-intake-different' `
+    -FirstPsqlVariables @('race_name=batch1-intake-different','worker_name=first','guardian_name=Batch1 Diff Guardian','phone=+85363000002','student_name=Batch1 Diff Student A','idempotency_key=batch1-intake-race-different') `
+    -SecondPsqlVariables @('race_name=batch1-intake-different','worker_name=second','guardian_name=Batch1 Diff Guardian','phone=+85363000002','student_name=Batch1 Diff Student B','idempotency_key=batch1-intake-race-different')
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -v 'idempotency_key=batch1-intake-race-different' -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_intake_assert.sql'
+  if ($LASTEXITCODE -ne 0) { throw 'Concurrent changed-payload intake assertion failed.' }
 
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/invite_first.sql' `
@@ -662,7 +759,7 @@ try {
     throw 'Blocked migration partially applied mutable DDL before preflight.'
   }
 
-  Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-019, bounded existing/absent attendance contention and races, deterministic teacher-link A/B winner races, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
+  Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-020, bounded existing/absent attendance contention and races, deterministic teacher-link A/B winner races, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'
      union all select 'forced_rls',count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity

@@ -4,8 +4,8 @@ import { revalidatePath } from 'next/cache';
 import { getOperationsContext } from './context';
 import { safeOperationMessage, UserFacingOperationError, userFacingError } from './errors';
 
-export type OperationState = { status: 'idle' | 'success' | 'error'; message?: string };
-const ok = (message: string): OperationState => ({ status: 'success', message });
+export type OperationState = { status: 'idle' | 'success' | 'error'; message?: string; completionToken?: string };
+const ok = (message: string): OperationState => ({ status: 'success', message, completionToken: crypto.randomUUID() });
 const fail = (error: unknown): OperationState => ({ status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '操作未能完成，請稍後再試。', 'admin-operation') });
 const value = (data: FormData, key: string) => String(data.get(key) ?? '').trim();
 const requireManager = (role: string) => {
@@ -46,30 +46,30 @@ export async function recordPaymentAction(_: OperationState, form: FormData): Pr
 
 export async function submitAttendanceAction(_: OperationState, form: FormData): Promise<OperationState> {
   try {
-    const ctx = await getOperationsContext(); const sessionId = value(form, 'session_id'); const studentId = value(form, 'student_id'); const status = value(form, 'status');
-    if (!sessionId || !studentId || !['present','absent','excused','makeup_completed'].includes(status)) throw userFacingError('請選擇課堂、學生及有效狀態。');
-    const { error } = await ctx.supabase.rpc('submit_attendance', { target_session_id: sessionId, records: [{ student_id: studentId, status, internal_note: value(form, 'note') || null }] });
-    if (error) throw error; revalidatePath('/admin/attendance'); revalidatePath('/admin/leave-makeup'); return ok('點名已儲存。');
-  } catch (error) { return fail(error); }
-}
-
-export async function submitSessionAttendanceAction(_: OperationState, form: FormData): Promise<OperationState> {
-  try {
     const ctx = await getOperationsContext();
+    requireManager(ctx.role);
     const sessionId = value(form, 'session_id');
-    const records = Array.from(form.entries())
-      .filter(([key]) => key.startsWith('attendance:'))
-      .map(([key, recordStatus]) => ({
-        student_id: key.slice('attendance:'.length),
-        status: String(recordStatus),
-        internal_note: null
-      }));
-    if (!sessionId || records.length === 0) throw userFacingError('這節課沒有可提交的學生點名。');
-    if (records.some((record) => !['present', 'absent', 'excused'].includes(record.status))) throw userFacingError('點名狀態無效。');
-    const { error } = await ctx.supabase.rpc('submit_attendance', { target_session_id: sessionId, records });
+    const studentId = value(form, 'student_id');
+    const status = value(form, 'status');
+    const expectedRevisionValue = value(form, 'expected_revision');
+    const expectedRevision = expectedRevisionValue ? Number(expectedRevisionValue) : null;
+    const requestId = value(form, 'request_id');
+    if (!form.has('expected_revision') || !sessionId || !studentId
+      || !['present', 'absent', 'excused'].includes(status) || !requestId
+      || (expectedRevision !== null && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1))) {
+      throw userFacingError('請完整填寫點名資料後再提交。');
+    }
+    const { data, error } = await ctx.supabase.rpc('submit_staff_attendance', {
+      target_session_id: sessionId,
+      target_student_id: studentId,
+      target_status: status,
+      target_expected_revision: expectedRevision,
+      target_reason: value(form, 'reason') || null,
+      target_request_id: requestId
+    });
     if (error) throw error;
     revalidatePath('/admin/attendance'); revalidatePath('/admin/sessions'); revalidatePath('/admin/packages'); revalidatePath('/admin/dashboard');
-    return ok(`已儲存 ${records.length} 位學生的點名；重複提交不會重複扣堂。`);
+    return ok(data?.changed ? '點名已更新。' : '點名沒有變更。');
   } catch (error) { return fail(error); }
 }
 

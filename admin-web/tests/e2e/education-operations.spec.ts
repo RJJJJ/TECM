@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Browser, type Locator, type Page, type TestInfo } from '@playwright/test';
 import {
   assertCredentialedE2EEnvironment,
   credentialedE2EEnvironment,
@@ -67,7 +67,9 @@ function activeTableRow(page: Page, name: string, status = '使用中') {
 type CreatedFixture = {
   prefix: string;
   studentName: string;
+  secondStudentName: string;
   guardianName: string;
+  secondGuardianName: string;
   campusName: string;
   courseName: string;
   cohortName: string;
@@ -90,14 +92,13 @@ function macauLaterTodayInput(offsetMinutes: number) {
     timeZone: 'Asia/Macau', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
   });
-  const parts = formatter.formatToParts(new Date());
+  const parts = formatter.formatToParts(new Date(Date.now() + offsetMinutes * 60_000));
   const value = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find(item => item.type === type)?.value ?? 0);
-  const futureMinutes = Math.min(value('hour') * 60 + value('minute') + offsetMinutes, 23 * 60 + 59);
-  return `${value('year')}-${String(value('month')).padStart(2, '0')}-${String(value('day')).padStart(2, '0')}T${String(Math.floor(futureMinutes / 60)).padStart(2, '0')}:${String(futureMinutes % 60).padStart(2, '0')}`;
+  return `${value('year')}-${String(value('month')).padStart(2, '0')}-${String(value('day')).padStart(2, '0')}T${String(value('hour')).padStart(2, '0')}:${String(value('minute')).padStart(2, '0')}`;
 }
 
 async function cleanupAdminUxFixture(client: SupabaseClient, fixture: CreatedFixture) {
-  let studentsQuery = client.from('students').select('id,organization_id').in('display_name', [fixture.studentName, fixture.enrollmentStudentName]);
+  let studentsQuery = client.from('students').select('id,organization_id').in('display_name', [fixture.studentName, fixture.secondStudentName, fixture.enrollmentStudentName]);
   if (organizationId) studentsQuery = studentsQuery.eq('organization_id', organizationId);
   const { data: students, error: studentError } = await studentsQuery;
   if (studentError) throw studentError;
@@ -159,7 +160,7 @@ async function cleanupAdminUxFixture(client: SupabaseClient, fixture: CreatedFix
     if (cohortError) throw cohortError;
     const { error: studentUpdateError } = await client.from('students').update({ status: 'inactive' }).eq('organization_id', organizationId).in('id', studentIds);
     if (studentUpdateError) throw studentUpdateError;
-    const { error: parentError } = await client.from('parent_profiles').update({ account_status: 'disabled' }).eq('organization_id', organizationId).eq('full_name', fixture.guardianName);
+    const { error: parentError } = await client.from('parent_profiles').update({ account_status: 'disabled' }).eq('organization_id', organizationId).in('full_name', [fixture.guardianName, fixture.secondGuardianName]);
     if (parentError) throw parentError;
 
     const { data: cohorts, error: cohortLookupError } = await client.from('exam_cohorts').select('id').eq('organization_id', organizationId).like('name', `${fixture.prefix}%`);
@@ -196,13 +197,15 @@ test.describe('教育中心營運主流程', () => {
       .replace(/[^a-z0-9_-]/gi, '_');
     const prefix = `TEST_ADMIN_UX_${fixtureScope}`;
     const studentName = `${prefix}_STUDENT`;
+    const secondStudentName = `${prefix}_STUDENT_SECOND`;
     const guardianName = `${prefix}_PARENT`;
+    const secondGuardianName = `${prefix}_PARENT_SECOND`;
     const campusName = `${prefix}_CAMPUS`;
     const courseName = `${prefix}_COURSE`;
     const cohortName = `${prefix}_COHORT`;
     const feePlanName = `${prefix}_PACKAGE`;
     const enrollmentStudentName = `${prefix}_ENROLLMENT_STUDENT`;
-    fixture = { prefix, studentName, guardianName, campusName, courseName, cohortName, feePlanName, enrollmentStudentName };
+    fixture = { prefix, studentName, secondStudentName, guardianName, secondGuardianName, campusName, courseName, cohortName, feePlanName, enrollmentStudentName };
     test.setTimeout(180_000);
     const adminClient = createClient(supabaseUrl!, serviceRoleKey!, { auth: { persistSession: false, autoRefreshToken: false } });
     const assertPersisted = async (table: string, filters: Record<string, string>) => {
@@ -357,26 +360,54 @@ test.describe('教育中心營運主流程', () => {
     await page.getByLabel('學生姓名').fill(studentName);
     await page.getByLabel('班別').selectOption({ label: cohortName });
     await page.getByLabel('套票').selectOption({ label: feePlanName });
+    const intakeForm = page.getByLabel('家長姓名').locator('xpath=ancestor::form');
+    const expectRotatedKey = async (form: Locator, previousKey: string) => {
+      const keyInput = form.locator('input[name="idempotency_key"]');
+      await expect.poll(async () => keyInput.inputValue()).toMatch(new RegExp(`^(?!${previousKey}$).+$`));
+      return keyInput.inputValue();
+    };
+    const firstIntakeKey = crypto.randomUUID();
+    await intakeForm.locator('input[name="idempotency_key"]').evaluate((element, key) => { (element as HTMLInputElement).value = key; }, firstIntakeKey);
     await page.getByRole('button', { name: '建立資料' }).click();
     await expect(page.getByRole('status')).toContainText('已建立');
+    const secondIntakeKey = await expectRotatedKey(intakeForm, firstIntakeKey);
+    await page.getByLabel('家長姓名').fill(secondGuardianName);
+    await page.getByLabel('電話').fill('66881235');
+    await page.getByLabel('學生姓名').fill(secondStudentName);
+    await page.getByLabel('班別').selectOption({ label: cohortName });
+    await page.getByLabel('套票').selectOption({ label: feePlanName });
+    await page.getByRole('button', { name: '建立資料' }).click();
+    await expect(page.getByRole('status')).toContainText('已建立');
+    await expectRotatedKey(intakeForm, secondIntakeKey);
     await page.reload();
     await assertPersisted('students', { display_name: studentName });
+    await assertPersisted('students', { display_name: secondStudentName });
     await assertPersisted('parent_profiles', { full_name: guardianName });
+    await assertPersisted('parent_profiles', { full_name: secondGuardianName });
     await expect(page.getByText(studentName).first()).toBeVisible();
 
     await page.goto('/admin/payments');
-    const chargeValue = await page.getByLabel('收費項目').locator('option').filter({ hasText: studentName }).getAttribute('value');
+    const chargeValue = await page.getByLabel('收費項目').locator('option').filter({ hasText: studentName }).first().getAttribute('value');
     await page.getByLabel('收費項目').selectOption(chargeValue!);
-    await page.getByLabel('付款金額（仙）').fill('120000');
+    const paymentForm = page.getByLabel('收費項目').locator('xpath=ancestor::form');
+    const firstPaymentKey = crypto.randomUUID();
+    await paymentForm.locator('input[name="idempotency_key"]').evaluate((element, key) => { (element as HTMLInputElement).value = key; }, firstPaymentKey);
+    await page.getByLabel('付款金額（仙）').fill('40000');
     await page.getByRole('button', { name: '確認收款' }).click();
     await expect(page.getByRole('status')).toContainText('付款已記錄');
+    const secondPaymentKey = await expectRotatedKey(paymentForm, firstPaymentKey);
+    await page.getByLabel('收費項目').selectOption(chargeValue!);
+    await page.getByLabel('付款金額（仙）').fill('80000');
+    await page.getByRole('button', { name: '確認收款' }).click();
+    await expect(page.getByRole('status')).toContainText('付款已記錄');
+    await expectRotatedKey(paymentForm, secondPaymentKey);
     const persistedStudent = await adminClient.from('students').select('id').eq('organization_id', organizationId!).eq('display_name', studentName).single();
     expect(persistedStudent.error).toBeNull();
     await assertPersisted('cohort_students', { student_id: persistedStudent.data!.id });
     await assertPersisted('student_packages', { student_id: persistedStudent.data!.id });
-    const persistedPayments = await adminClient.from('payments').select('id').eq('organization_id', organizationId!).eq('amount_minor', '120000');
-    expect(persistedPayments.error).toBeNull();
-    expect(persistedPayments.data?.length ?? 0).toBeGreaterThan(0);
+    const persistedAllocations = await adminClient.from('payment_allocations').select('amount_minor').eq('organization_id', organizationId!).eq('charge_id', chargeValue!);
+    expect(persistedAllocations.error).toBeNull();
+    expect((persistedAllocations.data ?? []).map((row) => Number(row.amount_minor)).sort((a, b) => a - b)).toEqual([40000, 80000]);
 
     await page.goto('/admin/guardians');
     const existingParentCard = page.locator('article').filter({ hasText: 'Guardian A' });
@@ -408,14 +439,25 @@ test.describe('教育中心營運主流程', () => {
       .eq('organization_id', organizationId!).eq('cohort_id', persistedCohort.data!.id).eq('student_id', standaloneStudent.data!.id);
     expect(retireStandaloneEnrollment.error).toBeNull();
 
+    const attendanceSessionId = persistedSessions.data![0].id;
+    const historicalSession = await adminClient.from('lesson_sessions').update({
+      starts_at: `${macauDateInput(0)}T00:00:00+08:00`,
+      ends_at: `${macauDateInput(0)}T00:01:00+08:00`,
+      status: 'completed'
+    }).eq('id', attendanceSessionId);
+    expect(historicalSession.error).toBeNull();
     await page.goto('/admin/attendance');
-    const studentGroup = page.getByRole('group', { name: studentName });
-    await studentGroup.getByText('出席').click();
-    const attendancePanel = studentGroup.locator('xpath=ancestor::form');
-    await attendancePanel.getByRole('button', { name: '提交整班點名' }).click();
-    await expect(attendancePanel.getByRole('status')).toContainText('已儲存');
-    await attendancePanel.getByRole('button', { name: '提交整班點名' }).click();
-    await expect(attendancePanel.getByRole('status')).toContainText('不會重複扣堂');
+    const attendancePanel = page.locator(`form:has(input[name="session_id"][value="${attendanceSessionId}"]):has(input[name="student_id"][value="${persistedStudent.data!.id}"])`);
+    await expect(attendancePanel).toHaveCount(1);
+    await attendancePanel.getByText('出席', { exact: true }).click();
+    await attendancePanel.getByLabel(`${studentName}的修改原因`).fill('Playwright staff canonical attendance');
+    await attendancePanel.getByRole('button', { name: '更新點名' }).click();
+    await expect.poll(async () => {
+      const { data, error } = await adminClient.from('attendance_records').select('status,revision,internal_note')
+        .eq('organization_id', organizationId!).eq('session_id', attendanceSessionId).eq('student_id', persistedStudent.data!.id).maybeSingle();
+      expect(error).toBeNull();
+      return data ? `${data.status}|${data.revision}|${data.internal_note}` : 'missing';
+    }).toBe('present|1|Playwright staff canonical attendance');
 
     await assertPersisted('attendance_records', { student_id: persistedStudent.data!.id });
     await page.goto('/admin/packages');
@@ -493,7 +535,8 @@ test.describe('教育中心營運主流程', () => {
     const scratchA = `${prefix}_SCRATCH_A`;
     const studentName = `${prefix}_STUDENT`;
     fixture = {
-      prefix, studentName, enrollmentStudentName: studentName, guardianName: `${prefix}_UNUSED_PARENT`,
+      prefix, studentName, secondStudentName: studentName, enrollmentStudentName: studentName,
+      guardianName: `${prefix}_UNUSED_PARENT`, secondGuardianName: `${prefix}_UNUSED_PARENT_SECOND`,
       campusName: `${prefix}_UNUSED_CAMPUS`, courseName: pythonCourse, cohortName: pythonA,
       feePlanName: `${prefix}_UNUSED_PACKAGE`
     };
@@ -623,8 +666,117 @@ async function signInTeacher(page: Page) {
   await expect(page).toHaveURL(/\/admin\/attendance$/, { timeout: 30_000 });
 }
 
-test('Teacher stale attendance page is rejected and refresh receives the new revision', async ({ browser, request }, testInfo) => {
-  test.setTimeout(180_000);
+async function signInAdmin(page: Page) {
+  await page.goto('/login');
+  await page.getByLabel('電郵').fill(email!);
+  await page.getByLabel('密碼').fill(password!);
+  await page.getByRole('button', { name: '登入' }).click();
+  await expect(page).toHaveURL(/\/admin\/dashboard$/, { timeout: 30_000 });
+}
+
+async function assertStaffStaleAttendance(browser: Browser, request: APIRequestContext, testInfo: TestInfo) {
+  test.skip(!email || !password || !supabaseUrl || !serviceRoleKey || !organizationId, '需要本機 Admin 測試登入及 Supabase fixture 管理環境');
+  const fixtureClient = createClient(supabaseUrl!, serviceRoleKey!, { auth: { persistSession: false, autoRefreshToken: false } });
+  await precompileAdminRoutes(request, ['/admin/attendance']);
+  const sessionId = crypto.randomUUID();
+  const studentId = '15000000-0000-4000-8000-000000000001';
+  const requestPrefix = `staff-stale-${canonicalRunId}-${testInfo.project.name}`;
+  const requestA = `${requestPrefix}-a`;
+  const requestB = `${requestPrefix}-b`;
+  const requestRefresh = `${requestPrefix}-refresh`;
+  const localDate = macauDateInput(0);
+  const staleWriteSideEffectTables = [
+    'attendance_records', 'audit_logs', 'notifications', 'notification_outbox',
+    'leave_requests', 'makeup_entitlements', 'makeup_tasks', 'makeup_sessions',
+    'payments', 'payment_allocations',
+    'parent_profiles', 'children', 'students', 'parent_student_links',
+    'cohort_students', 'student_packages', 'credit_ledger', 'charges'
+  ] as const;
+  const countRows = async (table: typeof staleWriteSideEffectTables[number]) => {
+    const result = await fixtureClient.from(table).select('id', { count: 'exact', head: true });
+    expect(result.error).toBeNull();
+    return result.count ?? 0;
+  };
+  const sideEffectCounts = async () => Object.fromEntries(await Promise.all(
+    staleWriteSideEffectTables.map(async (table) => [table, await countRows(table)])
+  ));
+  const notificationsBefore = await countRows('notifications');
+  const outboxBefore = await countRows('notification_outbox');
+  const sessionInsert = await fixtureClient.from('lesson_sessions').insert({
+    id: sessionId, organization_id: organizationId!,
+    cohort_id: '1a000000-0000-4000-8000-000000000001',
+    lesson_plan_id: '1c000000-0000-4000-8000-000000000001',
+    teacher_id: '19000000-0000-4000-8000-000000000001',
+    starts_at: `${localDate}T00:00:00+08:00`, ends_at: `${localDate}T00:01:00+08:00`, status: 'completed'
+  });
+  expect(sessionInsert.error).toBeNull();
+  const attendanceInsert = await fixtureClient.from('attendance_records').insert({
+    organization_id: organizationId!, session_id: sessionId, student_id: studentId,
+    status: 'present', recorded_at: `${localDate}T00:01:00+08:00`
+  }).select('id,revision').single();
+  expect(attendanceInsert.error).toBeNull();
+  expect(attendanceInsert.data?.revision).toBe(1);
+
+  const contextA = await browser.newContext();
+  const contextB = await browser.newContext();
+  const pageA = await contextA.newPage();
+  const pageB = await contextB.newPage();
+  const formFor = (page: Page) => page.locator(`form:has(input[name="session_id"][value="${sessionId}"]):has(input[name="student_id"][value="${studentId}"])`);
+  try {
+    await Promise.all([signInAdmin(pageA), signInAdmin(pageB)]);
+    await Promise.all([pageA.goto('/admin/attendance'), pageB.goto('/admin/attendance')]);
+    const formA = formFor(pageA);
+    const formB = formFor(pageB);
+    await expect(formA.locator('input[name="expected_revision"]')).toHaveValue('1');
+    await expect(formB.locator('input[name="expected_revision"]')).toHaveValue('1');
+    await formA.locator('input[name="reason"]').fill('Playwright staff A');
+    await formA.locator('input[name="request_id"]').evaluate((element, value) => { (element as HTMLInputElement).value = value; }, requestA);
+    await formA.getByText('缺席', { exact: true }).click();
+    await formA.getByRole('button', { name: '更新點名' }).click();
+    await expect.poll(async () => {
+      const row = await fixtureClient.from('attendance_records').select('status,revision').eq('session_id', sessionId).eq('student_id', studentId).single();
+      return row.error ? `error:${row.error.code}` : `${row.data.status}:${row.data.revision}`;
+    }, { timeout: 30_000 }).toBe('absent:2');
+    const staleWriteBaseline = await sideEffectCounts();
+
+    await formB.locator('input[name="reason"]').fill('Playwright staff B stale');
+    await formB.locator('input[name="request_id"]').evaluate((element, value) => { (element as HTMLInputElement).value = value; }, requestB);
+    await formB.getByText('請假', { exact: true }).click();
+    await formB.getByRole('button', { name: '更新點名' }).click();
+    await expect(formFor(pageB).getByRole('status')).toContainText('此點名已被其他操作更新，請重新載入後再提交。', { timeout: 30_000 });
+    await expect(pageB.locator('body')).not.toContainText(/PGRST|SQLSTATE|uuid|token|@|stack trace/i);
+    const afterConflict = await fixtureClient.from('attendance_records').select('status,revision').eq('session_id', sessionId).eq('student_id', studentId).single();
+    expect(afterConflict.data).toMatchObject({ status: 'absent', revision: 2 });
+    const auditA = await fixtureClient.from('audit_logs').select('id', { count: 'exact', head: true }).contains('new_data', { attendance_history: { request_id: requestA } });
+    const auditB = await fixtureClient.from('audit_logs').select('id', { count: 'exact', head: true }).contains('new_data', { attendance_history: { request_id: requestB } });
+    expect(auditA.count).toBe(1);
+    expect(auditB.count).toBe(0);
+    expect(await countRows('notifications')).toBe(notificationsBefore);
+    expect(await countRows('notification_outbox')).toBe(outboxBefore);
+    expect(await sideEffectCounts()).toEqual(staleWriteBaseline);
+
+    await pageB.reload();
+    const refreshed = formFor(pageB);
+    await expect(refreshed.locator('input[name="expected_revision"]')).toHaveValue('2');
+    await refreshed.locator('input[name="reason"]').fill('Playwright staff refreshed');
+    await refreshed.locator('input[name="request_id"]').evaluate((element, value) => { (element as HTMLInputElement).value = value; }, requestRefresh);
+    await refreshed.getByText('出席', { exact: true }).click();
+    await refreshed.getByRole('button', { name: '更新點名' }).click();
+    await expect.poll(async () => {
+      const row = await fixtureClient.from('attendance_records').select('status,revision').eq('session_id', sessionId).eq('student_id', studentId).single();
+      return row.error ? `error:${row.error.code}` : `${row.data.status}:${row.data.revision}`;
+    }, { timeout: 30_000 }).toBe('present:3');
+  } finally {
+    await Promise.allSettled([contextA.close(), contextB.close()]);
+    if (attendanceInsert.data?.id) {
+      await fixtureClient.from('attendance_records').delete().eq('id', attendanceInsert.data.id);
+      await fixtureClient.from('audit_logs').delete().eq('record_id', attendanceInsert.data.id);
+    }
+    await fixtureClient.from('lesson_sessions').delete().eq('id', sessionId);
+  }
+}
+
+async function assertTeacherStaleAttendance(browser: Browser, request: APIRequestContext, testInfo: TestInfo) {
   test.skip(
     !teacherEmail || !teacherPassword || !supabaseUrl || !serviceRoleKey || !organizationId,
     '需要本機 Teacher 測試登入及 Supabase fixture 管理環境'
@@ -759,5 +911,14 @@ test('Teacher stale attendance page is rejected and refresh receives the new rev
       await fixtureClient.from('audit_logs').delete().eq('record_id', attendance.data.id);
     }
     await fixtureClient.from('lesson_sessions').delete().eq('id', sessionId);
+  }
+}
+
+test('Role-specific stale attendance page rejects the stale write and accepts a refreshed retry', async ({ browser, request }, testInfo) => {
+  test.setTimeout(180_000);
+  if (testInfo.project.name === 'teacher-mobile') {
+    await assertTeacherStaleAttendance(browser, request, testInfo);
+  } else {
+    await assertStaffStaleAttendance(browser, request, testInfo);
   }
 });

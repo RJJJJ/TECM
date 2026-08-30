@@ -21,7 +21,7 @@ begin
       ('public.capture_attendance_history_audit()'::regprocedure, false),
       ('public.get_teacher_attendance_sessions()'::regprocedure, true),
       ('public.submit_teacher_attendance(uuid,uuid,text,bigint,text,text)'::regprocedure, true),
-      ('public.submit_attendance(uuid,jsonb)'::regprocedure, true)
+      ('public.submit_staff_attendance(uuid,uuid,text,bigint,text,text)'::regprocedure, true)
     ) as expected(signature, authenticated_expected)
   loop
     select count(*),
@@ -145,9 +145,10 @@ begin
   exception when insufficient_privilege then null;
   end;
   begin
-    perform public.submit_attendance(
+    perform public.submit_staff_attendance(
       '1d000000-0000-4000-8000-000000000020',
-      '[]'::jsonb
+      '15000000-0000-4000-8000-000000000001',
+      'present', null, 'unauthenticated', '018-anon-staff'
     );
     raise exception '018 unauthenticated staff attendance write unexpectedly succeeded';
   exception when insufficient_privilege then null;
@@ -216,11 +217,17 @@ begin
 end
 $$;
 
--- The legacy staff/admin RPC remains available to an authorized staff user.
+-- The canonical revisioned staff/admin RPC remains available to authorized staff.
 select set_config('request.jwt.claim.sub', '10000000-0000-4000-8000-000000000001', false);
-select public.submit_attendance(
+select public.submit_staff_attendance(
   '1d000000-0000-4000-8000-000000000020',
-  '[{"student_id":"15000000-0000-4000-8000-000000000001","status":"present","internal_note":"018 staff regression"}]'::jsonb
+  '15000000-0000-4000-8000-000000000001',
+  'present',
+  (select revision from public.attendance_records
+   where session_id = '1d000000-0000-4000-8000-000000000020'
+     and student_id = '15000000-0000-4000-8000-000000000001'),
+  '018 staff regression',
+  '018-staff-regression'
 );
 reset role;
 
@@ -232,7 +239,10 @@ begin
       and student_id = '15000000-0000-4000-8000-000000000001'
       and status = 'present'
   ) then
-    raise exception '018 staff/admin submit_attendance regression';
+    raise exception '018 staff/admin submit_staff_attendance regression';
+  end if;
+  if to_regprocedure('public.submit_attendance(uuid,jsonb)') is not null then
+    raise exception '018 legacy unversioned attendance RPC remains callable';
   end if;
 end
 $$;

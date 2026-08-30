@@ -29,7 +29,6 @@ test('teacher attendance history has server-enforced assignment, tenant, and wri
   assert.match(revisionMigration, /student is not active in this session cohort/);
   assert.match(migration, /drop policy if exists attendance_teacher_write_own_session on public\.attendance_records/);
   assert.match(migration, /create policy attendance_teacher_read_assigned/);
-  assert.match(migration, /create policy attendance_staff_manage/);
   assert.match(migration, /if not public\.can_manage_organization\(session_organization_id\) then raise exception 'staff authorization required'/);
 });
 

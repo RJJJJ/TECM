@@ -31,6 +31,8 @@ jobs:
         run: ./scripts/testing/migration-014-session-timeouts-mutation-verify.ps1
       - name: Verify attendance function ACL M36/M37/M38 and lifecycle controls
         run: node scripts/testing/attendance-function-acl-mutation-verify.mjs
+      - name: Verify Batch 1 release-blocker mutation resistance
+        run: node scripts/testing/batch1-release-blockers-mutation-verify.mjs
 
   admin-web:
     runs-on: ubuntu-latest
