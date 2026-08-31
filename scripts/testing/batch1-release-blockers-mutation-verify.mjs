@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -150,6 +150,7 @@ function classifyCompleteBaseline(result) {
     });
     passedTests = results.filter((entry) => entry.ok).map((entry) => entry.name);
     if (counts.tests === 0) reasons.push('zero discovered tests');
+    if (counts.tests !== 7 || counts.pass !== 7) reasons.push('complete unit file must execute exactly 7 passing tests');
     if (plans[0] !== counts.tests || results.length !== counts.tests) reasons.push('TAP plan/result count mismatch');
     if (!results.every((entry, index) => entry.index === index + 1)) reasons.push('TAP result indices malformed');
     if (counts.pass + counts.fail + counts.cancelled + counts.skipped + counts.todo !== counts.tests) {
@@ -204,6 +205,35 @@ function repositoryRestored() {
   });
 }
 
+function workspaceFiles(root, relative = '') {
+  const directory = resolve(root, relative);
+  return readdirSync(directory).flatMap((name) => {
+    const childRelative = relative ? `${relative}/${name}` : name;
+    const child = resolve(root, childRelative);
+    return statSync(child).isDirectory() ? workspaceFiles(root, childRelative) : [childRelative.replaceAll('\\', '/')];
+  }).sort();
+}
+
+function workspaceState(root) {
+  const expectedFiles = [...snapshots.keys()].map((file) => file.replaceAll('\\', '/')).sort();
+  const actualFiles = workspaceFiles(root);
+  const hashes = Object.fromEntries([...snapshots].map(([file, bytes]) => {
+    const current = readFileSync(resolve(root, file));
+    return [file, { expected: sha256(bytes), actual: sha256(current), matches: current.equals(bytes) }];
+  }));
+  return {
+    pristine: actualFiles.length === expectedFiles.length && actualFiles.every((file, index) => file === expectedFiles[index]) &&
+      Object.values(hashes).every((entry) => entry.matches),
+    expected_files: expectedFiles,
+    actual_files: actualFiles,
+    hashes
+  };
+}
+
+function restoreWorkspace(root) {
+  for (const [file, bytes] of snapshots) writeFileSync(resolve(root, file), bytes);
+}
+
 function withWorkspace(label, action) {
   const root = mkdtempSync(resolve(tmpdir(), `tecm-batch1-${label.toLowerCase()}-`));
   try {
@@ -216,27 +246,105 @@ function withWorkspace(label, action) {
   }
 }
 
-function mutate(spec, { targetMode = 'one', neutral = false } = {}) {
-  return withWorkspace(spec.id, (root) => {
-    const targetPath = resolve(root, spec.file);
-    let text = readFileSync(targetPath, 'utf8');
-    const search = targetMode === 'zero' ? '__BATCH1_ZERO_MATCH__' : spec.search;
-    if (targetMode === 'multiple') text += `\n${spec.search}\n`;
-    const matches = count(text, search);
-    if (matches !== 1) {
-      return {
-        id: spec.id, accepted: false, matches,
-        classification: matches === 0 ? 'ZERO_MATCH_FAIL_CLOSED' : 'MULTIPLE_MATCH_FAIL_CLOSED',
-        control_passed: targetMode === 'zero' ? matches === 0 : matches > 1,
-        process: null, restoration: 'PASS', cleanup: 'PASS'
+function runMutationCase(root, spec, { targetMode = 'one', neutral = false, beforeBaseline, onMutationBody } = {}) {
+  const initial = workspaceState(root);
+  let baseline;
+  let report;
+  try {
+    if (!initial.pristine) {
+      baseline = {
+        accepted: false, counts: null, mounted_form_test: 'NOT_RUN', required_mutation_tests: [],
+        reasons: ['protected workspace precondition or residue check failed'], process: null
       };
+    } else {
+      beforeBaseline?.(root);
+      baseline = runCompleteBaseline(root);
     }
-    const replacement = neutral ? `${spec.search} ` : spec.replacement;
-    writeFileSync(targetPath, text.replace(search, replacement));
-    const classified = classifyMutationRun(runTest(root, spec.test), spec);
+    if (!baseline.accepted) {
+      report = {
+        id: spec.id, accepted: false, classification: 'baseline_failure', baseline,
+        mutation_body_executed: false, matches: null, process: null
+      };
+    } else {
+      onMutationBody?.(root);
+      const targetPath = resolve(root, spec.file);
+      let text = readFileSync(targetPath, 'utf8');
+      const search = targetMode === 'zero' ? '__BATCH1_ZERO_MATCH__' : spec.search;
+      if (targetMode === 'multiple') text += `\n${spec.search}\n`;
+      const matches = count(text, search);
+      if (matches !== 1) {
+        report = {
+          id: spec.id, accepted: false, baseline, matches,
+          classification: matches === 0 ? 'ZERO_MATCH_FAIL_CLOSED' : 'MULTIPLE_MATCH_FAIL_CLOSED',
+          control_passed: targetMode === 'zero' ? matches === 0 : matches > 1,
+          mutation_body_executed: true, process: null
+        };
+      } else {
+        const replacement = neutral ? `${spec.search} ` : spec.replacement;
+        writeFileSync(targetPath, text.replace(search, replacement));
+        const classified = classifyMutationRun(runTest(root, spec.test), spec);
+        report = {
+          id: spec.id, baseline, matches, classification: classified.accepted ? 'SEMANTIC_ASSERTION' : 'REJECTED',
+          mutation_body_executed: true, ...classified
+        };
+      }
+    }
+  } finally {
+    restoreWorkspace(root);
+  }
+  const restored = workspaceState(root);
+  report.restoration = restored.pristine ? 'PASS' : 'FAIL';
+  report.cleanup = restored.pristine ? 'PASS' : 'FAIL';
+  report.precondition = initial;
+  if (report.accepted && !restored.pristine) report.accepted = false;
+  if (report.control_passed && !restored.pristine) report.control_passed = false;
+  return report;
+}
+
+function mutate(spec, options = {}) {
+  return withWorkspace(spec.id, (root) => {
+    return runMutationCase(root, spec, options);
+  });
+}
+
+function runPoisonedLaterBaselineControl() {
+  return withWorkspace('poisoned-later-baseline-control', (root) => {
+    const firstLifecycle = runMutationCase(root, cases[0]);
+    const markerPath = resolve(root, '.tecm-batch1-mutation-body-executed');
+    const unitPath = resolve(root, testPath);
+    const original = readFileSync(unitPath);
+    const originalHash = sha256(original);
+    const search = '    assert.match(errors, /LEGACY_IDEMPOTENCY_ERROR_MESSAGE/);';
+    const replacement = '    assert.match(errors, /__BATCH1_POISONED_LATER_BASELINE__/);';
+    const poisonedLifecycle = runMutationCase(root, cases[1], {
+      beforeBaseline: () => {
+        const text = readFileSync(unitPath, 'utf8');
+        if (count(text, search) !== 1) throw new Error('poisoned later-baseline target must match exactly once');
+        writeFileSync(unitPath, text.replace(search, replacement));
+      },
+      onMutationBody: () => writeFileSync(markerPath, 'executed')
+    });
+    const markerAbsent = !existsSync(markerPath);
+    const restored = readFileSync(unitPath);
+    const restoredHash = sha256(restored);
+    const pristineRerun = runMutationCase(root, cases[1]);
+    const finalState = workspaceState(root);
     return {
-      id: spec.id, matches, classification: classified.accepted ? 'SEMANTIC_ASSERTION' : 'REJECTED',
-      ...classified, restoration: 'PASS', cleanup: 'PASS'
+      id: 'CONTROL-POISONED-LATER-BASELINE-NO-MUTATION',
+      control_passed: firstLifecycle.accepted && !poisonedLifecycle.accepted &&
+        poisonedLifecycle.classification === 'baseline_failure' &&
+        poisonedLifecycle.baseline?.counts?.fail === 1 &&
+        poisonedLifecycle.mutation_body_executed === false && markerAbsent &&
+        restored.equals(original) && restoredHash === originalHash &&
+        pristineRerun.accepted && pristineRerun.baseline?.accepted && finalState.pristine,
+      first_lifecycle: firstLifecycle,
+      poisoned_lifecycle: poisonedLifecycle,
+      mutation_marker_absent: markerAbsent,
+      pristine_rerun: pristineRerun,
+      original_hash: originalHash,
+      restored_hash: restoredHash,
+      restoration: restored.equals(original) && restoredHash === originalHash ? 'PASS' : 'FAIL',
+      cleanup: markerAbsent && finalState.pristine ? 'PASS' : 'FAIL'
     };
   });
 }
@@ -270,11 +378,12 @@ function runMountedFormBaselineControl() {
   });
 }
 
-function allGatesPassed({ baseline, baselineControl, postControlBaseline, targetControls, lifecycleControls, results, restoration }) {
-  return baseline.accepted && baselineControl.control_passed && postControlBaseline.accepted &&
+function allGatesPassed({ baseline, baselineControl, postControlBaseline, poisonedBaselineControl, targetControls, lifecycleControls, results, restoration }) {
+  return baseline.accepted && baselineControl.control_passed && postControlBaseline.accepted && poisonedBaselineControl.control_passed &&
     targetControls.every((control) => control.control_passed) &&
     lifecycleControls.every((control) => control.control_passed) &&
-    results.every((result) => result.accepted) && restoration === 'PASS';
+    results.length === cases.length && results.every((result) => result.accepted && result.baseline?.accepted &&
+      result.mutation_body_executed && result.restoration === 'PASS' && result.cleanup === 'PASS') && restoration === 'PASS';
 }
 
 function runLifecycleControls() {
@@ -324,7 +433,7 @@ function runVerifier() {
   if (!baseline.accepted) {
     report = {
       harness: 'batch1-release-blockers-mutation-verify', baseline,
-      baseline_control: 'NOT_RUN', post_control_baseline: 'NOT_RUN', target_controls: 'NOT_RUN',
+      baseline_control: 'NOT_RUN', post_control_baseline: 'NOT_RUN', poisoned_baseline_control: 'NOT_RUN', target_controls: 'NOT_RUN',
       lifecycle_controls: 'NOT_RUN', results: 'NOT_RUN', restoration: repositoryRestored() ? 'PASS' : 'FAIL',
       cleanup: 'PASS', database: 'NOT_USED', container: 'NOT_USED', final_result: 'FAIL'
     };
@@ -335,20 +444,21 @@ function runVerifier() {
   if (!baselineControl.control_passed || !postControlBaseline.accepted) {
     report = {
       harness: 'batch1-release-blockers-mutation-verify', baseline, baseline_control: baselineControl,
-      post_control_baseline: postControlBaseline, target_controls: 'NOT_RUN', lifecycle_controls: 'NOT_RUN',
+      post_control_baseline: postControlBaseline, poisoned_baseline_control: 'NOT_RUN', target_controls: 'NOT_RUN', lifecycle_controls: 'NOT_RUN',
       results: 'NOT_RUN', restoration: repositoryRestored() ? 'PASS' : 'FAIL', cleanup: 'PASS',
       database: 'NOT_USED', container: 'NOT_USED', final_result: 'FAIL'
     };
     failed = true;
   } else {
+    const poisonedBaselineControl = runPoisonedLaterBaselineControl();
     const targetControls = [mutate(cases[0], { targetMode: 'zero' }), mutate(cases[0], { targetMode: 'multiple' })];
     const lifecycleControls = runLifecycleControls();
     const results = cases.map((spec) => mutate(spec));
     const restoration = repositoryRestored() ? 'PASS' : 'FAIL';
-    const finalPassed = allGatesPassed({ baseline, baselineControl, postControlBaseline, targetControls, lifecycleControls, results, restoration });
+    const finalPassed = allGatesPassed({ baseline, baselineControl, postControlBaseline, poisonedBaselineControl, targetControls, lifecycleControls, results, restoration });
     report = {
       harness: 'batch1-release-blockers-mutation-verify', baseline, baseline_control: baselineControl,
-      post_control_baseline: postControlBaseline, target_controls: targetControls,
+      post_control_baseline: postControlBaseline, poisoned_baseline_control: poisonedBaselineControl, target_controls: targetControls,
       lifecycle_controls: lifecycleControls, results, restoration, cleanup: 'PASS',
       database: 'NOT_USED', container: 'NOT_USED', final_result: finalPassed ? 'PASS' : 'FAIL'
     };
@@ -371,11 +481,12 @@ if (process.argv.includes('--control=uncaught-final')) {
   const baseline = { accepted: true };
   const baselineControl = { control_passed: true };
   const postControlBaseline = { accepted: true };
+  const poisonedBaselineControl = { control_passed: true };
   const targetControls = [{ control_passed: true }];
   const lifecycleControls = [{ control_passed: true }];
   const results = [{ accepted: false }];
   const restoration = 'PASS';
-  const passed = allGatesPassed({ baseline, baselineControl, postControlBaseline, targetControls, lifecycleControls, results, restoration });
+  const passed = allGatesPassed({ baseline, baselineControl, postControlBaseline, poisonedBaselineControl, targetControls, lifecycleControls, results, restoration });
   process.stdout.write(`${JSON.stringify({ control: 'uncaught-final', restoration, final_result: passed ? 'PASS' : 'FAIL' })}\n`);
   if (!passed) process.exitCode = 1;
 } else {

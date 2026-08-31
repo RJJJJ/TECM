@@ -2,6 +2,12 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+
+if (process.argv.slice(2).length > 0) {
+  console.error('validate-release-workflow does not accept source-path or test-only overrides');
+  process.exit(2);
+}
 
 const repositoryRoot = resolve(import.meta.dirname, '../..');
 const workflowPath = resolve(repositoryRoot, '.github/workflows/release-validation.yml');
@@ -40,11 +46,9 @@ const staffRaceSpecs = [
     secondFile: '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql',
     firstVariables: "@('race_name=staff-existing','worker_name=first','user_id=10000000-0000-4000-8000-000000000001','session_id=1d000000-0000-4000-8000-000000000032','target_status=absent','expected_revision=1','reason=staff existing first','request_id=batch1-staff-existing-first')",
     secondVariables: "@('race_name=staff-existing','worker_name=second','user_id=10000000-0000-4000-8000-000000000002','session_id=1d000000-0000-4000-8000-000000000032','target_status=excused','expected_revision=1','reason=staff existing second','request_id=batch1-staff-existing-second')",
-    assertionVariables: [
-      "-v 'session_id=1d000000-0000-4000-8000-000000000032' -v 'winner_revision=2'",
-      "-v 'first_request=batch1-staff-existing-first' -v 'second_request=batch1-staff-existing-second'",
-      "-v 'race_name=staff-existing' -v 'refresh_request=batch1-staff-existing-refresh' -v 'credit_delta=2'"
-    ],
+    assertionVariables: ['session_id=1d000000-0000-4000-8000-000000000032', 'winner_revision=2',
+      'first_request=batch1-staff-existing-first', 'second_request=batch1-staff-existing-second',
+      'race_name=staff-existing', 'refresh_request=batch1-staff-existing-refresh', 'credit_delta=2'],
     assertionFailure: "if ($LASTEXITCODE -ne 0) { throw 'Existing-row staff attendance race assertion failed.' }"
   },
   {
@@ -53,11 +57,9 @@ const staffRaceSpecs = [
     secondFile: '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql',
     firstVariables: "@('race_name=staff-absent','worker_name=first','user_id=10000000-0000-4000-8000-000000000001','session_id=1d000000-0000-4000-8000-000000000031','target_status=absent','expected_revision=','reason=staff absent first','request_id=batch1-staff-absent-first')",
     secondVariables: "@('race_name=staff-absent','worker_name=second','user_id=10000000-0000-4000-8000-000000000002','session_id=1d000000-0000-4000-8000-000000000031','target_status=excused','expected_revision=','reason=staff absent second','request_id=batch1-staff-absent-second')",
-    assertionVariables: [
-      "-v 'session_id=1d000000-0000-4000-8000-000000000031' -v 'winner_revision=1'",
-      "-v 'first_request=batch1-staff-absent-first' -v 'second_request=batch1-staff-absent-second'",
-      "-v 'race_name=staff-absent' -v 'refresh_request=batch1-staff-absent-refresh' -v 'credit_delta=1'"
-    ],
+    assertionVariables: ['session_id=1d000000-0000-4000-8000-000000000031', 'winner_revision=1',
+      'first_request=batch1-staff-absent-first', 'second_request=batch1-staff-absent-second',
+      'race_name=staff-absent', 'refresh_request=batch1-staff-absent-refresh', 'credit_delta=1'],
     assertionFailure: "if ($LASTEXITCODE -ne 0) { throw 'Initially-absent staff attendance race assertion failed.' }"
   },
   {
@@ -66,78 +68,339 @@ const staffRaceSpecs = [
     secondFile: '/workspace/supabase/tests/concurrency/batch1_teacher_worker.sql',
     firstVariables: "@('race_name=staff-cross-role','worker_name=first','user_id=10000000-0000-4000-8000-000000000002','session_id=1d000000-0000-4000-8000-000000000033','target_status=absent','expected_revision=1','reason=cross role staff','request_id=batch1-cross-role-staff')",
     secondVariables: "@('race_name=staff-cross-role','worker_name=second','session_id=1d000000-0000-4000-8000-000000000033','target_status=excused','expected_revision=1','reason=cross role teacher','request_id=batch1-cross-role-teacher')",
-    assertionVariables: [
-      "-v 'session_id=1d000000-0000-4000-8000-000000000033' -v 'winner_revision=2'",
-      "-v 'first_request=batch1-cross-role-staff' -v 'second_request=batch1-cross-role-teacher'",
-      "-v 'race_name=staff-cross-role' -v 'refresh_request=batch1-cross-role-refresh' -v 'credit_delta=2'"
-    ],
+    assertionVariables: ['session_id=1d000000-0000-4000-8000-000000000033', 'winner_revision=2',
+      'first_request=batch1-cross-role-staff', 'second_request=batch1-cross-role-teacher',
+      'race_name=staff-cross-role', 'refresh_request=batch1-cross-role-refresh', 'credit_delta=2'],
     assertionFailure: "if ($LASTEXITCODE -ne 0) { throw 'Cross-role teacher/staff attendance race assertion failed.' }"
   }
 ];
 
-function normalizeCommand(lines) {
-  return lines.map((line) => line.trim().replace(/`$/, '').trim()).join(' ').replace(/\s+/g, ' ').trim();
-}
+// PowerShell topology is extracted through the real parser below.
+const powershellAstExtractor = String.raw`
+[CmdletBinding()]
+param([Parameter(Mandatory = $true)][string]$TargetPath)
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
 
-function hasSingleParameter(command, name, exactFragment) {
-  const occurrences = command.match(new RegExp(`(?:^|\\s)-${name}(?=\\s|$)`, 'g')) ?? [];
-  return occurrences.length === 1 && command.includes(exactFragment);
-}
-
-function commandEnd(lines, start) {
-  let end = start;
-  while (end < lines.length - 1 && lines[end].trimEnd().endsWith('`')) end += 1;
-  return end;
-}
-
-function nextNonEmpty(lines, start) {
-  for (let index = start; index < lines.length; index += 1) {
-    if (lines[index].trim() !== '') return index;
+function Convert-Extent([System.Management.Automation.Language.IScriptExtent]$Extent) {
+  if ($null -eq $Extent) { return $null }
+  [ordered]@{
+    text = $Extent.Text
+    start_offset = $Extent.StartOffset
+    end_offset = $Extent.EndOffset
+    start_line = $Extent.StartLineNumber
+    start_column = $Extent.StartColumnNumber
+    end_line = $Extent.EndLineNumber
+    end_column = $Extent.EndColumnNumber
   }
-  return -1;
 }
 
-function powershellBraceDepths(lines) {
-  let depth = 0;
-  return lines.map((line) => {
-    const before = depth;
-    let singleQuoted = false;
-    let doubleQuoted = false;
-    for (let index = 0; index < line.length; index += 1) {
-      const character = line[index];
-      if (singleQuoted) {
-        if (character === "'" && line[index + 1] === "'") index += 1;
-        else if (character === "'") singleQuoted = false;
-        continue;
-      }
-      if (doubleQuoted) {
-        if (character === '`') index += 1;
-        else if (character === '"') doubleQuoted = false;
-        continue;
-      }
-      if (character === '#') break;
-      if (character === "'") singleQuoted = true;
-      else if (character === '"') doubleQuoted = true;
-      else if (character === '{') depth += 1;
-      else if (character === '}') depth -= 1;
+function Get-Ancestors([System.Management.Automation.Language.Ast]$Node) {
+  $items = @()
+  $current = $Node.Parent
+  while ($null -ne $current) {
+    $items += [ordered]@{
+      type = $current.GetType().Name
+      start_offset = $current.Extent.StartOffset
+      end_offset = $current.Extent.EndOffset
     }
-    return before;
+    $current = $current.Parent
+  }
+  @($items)
+}
+
+function Get-NearestFunction([System.Management.Automation.Language.Ast]$Node) {
+  $current = $Node.Parent
+  while ($null -ne $current) {
+    if ($current -is [System.Management.Automation.Language.FunctionDefinitionAst]) { return $current.Name }
+    $current = $current.Parent
+  }
+  return $null
+}
+
+function Test-StaticExpression([System.Management.Automation.Language.Ast]$Node) {
+  if ($null -eq $Node) { return $false }
+  $dynamic = @($Node.FindAll({
+    param($child)
+    $child -is [System.Management.Automation.Language.VariableExpressionAst] -or
+      $child -is [System.Management.Automation.Language.CommandAst] -or
+      $child -is [System.Management.Automation.Language.SubExpressionAst] -or
+      $child -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -or
+      $child -is [System.Management.Automation.Language.MemberExpressionAst] -or
+      $child -is [System.Management.Automation.Language.BinaryExpressionAst] -or
+      $child -is [System.Management.Automation.Language.UnaryExpressionAst] -or
+      $child -is [System.Management.Automation.Language.ExpandableStringExpressionAst] -or
+      $child -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
+      $child -is [System.Management.Automation.Language.HashtableAst]
+  }, $true))
+  return $dynamic.Count -eq 0
+}
+
+function Convert-Element([System.Management.Automation.Language.CommandElementAst]$Element) {
+  $value = $null
+  if ($Element -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $value = $Element.Value }
+  elseif ($Element -is [System.Management.Automation.Language.ConstantExpressionAst]) { $value = [string]$Element.Value }
+  $argument = $null
+  if ($Element -is [System.Management.Automation.Language.CommandParameterAst] -and $null -ne $Element.Argument) {
+    $argument = [ordered]@{
+      type = $Element.Argument.GetType().Name
+      text = $Element.Argument.Extent.Text
+      value = if ($Element.Argument -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $Element.Argument.Value } else { $null }
+      static = Test-StaticExpression $Element.Argument
+      extent = Convert-Extent $Element.Argument.Extent
+    }
+  }
+  [ordered]@{
+    type = $Element.GetType().Name
+    text = $Element.Extent.Text
+    value = $value
+    static = Test-StaticExpression $Element
+    parameter_name = if ($Element -is [System.Management.Automation.Language.CommandParameterAst]) { $Element.ParameterName } else { $null }
+    splatted = $Element -is [System.Management.Automation.Language.VariableExpressionAst] -and $Element.Splatted
+    argument = $argument
+    extent = Convert-Extent $Element.Extent
+  }
+}
+
+try {
+  $tokens = $null
+  $parseErrors = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    [IO.Path]::GetFullPath($TargetPath), [ref]$tokens, [ref]$parseErrors
+  )
+  $commands = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true) |
+    ForEach-Object {
+      [ordered]@{
+        command_name = $_.GetCommandName()
+        invocation_operator = [string]$_.InvocationOperator
+        elements = @($_.CommandElements | ForEach-Object { Convert-Element $_ })
+        nearest_function = Get-NearestFunction $_
+        ancestors = @(Get-Ancestors $_)
+        extent = Convert-Extent $_.Extent
+      }
+    })
+  $functions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
+    ForEach-Object {
+      $functionAst = $_
+      $functionParameters = if ($null -ne $functionAst.Body.ParamBlock) { $functionAst.Body.ParamBlock.Parameters } else { $functionAst.Parameters }
+      [ordered]@{
+        name = $functionAst.Name
+        parameters = @($functionParameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+        body_extent = Convert-Extent $functionAst.Body.Extent
+        extent = Convert-Extent $functionAst.Extent
+      }
+    })
+  $ifs = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.IfStatementAst] }, $true) |
+    ForEach-Object {
+      [ordered]@{
+        clauses = @($_.Clauses | ForEach-Object {
+          [ordered]@{ condition = $_.Item1.Extent.Text; body_extent = Convert-Extent $_.Item2.Extent }
+        })
+        nearest_function = Get-NearestFunction $_
+        ancestors = @(Get-Ancestors $_)
+        extent = Convert-Extent $_.Extent
+      }
+    })
+  $throws = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.ThrowStatementAst] }, $true) |
+    ForEach-Object {
+      [ordered]@{
+        nearest_function = Get-NearestFunction $_
+        ancestors = @(Get-Ancestors $_)
+        extent = Convert-Extent $_.Extent
+      }
+    })
+  $assignments = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true) |
+    ForEach-Object {
+      [ordered]@{
+        left = $_.Left.Extent.Text
+        right = $_.Right.Extent.Text
+        nearest_function = Get-NearestFunction $_
+        ancestors = @(Get-Ancestors $_)
+        extent = Convert-Extent $_.Extent
+      }
+    })
+  $tries = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.TryStatementAst] }, $true) |
+    ForEach-Object {
+      [ordered]@{
+        nearest_function = Get-NearestFunction $_
+        body_extent = Convert-Extent $_.Body.Extent
+        body_statements = @($_.Body.Statements | ForEach-Object {
+          [ordered]@{ type = $_.GetType().Name; extent = Convert-Extent $_.Extent }
+        })
+        catch_count = $_.CatchClauses.Count
+        finally_extent = if ($null -ne $_.Finally) { Convert-Extent $_.Finally.Extent } else { $null }
+        finally_statements = if ($null -ne $_.Finally) {
+          @($_.Finally.Statements | ForEach-Object {
+            [ordered]@{ type = $_.GetType().Name; extent = Convert-Extent $_.Extent }
+          })
+        } else { @() }
+        extent = Convert-Extent $_.Extent
+      }
+    })
+  $payload = [ordered]@{
+    schema_version = 1
+    source_path = [IO.Path]::GetFullPath($TargetPath)
+    runtime = [ordered]@{
+      edition = $PSVersionTable.PSEdition
+      version = $PSVersionTable.PSVersion.ToString()
+      parser_type = [System.Management.Automation.Language.Parser].FullName
+    }
+    parse_errors = @($parseErrors | ForEach-Object {
+      [ordered]@{ message = $_.Message; error_id = $_.ErrorId; extent = Convert-Extent $_.Extent }
+    })
+    commands = $commands
+    functions = $functions
+    ifs = $ifs
+    throws = $throws
+    assignments = $assignments
+    tries = $tries
+    root_extent = Convert-Extent $ast.Extent
+  }
+  [Console]::Out.Write(($payload | ConvertTo-Json -Depth 24 -Compress))
+} catch {
+  [Console]::Error.Write('PowerShell AST extraction failed')
+  exit 1
+}
+`;
+
+function compactProcess(result) {
+  return {
+    status: Number.isInteger(result?.status) ? result.status : null,
+    signal: result?.signal ?? null,
+    error_code: result?.error?.code ?? null
+  };
+}
+
+function parseAstProcessResult(result) {
+  if (result?.error || result?.signal || !Number.isInteger(result?.status) || result.status !== 0) {
+    throw new Error('PowerShell AST subprocess lifecycle rejected');
+  }
+  if (String(result.stderr ?? '').trim() !== '') throw new Error('PowerShell AST subprocess emitted non-JSON diagnostics');
+  const stdout = String(result.stdout ?? '');
+  if (!/^\s*\{[\s\S]*\}\s*$/.test(stdout)) throw new Error('PowerShell AST output contains preamble or is not one JSON object');
+  let document;
+  try {
+    document = JSON.parse(stdout);
+  } catch {
+    throw new Error('PowerShell AST output is malformed JSON');
+  }
+  for (const key of ['source_path', 'runtime', 'parse_errors', 'commands', 'functions', 'ifs', 'throws', 'assignments', 'tries', 'root_extent']) {
+    if (!(key in document)) throw new Error(`PowerShell AST output is incomplete: ${key}`);
+  }
+  if (document.schema_version !== 1 || document.runtime?.parser_type !== 'System.Management.Automation.Language.Parser' ||
+      !Array.isArray(document.parse_errors) || !Array.isArray(document.commands) || !Array.isArray(document.functions) ||
+      !Array.isArray(document.ifs) || !Array.isArray(document.throws) || !Array.isArray(document.assignments) ||
+      !Array.isArray(document.tries)) {
+    throw new Error('PowerShell AST output schema is invalid');
+  }
+  return document;
+}
+
+function extractPowerShellAst(targetPath) {
+  const root = mkdtempSync(resolve(tmpdir(), 'tecm-powershell-ast-'));
+  const extractorPath = resolve(root, 'extract.ps1');
+  let result;
+  try {
+    writeFileSync(extractorPath, powershellAstExtractor);
+    result = spawnSync('pwsh', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-File', extractorPath, '-TargetPath', resolve(targetPath)
+    ], { encoding: 'utf8', timeout: 15_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+    const document = parseAstProcessResult(result);
+    if (resolve(document.source_path) !== resolve(targetPath)) throw new Error('PowerShell AST source identity mismatch');
+    return { document, process: compactProcess(result) };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    if (existsSync(root)) throw new Error('PowerShell AST extractor cleanup failed');
+  }
+}
+
+const normalizeAstText = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
+const inside = (child, parent) => child?.start_offset >= parent?.start_offset && child?.end_offset <= parent?.end_offset;
+
+function bindCommand(command, contract) {
+  const byName = new Map(contract.map((parameter, index) => [parameter.name.toLowerCase(), { ...parameter, index }]));
+  const bindings = new Map();
+  const errors = [];
+  let positionalIndex = 0;
+  const elements = command.elements.slice(1);
+  for (let index = 0; index < elements.length; index += 1) {
+    const element = elements[index];
+    if (element.splatted) {
+      errors.push('splatting is not statically verifiable');
+      continue;
+    }
+    if (element.type === 'CommandParameterAst') {
+      const parameter = byName.get(String(element.parameter_name).toLowerCase());
+      if (!parameter || parameter.name !== element.parameter_name) {
+        errors.push(`unknown or non-exact parameter: ${element.parameter_name}`);
+        continue;
+      }
+      if (bindings.has(parameter.name)) {
+        errors.push(`duplicate parameter: ${parameter.name}`);
+        continue;
+      }
+      if (parameter.switch) {
+        if (element.argument) errors.push(`switch parameter has a value: ${parameter.name}`);
+        bindings.set(parameter.name, { kind: 'switch', value: null });
+        continue;
+      }
+      let value = element.argument;
+      if (!value) {
+        const next = elements[index + 1];
+        if (!next || next.type === 'CommandParameterAst' || next.splatted) {
+          errors.push(`missing value for parameter: ${parameter.name}`);
+          continue;
+        }
+        value = next;
+        index += 1;
+      }
+      bindings.set(parameter.name, { kind: 'value', value });
+      continue;
+    }
+    while (positionalIndex < contract.length && bindings.has(contract[positionalIndex].name)) positionalIndex += 1;
+    if (positionalIndex >= contract.length) {
+      errors.push('unused extra positional argument');
+      continue;
+    }
+    const parameter = contract[positionalIndex];
+    if (parameter.switch) {
+      errors.push(`ambiguous positional switch binding: ${parameter.name}`);
+      positionalIndex += 1;
+      continue;
+    }
+    bindings.set(parameter.name, { kind: 'value', value: element, positional: true });
+    positionalIndex += 1;
+  }
+  return { bindings, errors };
+}
+
+function staticValueMatches(binding, expected) {
+  if (!binding || binding.kind !== 'value' || !binding.value?.static) return false;
+  if (binding.value.value !== null && binding.value.value !== undefined) return String(binding.value.value) === String(expected);
+  return normalizeAstText(binding.value.text) === normalizeAstText(expected);
+}
+
+function commandElementKeys(command) {
+  return command.elements.slice(1).map((element) => {
+    if (element.type === 'CommandParameterAst') return `parameter:${String(element.parameter_name).toLowerCase()}`;
+    if (element.splatted) return 'splat';
+    if (element.value !== null && element.value !== undefined) return `value:${element.value}`;
+    return `expression:${normalizeAstText(element.text)}`;
   });
 }
 
-function findRaceSegment(text, raceName) {
-  const lines = text.split(/\r?\n/);
-  const barrierLines = lines.flatMap((line, index) => line.includes(`-BarrierRaceName '${raceName}'`) ? [index] : []);
-  if (barrierLines.length !== 1) return { lines, barrierLines };
-  let invocationStart = barrierLines[0];
-  while (invocationStart >= 0 && !/^  Invoke-DatabaseRace\s*`\s*$/.test(lines[invocationStart])) invocationStart -= 1;
-  if (invocationStart < 0) return { lines, barrierLines };
-  const invocationEnd = commandEnd(lines, invocationStart);
-  const assertionStart = nextNonEmpty(lines, invocationEnd + 1);
-  if (assertionStart < 0) return { lines, barrierLines, invocationStart, invocationEnd };
-  const assertionEnd = commandEnd(lines, assertionStart);
-  const failureIndex = nextNonEmpty(lines, assertionEnd + 1);
-  return { lines, barrierLines, invocationStart, invocationEnd, assertionStart, assertionEnd, failureIndex };
+function exactCommandElements(command, expected) {
+  const actual = commandElementKeys(command);
+  return actual.length === expected.length && actual.every((value, index) => value === expected[index]);
+}
+
+function hasForbiddenReachabilityAncestor(command) {
+  const forbidden = new Set([
+    'FunctionDefinitionAst', 'IfStatementAst', 'ForEachStatementAst', 'ForStatementAst',
+    'WhileStatementAst', 'DoWhileStatementAst', 'DoUntilStatementAst', 'SwitchStatementAst', 'TrapStatementAst'
+  ]);
+  return command.ancestors.some((ancestor) => forbidden.has(ancestor.type));
 }
 
 function extractWorkflowJob(text, jobName) {
@@ -169,81 +432,210 @@ function validateWorkflowStep(jobLines, stepName, exactRun, exactShell, code, is
   }
 }
 
-function validateBatch1RaceTopology(databaseText, workflowText) {
+const invokeRaceContract = [
+  'FirstFile', 'SecondFile', 'ExpectedFirstExit', 'ExpectedSecondExit', 'StartSecondDelayMilliseconds',
+  'ReleaseOutboxBarrier', 'BarrierRaceName', 'ExpectedFirstExitCodes', 'ExpectedSecondExitCodes',
+  'ExpectedExitPairs', 'FirstPsqlVariables', 'SecondPsqlVariables', 'ReleaseFirstBeforeSecond'
+].map((name) => ({ name, switch: name === 'ReleaseOutboxBarrier' || name === 'ReleaseFirstBeforeSecond' }));
+const approvedRaceBindings = [
+  'FirstFile', 'SecondFile', 'StartSecondDelayMilliseconds', 'BarrierRaceName',
+  'ExpectedExitPairs', 'FirstPsqlVariables', 'SecondPsqlVariables', 'ReleaseFirstBeforeSecond'
+].sort();
+
+function validateBatch1RaceTopology(databasePath, workflowText) {
   const issues = [];
   const add = (condition, code, message) => { if (!condition) issues.push({ code, message }); };
-  const lines = databaseText.split(/\r?\n/);
-  const braceDepths = powershellBraceDepths(lines);
-  const mainTry = lines.findIndex((line) => line === 'try {');
-  const mainCatch = lines.findIndex((line) => line === '} catch {');
-  add(mainTry >= 0 && mainCatch > mainTry, 'database.main_try', 'Database verifier must retain its top-level try/catch/finally execution path');
-  const mainBodyDepth = mainTry >= 0 ? braceDepths[mainTry] + 1 : -1;
-
-  const setupHits = lines.flatMap((line, index) => line.includes("-f '/workspace/supabase/tests/concurrency/batch1_race_setup.sql'") ? [index] : []);
-  add(setupHits.length === 1, 'setup.command_count', 'Batch 1 race setup must execute exactly once');
-  if (setupHits.length === 1) {
-    const setupStart = setupHits[0] - 1;
-    const setupFailure = nextNonEmpty(lines, setupHits[0] + 1);
-    add(/^  docker exec \$containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d \$database `\s*$/.test(lines[setupStart] ?? '') &&
-      (lines[setupFailure] ?? '').trim() === "if ($LASTEXITCODE -ne 0) { throw 'Could not prepare Batch 1 race fixtures.' }" &&
-      braceDepths[setupStart] === mainBodyDepth && braceDepths[setupFailure] === mainBodyDepth,
-    'setup.reachable_failure', 'Batch 1 setup must be an unconditional fail-closed database command');
+  let extraction;
+  try {
+    extraction = extractPowerShellAst(databasePath);
+  } catch (error) {
+    issues.push({ code: 'powershell.runtime_or_output', message: error instanceof Error ? error.message : String(error) });
+    return { issues, evidence: { extraction: 'FAIL' } };
+  }
+  const ast = extraction.document;
+  if (ast.parse_errors.length > 0) {
+    issues.push({ code: 'powershell.parse', message: `PowerShell parser reported ${ast.parse_errors.length} error(s)` });
+    return { issues, evidence: { runtime: ast.runtime, process: extraction.process, parse_errors: ast.parse_errors } };
   }
 
+  const helperParameters = invokeRaceContract.map((parameter) => parameter.name);
+  const helperFunctions = ast.functions.filter((fn) => fn.name === 'Invoke-DatabaseRace');
+  add(helperFunctions.length === 1 && helperFunctions[0].parameters.length === helperParameters.length &&
+    helperFunctions[0].parameters.every((name, index) => name === helperParameters[index]),
+  'helper.contract', 'Invoke-DatabaseRace must retain its exact positional and named parameter contract');
+  const waitFunctions = ast.functions.filter((fn) => fn.name === 'Wait-DatabaseRaceJobs');
+  add(waitFunctions.length === 1 && ['Jobs', 'TimeoutSeconds'].every((name, index) => waitFunctions[0]?.parameters[index] === name) &&
+    waitFunctions[0]?.parameters.length === 2, 'helper.wait_contract', 'Wait-DatabaseRaceJobs must retain its exact contract');
+
+  const mainTryCandidates = ast.tries.filter((entry) => entry.nearest_function === null)
+    .sort((left, right) => (right.extent.end_offset - right.extent.start_offset) - (left.extent.end_offset - left.extent.start_offset));
+  const mainTry = mainTryCandidates[0];
+  add(Boolean(mainTry) && mainTry.catch_count === 1 && Boolean(mainTry.finally_extent),
+    'database.main_try', 'Database verifier must retain its top-level try/catch/finally execution path');
+  if (!mainTry) return { issues, evidence: { runtime: ast.runtime, process: extraction.process } };
+
+  const directMainCommands = ast.commands.filter((command) => command.nearest_function === null &&
+    inside(command.extent, mainTry.body_extent) && !hasForbiddenReachabilityAncestor(command))
+    .sort((left, right) => left.extent.start_offset - right.extent.start_offset);
+  const statementIndexFor = (extent) => mainTry.body_statements.findIndex((statement) => inside(extent, statement.extent));
+  const ifForStatement = (statement) => ast.ifs.find((entry) => entry.nearest_function === null &&
+    entry.extent.start_offset === statement?.extent.start_offset && entry.extent.end_offset === statement?.extent.end_offset);
+  const throwWithin = (extent, nearestFunction, exactText) => ast.throws.some((entry) =>
+    entry.nearest_function === nearestFunction && inside(entry.extent, extent) && normalizeAstText(entry.extent.text) === exactText);
+
+  const setupPath = '/workspace/supabase/tests/concurrency/batch1_race_setup.sql';
+  const setupExpected = ['value:exec', 'expression:$containerName', 'value:psql', 'parameter:q',
+    'parameter:v', 'value:ON_ERROR_STOP=1', 'parameter:u', 'value:postgres',
+    'parameter:d', 'expression:$database', 'parameter:f', `value:${setupPath}`];
+  const setupCommands = directMainCommands.filter((command) => command.command_name === 'docker' &&
+    command.elements.some((element) => element.value === setupPath));
+  add(setupCommands.length === 1 && exactCommandElements(setupCommands[0], setupExpected),
+    'setup.command_count', 'Batch 1 race setup must be one exact executable docker command');
+  if (setupCommands.length === 1) {
+    const setupStatementIndex = statementIndexFor(setupCommands[0].extent);
+    const failureStatement = mainTry.body_statements[setupStatementIndex + 1];
+    const failureIf = ifForStatement(failureStatement);
+    add(setupStatementIndex >= 0 && failureIf?.clauses.length === 1 &&
+      normalizeAstText(failureIf.clauses[0].condition) === '$LASTEXITCODE -ne 0' &&
+      throwWithin(failureIf.extent, null, "throw 'Could not prepare Batch 1 race fixtures.'"),
+    'setup.reachable_failure', 'Batch 1 setup must be unconditional and immediately fail closed');
+  }
+
+  const directInvocations = directMainCommands.filter((command) => command.command_name === 'Invoke-DatabaseRace')
+    .map((command) => ({ command, bound: bindCommand(command, invokeRaceContract) }));
   const invocationOrder = [];
   for (const spec of staffRaceSpecs) {
-    const segment = findRaceSegment(databaseText, spec.name);
-    add(segment.barrierLines.length === 1 && Number.isInteger(segment.invocationStart), `race.${spec.name}.invocation_count`, `${spec.name} bounded race invocation must appear exactly once`);
-    if (!Number.isInteger(segment.invocationStart)) continue;
-    invocationOrder.push(segment.invocationStart);
-    add(segment.invocationStart > mainTry && segment.invocationStart < mainCatch && braceDepths[segment.invocationStart] === mainBodyDepth,
-      `race.${spec.name}.reachable`, `${spec.name} must execute unconditionally inside the database verifier`);
-    const invocation = normalizeCommand(segment.lines.slice(segment.invocationStart, segment.invocationEnd + 1));
-    add(hasSingleParameter(invocation, 'FirstFile', `-FirstFile '${spec.firstFile}'`), `race.${spec.name}.first_file`, `${spec.name} first worker is incorrect`);
-    add(hasSingleParameter(invocation, 'SecondFile', `-SecondFile '${spec.secondFile}'`), `race.${spec.name}.second_file`, `${spec.name} second worker is incorrect`);
-    add(hasSingleParameter(invocation, 'ExpectedExitPairs', "-ExpectedExitPairs @('0,3')") &&
-      hasSingleParameter(invocation, 'ReleaseFirstBeforeSecond', '-ReleaseFirstBeforeSecond'),
+    const matches = directInvocations.filter(({ bound }) => staticValueMatches(bound.bindings.get('BarrierRaceName'), spec.name));
+    add(matches.length === 1, `race.${spec.name}.invocation_count`, `${spec.name} executable race invocation must appear exactly once`);
+    if (matches.length !== 1) continue;
+    const { command, bound } = matches[0];
+    invocationOrder.push(command.extent.start_offset);
+    const bindingNames = [...bound.bindings.keys()].sort();
+    add(bound.errors.length === 0 && bindingNames.length === approvedRaceBindings.length &&
+      bindingNames.every((name, index) => name === approvedRaceBindings[index]),
+    `race.${spec.name}.arguments`, `${spec.name} must reject unknown, duplicate, ambiguous, extra, dynamic, or splatted protected arguments`);
+    add(staticValueMatches(bound.bindings.get('FirstFile'), spec.firstFile),
+      `race.${spec.name}.first_file`, `${spec.name} first worker association is incorrect`);
+    add(staticValueMatches(bound.bindings.get('SecondFile'), spec.secondFile),
+      `race.${spec.name}.second_file`, `${spec.name} second worker association is incorrect`);
+    add(staticValueMatches(bound.bindings.get('ExpectedExitPairs'), "@('0,3')") &&
+      bound.bindings.get('ReleaseFirstBeforeSecond')?.kind === 'switch',
     `race.${spec.name}.exit_pair`, `${spec.name} must require deterministic 0,3 first-before-second completion`);
-    add(hasSingleParameter(invocation, 'StartSecondDelayMilliseconds', '-StartSecondDelayMilliseconds 0'),
-      `race.${spec.name}.bounded_start`, `${spec.name} must use the established bounded zero-delay barrier start`);
-    add(hasSingleParameter(invocation, 'BarrierRaceName', `-BarrierRaceName '${spec.name}'`), `race.${spec.name}.name`, `${spec.name} exact barrier name is required`);
-    add(hasSingleParameter(invocation, 'FirstPsqlVariables', `-FirstPsqlVariables ${spec.firstVariables}`), `race.${spec.name}.first_fixture`, `${spec.name} first worker fixture is incorrect`);
-    add(hasSingleParameter(invocation, 'SecondPsqlVariables', `-SecondPsqlVariables ${spec.secondVariables}`), `race.${spec.name}.second_fixture`, `${spec.name} second worker fixture is incorrect`);
+    add(staticValueMatches(bound.bindings.get('StartSecondDelayMilliseconds'), '0'),
+      `race.${spec.name}.bounded_start`, `${spec.name} must retain the bounded zero-delay barrier start`);
+    add(staticValueMatches(bound.bindings.get('FirstPsqlVariables'), spec.firstVariables),
+      `race.${spec.name}.first_fixture`, `${spec.name} first worker fixture association is incorrect`);
+    add(staticValueMatches(bound.bindings.get('SecondPsqlVariables'), spec.secondVariables),
+      `race.${spec.name}.second_fixture`, `${spec.name} second worker fixture association is incorrect`);
 
-    const assertionReachable = Number.isInteger(segment.assertionStart) && /^  docker exec \$containerName psql /.test(segment.lines[segment.assertionStart] ?? '') &&
-      braceDepths[segment.assertionStart] === mainBodyDepth && braceDepths[segment.failureIndex] === mainBodyDepth;
-    add(assertionReachable, `race.${spec.name}.assertion_reachable`, `${spec.name} assertion must execute immediately after both worker results`);
-    if (assertionReachable) {
-      const assertion = normalizeCommand(segment.lines.slice(segment.assertionStart, segment.assertionEnd + 1));
-      add(hasSingleParameter(assertion, 'f', "-f '/workspace/supabase/tests/concurrency/batch1_attendance_assert.sql'"), `race.${spec.name}.assertion_file`, `${spec.name} must execute batch1_attendance_assert.sql`);
-      add((assertion.match(/(?:^|\s)-v(?=\s|$)/g) ?? []).length === 8, `race.${spec.name}.assertion_fixture`, `${spec.name} assertion must use only the approved variables`);
-      for (const variables of spec.assertionVariables) {
-        add(assertion.includes(variables), `race.${spec.name}.assertion_fixture`, `${spec.name} assertion variables are incorrect`);
-      }
-      add((segment.lines[segment.failureIndex] ?? '').trim() === spec.assertionFailure,
-        `race.${spec.name}.assertion_failure`, `${spec.name} assertion failure must propagate`);
+    const invocationStatement = statementIndexFor(command.extent);
+    const assertionStatement = mainTry.body_statements[invocationStatement + 1];
+    const failureStatement = mainTry.body_statements[invocationStatement + 2];
+    const assertionCommands = directMainCommands.filter((candidate) => inside(candidate.extent, assertionStatement?.extent));
+    const assertion = assertionCommands.length === 1 ? assertionCommands[0] : null;
+    const assertionExpected = ['value:exec', 'expression:$containerName', 'value:psql', 'parameter:q',
+      'parameter:v', 'value:ON_ERROR_STOP=1'];
+    for (const variable of spec.assertionVariables) assertionExpected.push('parameter:v', `value:${variable}`);
+    assertionExpected.push('parameter:u', 'value:postgres', 'parameter:d', 'expression:$database',
+      'parameter:f', 'value:/workspace/supabase/tests/concurrency/batch1_attendance_assert.sql');
+    add(invocationStatement >= 0 && assertion?.command_name === 'docker' && exactCommandElements(assertion, assertionExpected),
+      `race.${spec.name}.assertion_reachable`, `${spec.name} exact assertion command must execute immediately after both worker results`);
+    if (assertion) {
+      add(assertion.elements.some((element) => element.value === '/workspace/supabase/tests/concurrency/batch1_attendance_assert.sql'),
+        `race.${spec.name}.assertion_file`, `${spec.name} must execute batch1_attendance_assert.sql`);
+      add(exactCommandElements(assertion, assertionExpected),
+        `race.${spec.name}.assertion_fixture`, `${spec.name} assertion must use only the approved variables and associations`);
     }
+    const failureIf = ifForStatement(failureStatement);
+    add(failureIf?.clauses.length === 1 && normalizeAstText(failureIf.clauses[0].condition) === '$LASTEXITCODE -ne 0' &&
+      throwWithin(failureIf.extent, null, normalizeAstText(spec.assertionFailure).replace(/^if \([^)]*\) \{ /, '').replace(/ \}$/, '')),
+    `race.${spec.name}.assertion_failure`, `${spec.name} assertion failure must immediately propagate`);
   }
   add(invocationOrder.length === 3 && invocationOrder.every((value, index) => index === 0 || invocationOrder[index - 1] < value),
-    'race.order', 'Staff existing, absent, and cross-role races must remain in the approved order');
+    'race.order', 'Staff existing, absent, and cross-role races must remain in approved executable order');
 
-  const helperStart = databaseText.indexOf('  function Invoke-DatabaseRace {');
-  const helperEnd = databaseText.indexOf('  function Set-Batch1OperationBaseline {');
-  const helper = helperStart >= 0 && helperEnd > helperStart ? databaseText.slice(helperStart, helperEnd) : '';
-  add(/Wait-DatabaseRaceJobs -Jobs \$raceJobs -TimeoutSeconds \$ConcurrencyTimeoutSeconds/.test(helper), 'helper.bounded_wait', 'Race helper must wait for all jobs with the bounded timeout');
-  add(/if \(\$readyCount -eq '2'\) \{ \$bothReady = \$true; break \}/.test(helper) && /Race workers did not both reach barrier/.test(helper), 'helper.both_ready', 'Race helper must require both workers at the barrier');
-  add(/Could not release first race barrier[\s\S]+?if \(\$ReleaseFirstBeforeSecond\)[\s\S]+?First race worker did not finish[\s\S]+?Could not release second race barrier/.test(helper), 'helper.release_order', 'Race helper must release and observe the first worker before the second');
-  add(/\$firstExit[\s\S]+?\$secondExit[\s\S]+?\$actualExitPair[\s\S]+?throw "Unexpected race exit pair: \$actualExitPair"/.test(helper), 'helper.exit_failure_propagation', 'Race helper must require both worker results and throw on a wrong pair');
-  add(/finally \{[\s\S]+?Stop-Job[\s\S]+?Remove-Job/.test(helper), 'helper.job_cleanup', 'Race helper must finalize every worker job');
-  add(/} catch \{\s*\$verificationError = \$_\s*} finally \{[\s\S]+?dropdb[\s\S]+?docker rm -f \$containerName/.test(databaseText) &&
-      /if \(\$verificationError\) \{[\s\S]*throw \$verificationError[\s\S]*}\s*if \(\$cleanupError\) \{ throw \$cleanupError \}/.test(databaseText),
-  'database.finalization', 'Database verifier must clean database/container resources and propagate verification or cleanup failure');
+  const helperCommands = ast.commands.filter((command) => command.nearest_function === 'Invoke-DatabaseRace');
+  const waitCommands = helperCommands.filter((command) => command.command_name === 'Wait-DatabaseRaceJobs');
+  const waitBinding = waitCommands.length === 1 ? bindCommand(waitCommands[0], [
+    { name: 'Jobs', switch: false }, { name: 'TimeoutSeconds', switch: false }
+  ]) : null;
+  add(waitCommands.length === 1 && waitBinding.errors.length === 0 &&
+    normalizeAstText(waitBinding.bindings.get('Jobs')?.value?.text) === '$raceJobs' &&
+    normalizeAstText(waitBinding.bindings.get('TimeoutSeconds')?.value?.text) === '$ConcurrencyTimeoutSeconds',
+  'helper.bounded_wait', 'Race helper must wait for every worker through the bounded timeout parameter');
+  const helperAssignments = ast.assignments.filter((entry) => entry.nearest_function === 'Invoke-DatabaseRace');
+  const assignment = (left) => helperAssignments.find((entry) => normalizeAstText(entry.left) === left);
+  const firstExit = assignment('$firstExit');
+  const secondExit = assignment('$secondExit');
+  const actualExitPair = assignment('$actualExitPair');
+  const wrongPairThrow = ast.throws.find((entry) => entry.nearest_function === 'Invoke-DatabaseRace' &&
+    normalizeAstText(entry.extent.text) === 'throw "Unexpected race exit pair: $actualExitPair"');
+  add(Boolean(firstExit && secondExit && actualExitPair && wrongPairThrow) &&
+    waitCommands[0].extent.start_offset < firstExit.extent.start_offset &&
+    firstExit.extent.start_offset < secondExit.extent.start_offset &&
+    secondExit.extent.start_offset < actualExitPair.extent.start_offset &&
+    actualExitPair.extent.start_offset < wrongPairThrow.extent.start_offset,
+  'helper.exit_failure_propagation', 'Race helper must finalize both results and throw on the wrong exit pair');
+
+  const helperIfs = ast.ifs.filter((entry) => entry.nearest_function === 'Invoke-DatabaseRace');
+  const releaseIf = helperIfs.find((entry) => entry.clauses.length === 1 &&
+    normalizeAstText(entry.clauses[0].condition) === '$ReleaseFirstBeforeSecond');
+  const readyIf = helperIfs.find((entry) => entry.clauses.length === 1 &&
+    normalizeAstText(entry.clauses[0].condition) === "$readyCount -eq '2'" &&
+    entry.extent.start_offset < (releaseIf?.extent.start_offset ?? Number.MAX_SAFE_INTEGER));
+  add(Boolean(readyIf) && throwWithin(helperFunctions[0]?.extent, 'Invoke-DatabaseRace',
+    'throw "Race workers did not both reach barrier: $BarrierRaceName"'),
+  'helper.both_ready', 'Race helper must prove both workers reached the barrier');
+  const releaseCommands = helperCommands.filter((command) => command.command_name === 'docker' &&
+    command.elements.some((element) => normalizeAstText(element.text).includes('__test_race_barrier')));
+  const firstRelease = releaseCommands.find((command) => command.elements.some((element) =>
+    normalizeAstText(element.text).includes("'$BarrierRaceName','first'")));
+  const secondRelease = releaseCommands.find((command) => command.elements.some((element) =>
+    normalizeAstText(element.text).includes("'$BarrierRaceName','second'")));
+  add(Boolean(firstRelease && secondRelease && releaseIf && waitCommands[0]) &&
+    firstRelease.extent.start_offset < releaseIf.extent.start_offset &&
+    releaseIf.extent.end_offset < secondRelease.extent.start_offset &&
+    secondRelease.extent.start_offset < waitCommands[0].extent.start_offset &&
+    throwWithin(releaseIf.extent, 'Invoke-DatabaseRace',
+      'throw "First race worker did not finish before stale-client release: $BarrierRaceName"'),
+  'helper.release_order', 'Race helper must deliberately release and observe the first worker before the second');
+
+  const helperTry = ast.tries.filter((entry) => entry.nearest_function === 'Invoke-DatabaseRace')
+    .sort((left, right) => (right.extent.end_offset - right.extent.start_offset) - (left.extent.end_offset - left.extent.start_offset))[0];
+  const stopJobs = helperCommands.filter((command) => command.command_name === 'Stop-Job' && inside(command.extent, helperTry?.finally_extent));
+  const removeJobs = helperCommands.filter((command) => command.command_name === 'Remove-Job' && inside(command.extent, helperTry?.finally_extent));
+  add(Boolean(helperTry?.finally_extent) && stopJobs.length === 1 && removeJobs.length === 1,
+    'helper.job_cleanup', 'Race helper must stop and remove all worker jobs from its executable finally block');
+
+  const finalizationCommands = ast.commands.filter((command) => command.nearest_function === null &&
+    inside(command.extent, mainTry.finally_extent));
+  const hasDropDatabase = finalizationCommands.some((command) => command.command_name === 'docker' &&
+    command.elements.some((element) => element.value === 'dropdb'));
+  const hasRemoveContainer = finalizationCommands.some((command) => command.command_name === 'docker' &&
+    command.elements.some((element) => element.value === 'rm') &&
+    command.elements.some((element) => element.parameter_name === 'f') &&
+    command.elements.some((element) => normalizeAstText(element.text) === '$containerName'));
+  const verificationAssignment = ast.assignments.some((entry) => entry.nearest_function === null &&
+    normalizeAstText(entry.left) === '$verificationError' && normalizeAstText(entry.right) === '$_' &&
+    inside(entry.extent, mainTry.extent));
+  const verificationThrow = ast.throws.some((entry) => entry.nearest_function === null &&
+    normalizeAstText(entry.extent.text) === 'throw $verificationError' &&
+    entry.extent.start_offset > mainTry.extent.end_offset);
+  const cleanupThrow = ast.throws.some((entry) => entry.nearest_function === null &&
+    normalizeAstText(entry.extent.text) === 'throw $cleanupError' &&
+    entry.extent.start_offset > mainTry.extent.end_offset);
+  add(hasDropDatabase && hasRemoveContainer && verificationAssignment && verificationThrow && cleanupThrow,
+    'database.finalization', 'Database verifier must clean database/container resources and propagate verification or cleanup failure');
 
   const databaseJob = extractWorkflowJob(workflowText, 'database');
-  add(databaseJob && !databaseJob.some((line) => /^    if:/.test(line)), 'workflow.database_job', 'Release database job must remain unconditional');
-  validateWorkflowStep(databaseJob, 'Verify migrations, repeatable seed, RLS, and SQL suites', './scripts/testing/database-verify.ps1', 'pwsh', 'workflow.database_verifier_step', issues);
+  add(databaseJob && databaseJob.filter((line) => line === '    runs-on: ubuntu-latest').length === 1 &&
+    !databaseJob.some((line) => /^    if:/.test(line)),
+  'workflow.database_job', 'Release database job must be unconditional on the PowerShell-equipped Ubuntu runner');
+  validateWorkflowStep(databaseJob, 'Verify migrations, repeatable seed, RLS, and SQL suites',
+    './scripts/testing/database-verify.ps1', 'pwsh', 'workflow.database_verifier_step', issues);
   const safetyJob = extractWorkflowJob(workflowText, 'repository-safety');
-  const guardStepStarts = safetyJob?.flatMap((line, index) => line === '      - run: node scripts/testing/validate-release-workflow.mjs' ? [index] : []) ?? [];
+  const guardStepStarts = safetyJob?.flatMap((line, index) =>
+    line === '      - run: node scripts/testing/validate-release-workflow.mjs' ? [index] : []) ?? [];
   let guardStepAccepted = guardStepStarts.length === 1;
   if (guardStepAccepted) {
     let guardStepEnd = guardStepStarts[0] + 1;
@@ -252,7 +644,17 @@ function validateBatch1RaceTopology(databaseText, workflowText) {
     guardStepAccepted = !guardStep.some((line) => /^\s+(?:if|continue-on-error):/.test(line));
   }
   add(guardStepAccepted, 'workflow.guard_step', 'Release workflow must execute this guard unconditionally');
-  return issues;
+  return {
+    issues,
+    evidence: {
+      runtime: ast.runtime,
+      process: extraction.process,
+      parse_errors: ast.parse_errors.length,
+      commands: ast.commands.length,
+      functions: ast.functions.length,
+      source_path: ast.source_path
+    }
+  };
 }
 
 function replaceExactly(text, search, replacement) {
@@ -262,13 +664,20 @@ function replaceExactly(text, search, replacement) {
 }
 
 function mutateRaceSegment(text, raceName, mutator, { includeAssertion = true } = {}) {
-  const segment = findRaceSegment(text, raceName);
-  if (!Number.isInteger(segment.invocationStart)) throw new Error(`negative control could not locate ${raceName}`);
-  const end = includeAssertion ? segment.failureIndex : segment.invocationEnd;
-  const original = segment.lines.slice(segment.invocationStart, end + 1).join('\n');
+  const barrierOffset = text.indexOf(`-BarrierRaceName '${raceName}'`);
+  if (barrierOffset < 0 || barrierOffset !== text.lastIndexOf(`-BarrierRaceName '${raceName}'`)) {
+    throw new Error(`negative control could not uniquely locate ${raceName}`);
+  }
+  const start = text.lastIndexOf('  Invoke-DatabaseRace `', barrierOffset);
+  const assertionStart = text.indexOf('  docker exec $containerName psql', barrierOffset);
+  const spec = staffRaceSpecs.find((candidate) => candidate.name === raceName);
+  const failureStart = text.indexOf(`  ${spec.assertionFailure}`, assertionStart);
+  if (start < 0 || assertionStart < 0 || failureStart < 0) throw new Error(`negative control could not bound ${raceName}`);
+  const failureEndCandidate = text.indexOf('\n', failureStart);
+  const end = includeAssertion ? (failureEndCandidate < 0 ? text.length : failureEndCandidate) : assertionStart;
+  const original = text.slice(start, end);
   const mutated = mutator(original);
-  segment.lines.splice(segment.invocationStart, end - segment.invocationStart + 1, ...mutated.split('\n'));
-  return segment.lines.join('\n');
+  return text.slice(0, start) + mutated + text.slice(end);
 }
 
 function repositoryTopologyRestored() {
@@ -292,12 +701,16 @@ function runTopologyControl(spec) {
     fixture = spec.mutate(fixture);
     writeFileSync(databaseCopy, fixture.database);
     writeFileSync(workflowCopy, fixture.workflow);
-    const controlIssues = validateBatch1RaceTopology(readFileSync(databaseCopy, 'utf8'), readFileSync(workflowCopy, 'utf8'));
+    const validation = validateBatch1RaceTopology(databaseCopy, readFileSync(workflowCopy, 'utf8'));
+    const controlIssues = validation.issues;
     report = {
       id: spec.id,
       intended_failure: spec.expectedCode,
       observed_failures: controlIssues.map((issue) => issue.code),
-      control_passed: controlIssues.some((issue) => issue.code === spec.expectedCode)
+      parser_valid: validation.evidence?.parse_errors === 0,
+      control_passed: controlIssues.some((issue) => issue.code === spec.expectedCode) &&
+        (spec.allowParseFailure ? controlIssues.some((issue) => issue.code === 'powershell.parse') :
+          validation.evidence?.parse_errors === 0 && !controlIssues.some((issue) => issue.code === 'powershell.runtime_or_output'))
     };
     writeFileSync(databaseCopy, databaseBytes);
     writeFileSync(workflowCopy, workflowBytes);
@@ -311,6 +724,13 @@ function runTopologyControl(spec) {
     report.control_passed = report.control_passed && report.restoration === 'PASS' && report.cleanup === 'PASS' && report.repository_restoration === 'PASS';
   }
   return report;
+}
+
+function replaceAssertionCommandWith(segment, replacement) {
+  const start = segment.indexOf('  docker exec $containerName psql');
+  const end = segment.indexOf('  if ($LASTEXITCODE -ne 0)', start);
+  if (start < 0 || end < 0) throw new Error('negative control could not locate assertion command');
+  return segment.slice(0, start) + replacement + segment.slice(end);
 }
 
 const topologyControlSpecs = [
@@ -354,8 +774,157 @@ const topologyControlSpecs = [
   {
     id: 'CONTROL-RACE-REMOVED-FROM-RELEASE', expectedCode: 'workflow.database_verifier_step',
     mutate: (fixture) => ({ ...fixture, workflow: replaceExactly(fixture.workflow, '        run: ./scripts/testing/database-verify.ps1', '        run: ./scripts/testing/database-smoke.ps1') })
+  },
+  {
+    id: 'CONTROL-WRONG-WORKER-LINE-COMMENT', expectedCode: 'race.staff-existing.first_file',
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-existing', (segment) =>
+      replaceExactly(
+        replaceExactly(segment,
+          "-FirstFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql'",
+          "-FirstFile '/workspace/supabase/tests/concurrency/batch1_teacher_worker.sql'"),
+        '  Invoke-DatabaseRace `', "  # -FirstFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql'\n  Invoke-DatabaseRace `"
+      ), { includeAssertion: false }) })
+  },
+  {
+    id: 'CONTROL-WRONG-WORKER-BLOCK-COMMENT', expectedCode: 'race.staff-absent.second_file',
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-absent', (segment) =>
+      replaceExactly(
+        replaceExactly(segment,
+          "-SecondFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql'",
+          "-SecondFile '/workspace/supabase/tests/concurrency/batch1_teacher_worker.sql'"),
+        '  Invoke-DatabaseRace `', "  <# -SecondFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' #>\n  Invoke-DatabaseRace `"
+      ), { includeAssertion: false }) })
+  },
+  {
+    id: 'CONTROL-WRONG-WORKER-UNUSED-VARIABLE', expectedCode: 'race.staff-cross-role.second_file',
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-cross-role', (segment) =>
+      replaceExactly(
+        replaceExactly(segment, '  Invoke-DatabaseRace `', "  $unusedApprovedWorker = '/workspace/supabase/tests/concurrency/batch1_teacher_worker.sql'\n  Invoke-DatabaseRace `"),
+        "-SecondFile '/workspace/supabase/tests/concurrency/batch1_teacher_worker.sql'",
+        "-SecondFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql'"
+      ), { includeAssertion: false }) })
+  },
+  {
+    id: 'CONTROL-WRONG-WORKER-UNRELATED-ARRAY-DIAGNOSTIC', expectedCode: 'race.staff-existing.first_file',
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-existing', (segment) =>
+      replaceExactly(
+        replaceExactly(segment, '  Invoke-DatabaseRace `',
+          "  $unusedApprovedWorkers = @('/workspace/supabase/tests/concurrency/batch1_staff_worker.sql')\n  Write-Host '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql'\n  Invoke-DatabaseRace `"),
+        "-FirstFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql'",
+        "-FirstFile '/workspace/supabase/tests/concurrency/batch1_teacher_worker.sql'"
+      ), { includeAssertion: false }) })
+  },
+  {
+    id: 'CONTROL-WRONG-POSITIONAL-WORKER-ORDER', expectedCode: 'race.staff-cross-role.first_file',
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-cross-role', (segment) =>
+      replaceExactly(
+        replaceExactly(segment,
+          "-FirstFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' `",
+          "'/workspace/supabase/tests/concurrency/batch1_teacher_worker.sql' `"),
+        "-SecondFile '/workspace/supabase/tests/concurrency/batch1_teacher_worker.sql' `",
+        "'/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' `"
+      ), { includeAssertion: false }) })
+  },
+  {
+    id: 'CONTROL-CORRECT-TOKENS-WRONG-NAMED-PARAMETERS', expectedCode: 'race.staff-cross-role.first_file',
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-cross-role', (segment) =>
+      replaceExactly(
+        replaceExactly(segment,
+          "-FirstFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql'",
+          "-FirstFile '/workspace/supabase/tests/concurrency/batch1_teacher_worker.sql'"),
+        "-SecondFile '/workspace/supabase/tests/concurrency/batch1_teacher_worker.sql'",
+        "-SecondFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql'"
+      ), { includeAssertion: false }) })
+  },
+  {
+    id: 'CONTROL-APPROVED-TOKEN-UNUSED-EXTRA-ARGUMENT', expectedCode: 'race.staff-existing.arguments',
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-existing', (segment) =>
+      replaceExactly(segment,
+        "-FirstFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' `",
+        "-FirstFile '/workspace/supabase/tests/concurrency/batch1_teacher_worker.sql' `\n    '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' `"
+      ), { includeAssertion: false }) })
+  },
+  {
+    id: 'CONTROL-DYNAMIC-PROTECTED-WORKER', expectedCode: 'race.staff-existing.first_file',
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-existing', (segment) =>
+      replaceExactly(segment,
+        "-FirstFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql'",
+        "-FirstFile ('/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' + $workerSuffix)"
+      ), { includeAssertion: false }) })
+  },
+  {
+    id: 'CONTROL-UNVERIFIED-SPLATTING', expectedCode: 'race.staff-existing.arguments',
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-existing', (segment) => {
+      let mutated = replaceExactly(segment.replace(/\r\n/g, '\n'), '  Invoke-DatabaseRace `',
+        "  $raceArguments = @{ FirstFile = '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql'; SecondFile = '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' }\n  Invoke-DatabaseRace @raceArguments `");
+      mutated = replaceExactly(mutated, "    -FirstFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' `\n", '');
+      return replaceExactly(mutated, "    -SecondFile '/workspace/supabase/tests/concurrency/batch1_staff_worker.sql' `\n", '');
+    }, { includeAssertion: false }) })
+  },
+  {
+    id: 'CONTROL-ASSERTION-TOKEN-COMMENT-ONLY', expectedCode: 'race.staff-existing.assertion_reachable',
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-existing', (segment) =>
+      replaceAssertionCommandWith(segment, "  # batch1_attendance_assert.sql\n  $unusedAssertion = 'batch1_attendance_assert.sql'\n")) })
+  },
+  {
+    id: 'CONTROL-SETUP-TOKEN-STRING-ONLY', expectedCode: 'setup.command_count',
+    mutate: (fixture) => ({ ...fixture, database: fixture.database.replace(
+      /  docker exec \$containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d \$database `\r?\n    -f '\/workspace\/supabase\/tests\/concurrency\/batch1_race_setup\.sql'\r?\n  if \(\$LASTEXITCODE -ne 0\) \{ throw 'Could not prepare Batch 1 race fixtures\.' \}\r?\n/,
+      "  $unusedSetup = 'batch1_race_setup.sql'\n  Write-Host 'batch1_race_setup.sql'\n"
+    ) })
+  },
+  {
+    id: 'CONTROL-FAILURE-PROPAGATION-TEXT-ONLY', expectedCode: 'helper.exit_failure_propagation',
+    mutate: (fixture) => ({ ...fixture, database: replaceExactly(fixture.database,
+      'throw "Unexpected race exit pair: $actualExitPair"',
+      "Write-Host 'throw \"Unexpected race exit pair: $actualExitPair\"'"
+    ) })
+  },
+  {
+    id: 'CONTROL-POWERSHELL-PARSE-ERROR', expectedCode: 'powershell.parse', allowParseFailure: true,
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-existing', (segment) =>
+      replaceExactly(segment, '  Invoke-DatabaseRace `', '  if (\n  Invoke-DatabaseRace `'), { includeAssertion: false }) })
   }
 ];
+
+function runAstBoundaryControls() {
+  const validDocument = JSON.stringify({
+    schema_version: 1,
+    runtime: { parser_type: 'System.Management.Automation.Language.Parser' },
+    parse_errors: [], commands: [], functions: [], ifs: [], throws: [], assignments: [], tries: [],
+    root_extent: { start_offset: 0, end_offset: 0 }
+  });
+  const specs = [
+    { id: 'CONTROL-AST-TIMEOUT', result: { status: null, signal: null, error: { code: 'ETIMEDOUT' }, stdout: '', stderr: '' } },
+    { id: 'CONTROL-AST-SIGNAL', result: { status: null, signal: 'SIGTERM', stdout: '', stderr: '' } },
+    { id: 'CONTROL-AST-MISSING-EXIT', result: { status: null, signal: null, stdout: validDocument, stderr: '' } },
+    { id: 'CONTROL-AST-PREAMBLE', result: { status: 0, signal: null, stdout: `preamble\n${validDocument}`, stderr: '' } },
+    { id: 'CONTROL-AST-MALFORMED-JSON', result: { status: 0, signal: null, stdout: '{malformed}', stderr: '' } },
+    { id: 'CONTROL-AST-INCOMPLETE-JSON', result: { status: 0, signal: null, stdout: '{}', stderr: '' } },
+    { id: 'CONTROL-AST-STDERR', result: { status: 0, signal: null, stdout: validDocument, stderr: 'unexpected' } }
+  ];
+  return specs.map((spec) => {
+    let rejected = false;
+    try {
+      parseAstProcessResult(spec.result);
+    } catch {
+      rejected = true;
+    }
+    return { id: spec.id, control_passed: rejected };
+  });
+}
+
+function runSourceOverrideControl() {
+  const result = spawnSync(process.execPath, [import.meta.filename, '--database-verify-path=untrusted.ps1'], {
+    encoding: 'utf8', timeout: 5_000, windowsHide: true
+  });
+  return {
+    id: 'CONTROL-NO-SOURCE-PATH-OVERRIDE',
+    control_passed: result.status === 2 && !result.signal && !result.error &&
+      /does not accept source-path or test-only overrides/.test(result.stderr ?? ''),
+    process: compactProcess(result)
+  };
+}
 
 function requireMatch(text, pattern, message) {
   if (!pattern.test(text)) failures.push(message);
@@ -443,15 +1012,31 @@ requireMatch(batch1Sql, /request_fingerprint is null and request_fingerprint_ver
 requireMatch(batch1Mutation, /return baseline\.accepted && baselineControl\.control_passed && postControlBaseline\.accepted &&[\s\S]+?targetControls\.every[\s\S]+?lifecycleControls\.every[\s\S]+?results\.every[\s\S]+?restoration === 'PASS'/, 'Batch 1 mutation final result must be derived from the complete baseline, mounted-form control, and every mutation/lifecycle/restoration gate');
 requireMatch(batch1Mutation, /--test-reporter=tap[\s\S]+?TAP aggregate counts malformed[\s\S]+?required mutation test did not pass exactly once/, 'Batch 1 mutation baseline must parse complete-file structured counts and require every target-associated test');
 requireMatch(batch1Mutation, /CONTROL-MOUNTED-FORM-INDEPENDENT-FAILURE[\s\S]+?broken_baseline[\s\S]+?restored_baseline/, 'Batch 1 mutation verifier must execute the independent mounted-form baseline failure control');
+requireMatch(batch1Mutation, /counts\.tests !== 7[\s\S]+?runMutationCase[\s\S]+?classification: 'baseline_failure'[\s\S]+?mutation_body_executed: false/, 'Every production mutation lifecycle must require its own exact 7-test pristine baseline and skip the mutation body on failure');
+requireMatch(batch1Mutation, /CONTROL-POISONED-LATER-BASELINE-NO-MUTATION[\s\S]+?poisoned_lifecycle[\s\S]+?mutation_marker_absent[\s\S]+?pristine_rerun/, 'Batch 1 mutation verifier must prove a later poisoned baseline prevents the real mutation body and then recovers');
 requireMatch(batch1Mutation, /CONTROL-TIMEOUT[\s\S]+?CONTROL-SIGNAL[\s\S]+?CONTROL-UNRELATED-EXIT[\s\S]+?CONTROL-SPAWN-FAILURE[\s\S]+?CONTROL-UNCAUGHT-STATUS-0[\s\S]+?CONTROL-RESTORATION-NOT-COMPENSATING[\s\S]+?CONTROL-UNCAUGHT-COMPLETE-VERIFIER/, 'Batch 1 mutation verifier must execute all lifecycle negative controls');
 requireMatch(batch1Mutation, /if \(failed\) process\.exitCode = 1;/, 'Batch 1 mutation verifier must return nonzero when any gate fails');
 
-const topologyIssues = validateBatch1RaceTopology(databaseVerify, workflow);
-for (const issue of topologyIssues) failures.push(`[${issue.code}] ${issue.message}`);
+const topologyValidation = validateBatch1RaceTopology(databaseVerifyPath, workflow);
+for (const issue of topologyValidation.issues) failures.push(`[${issue.code}] ${issue.message}`);
 const topologyControls = topologyControlSpecs.map(runTopologyControl);
 for (const control of topologyControls) {
-  if (!control.control_passed) failures.push(`[${control.id}] topology negative control did not fail closed and restore cleanly`);
+  if (!control.control_passed) failures.push(
+    `[${control.id}] topology negative control failed: observed=${JSON.stringify(control.observed_failures)} error=${control.error ?? 'none'} restoration=${control.restoration} cleanup=${control.cleanup}`
+  );
 }
+const astBoundaryControls = runAstBoundaryControls();
+for (const control of astBoundaryControls) {
+  if (!control.control_passed) failures.push(`[${control.id}] AST output boundary did not fail closed`);
+}
+const sourceOverrideControl = runSourceOverrideControl();
+if (!sourceOverrideControl.control_passed) failures.push('[CONTROL-NO-SOURCE-PATH-OVERRIDE] normal invocation accepted an override');
+const allControlsPassed = topologyControls.every((control) => control.control_passed) &&
+  astBoundaryControls.every((control) => control.control_passed) && sourceOverrideControl.control_passed;
+const restorationPassed = repositoryTopologyRestored();
+const cleanupPassed = topologyControls.every((control) => control.cleanup === 'PASS');
+if (!restorationPassed) failures.push('Protected topology files were not restored');
+if (!cleanupPassed) failures.push('Topology control cleanup failed');
 
 if (failures.length > 0) {
   console.error(failures.join('\n'));
@@ -470,9 +1055,13 @@ if (failures.length > 0) {
       cleanup: 'race jobs plus database/container finalization'
     })),
     negative_controls: topologyControls,
+    ast_extraction: topologyValidation.evidence,
+    ast_boundary_controls: astBoundaryControls,
+    source_override_control: sourceOverrideControl,
     protected_hashes: Object.fromEntries([...protectedTopologySnapshots].map(([path, bytes]) => [path.slice(repositoryRoot.length + 1).replaceAll('\\', '/'), sha256(bytes)])),
-    restoration: repositoryTopologyRestored() ? 'PASS' : 'FAIL',
-    cleanup: topologyControls.every((control) => control.cleanup === 'PASS') ? 'PASS' : 'FAIL',
-    final_result: 'PASS'
+    aggregation: allControlsPassed && restorationPassed && cleanupPassed ? 'PASS' : 'FAIL',
+    restoration: restorationPassed ? 'PASS' : 'FAIL',
+    cleanup: cleanupPassed ? 'PASS' : 'FAIL',
+    final_result: allControlsPassed && restorationPassed && cleanupPassed ? 'PASS' : 'FAIL'
   }));
 }
