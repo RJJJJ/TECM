@@ -101,12 +101,84 @@ function runTest(root, name, timeout = 30_000) {
   ], { cwd: root, encoding: 'utf8', timeout, windowsHide: true });
 }
 
+function runCompleteTestFile(root, timeout = 30_000) {
+  return spawnSync(process.execPath, [
+    '--experimental-strip-types', '--test', '--test-reporter=tap', resolve(root, testPath)
+  ], { cwd: root, encoding: 'utf8', timeout, windowsHide: true });
+}
+
 function compactProcess(result) {
   return {
     status: Number.isInteger(result?.status) ? result.status : null,
     signal: result?.signal ?? null,
     error_code: result?.error?.code ?? null
   };
+}
+
+function parseTapCount(lines, label) {
+  const matches = lines.flatMap((line) => {
+    const match = line.match(new RegExp(`^# ${label} (\\d+)$`));
+    return match ? [Number(match[1])] : [];
+  });
+  if (matches.length !== 1 || !Number.isSafeInteger(matches[0])) {
+    throw new Error(`malformed TAP summary: expected one ${label} count`);
+  }
+  return matches[0];
+}
+
+function classifyCompleteBaseline(result) {
+  const processAccepted = !result?.error && !result?.signal && Number.isInteger(result?.status) && result.status === 0;
+  const reasons = [];
+  let counts = null;
+  let passedTests = [];
+  try {
+    const lines = String(result?.stdout ?? '').split(/\r?\n/);
+    const plans = lines.flatMap((line) => {
+      const match = line.match(/^1\.\.(\d+)$/);
+      return match ? [Number(match[1])] : [];
+    });
+    if (plans.length !== 1 || !Number.isSafeInteger(plans[0])) {
+      throw new Error('malformed TAP summary: expected one top-level plan');
+    }
+    counts = Object.fromEntries(
+      ['tests', 'suites', 'pass', 'fail', 'cancelled', 'skipped', 'todo']
+        .map((label) => [label, parseTapCount(lines, label)])
+    );
+    const results = lines.flatMap((line) => {
+      const match = line.match(/^(ok|not ok) (\d+) - (.*?)(?: # (?:SKIP|TODO).*)?$/);
+      return match ? [{ ok: match[1] === 'ok', index: Number(match[2]), name: match[3] }] : [];
+    });
+    passedTests = results.filter((entry) => entry.ok).map((entry) => entry.name);
+    if (counts.tests === 0) reasons.push('zero discovered tests');
+    if (plans[0] !== counts.tests || results.length !== counts.tests) reasons.push('TAP plan/result count mismatch');
+    if (!results.every((entry, index) => entry.index === index + 1)) reasons.push('TAP result indices malformed');
+    if (counts.pass + counts.fail + counts.cancelled + counts.skipped + counts.todo !== counts.tests) {
+      reasons.push('TAP aggregate counts malformed');
+    }
+    if (counts.fail !== 0 || counts.cancelled !== 0 || counts.skipped !== 0 || counts.todo !== 0) {
+      reasons.push('complete unit file contains a failed, cancelled, skipped, or todo test');
+    }
+    if (counts.pass !== counts.tests || !results.every((entry) => entry.ok)) reasons.push('not every discovered test passed');
+    const requiredTests = [...new Set(cases.map((spec) => spec.test))];
+    for (const name of requiredTests) {
+      if (passedTests.filter((candidate) => candidate === name).length !== 1) reasons.push(`required mutation test did not pass exactly once: ${name}`);
+    }
+  } catch (error) {
+    reasons.push(error instanceof Error ? error.message : String(error));
+  }
+  if (!processAccepted) reasons.push('test process lifecycle rejected');
+  return {
+    accepted: processAccepted && reasons.length === 0,
+    counts,
+    mounted_form_test: passedTests.includes(cases.find((spec) => spec.id === 'B1-M7').test) ? 'PASS' : 'FAIL',
+    required_mutation_tests: [...new Set(cases.map((spec) => spec.test))].map((name) => ({ name, passed: passedTests.includes(name) })),
+    reasons,
+    process: compactProcess(result)
+  };
+}
+
+function runCompleteBaseline(root) {
+  return classifyCompleteBaseline(runCompleteTestFile(root));
 }
 
 function classifyMutationRun(result, spec) {
@@ -169,8 +241,38 @@ function mutate(spec, { targetMode = 'one', neutral = false } = {}) {
   });
 }
 
-function allGatesPassed({ baseline, targetControls, lifecycleControls, results, restoration }) {
-  return baseline.accepted && targetControls.every((control) => control.control_passed) &&
+function runMountedFormBaselineControl() {
+  return withWorkspace('mounted-form-baseline-control', (root) => {
+    const controlTestPath = resolve(root, testPath);
+    const original = readFileSync(controlTestPath);
+    const originalHash = sha256(original);
+    const search = '  assert.match(actions, /completionToken: crypto\\.randomUUID\\(\\)/);';
+    const replacement = '  assert.match(actions, /__BATCH1_MOUNTED_FORM_BASELINE_CONTROL__/);';
+    const text = original.toString('utf8');
+    if (count(text, search) !== 1) throw new Error('mounted-form baseline control target must match exactly once');
+    writeFileSync(controlTestPath, text.replace(search, replacement));
+    const brokenBaseline = runCompleteBaseline(root);
+    writeFileSync(controlTestPath, original);
+    const restored = readFileSync(controlTestPath);
+    const restoredHash = sha256(restored);
+    const restoredBaseline = runCompleteBaseline(root);
+    return {
+      id: 'CONTROL-MOUNTED-FORM-INDEPENDENT-FAILURE',
+      control_passed: !brokenBaseline.accepted && brokenBaseline.counts?.fail === 1 &&
+        restored.equals(original) && restoredHash === originalHash && restoredBaseline.accepted,
+      broken_baseline: brokenBaseline,
+      restoration: restored.equals(original) && restoredHash === originalHash ? 'PASS' : 'FAIL',
+      restored_baseline: restoredBaseline,
+      original_hash: originalHash,
+      restored_hash: restoredHash,
+      cleanup: 'PASS'
+    };
+  });
+}
+
+function allGatesPassed({ baseline, baselineControl, postControlBaseline, targetControls, lifecycleControls, results, restoration }) {
+  return baseline.accepted && baselineControl.control_passed && postControlBaseline.accepted &&
+    targetControls.every((control) => control.control_passed) &&
     lifecycleControls.every((control) => control.control_passed) &&
     results.every((result) => result.accepted) && restoration === 'PASS';
 }
@@ -218,22 +320,41 @@ function runVerifier() {
   let report;
   let failed = false;
   try {
-  const baselineRun = runTest(repoRoot, 'Batch 1');
-  const baseline = {
-    accepted: !baselineRun.error && !baselineRun.signal && baselineRun.status === 0,
-    process: compactProcess(baselineRun)
-  };
-  const targetControls = [mutate(cases[0], { targetMode: 'zero' }), mutate(cases[0], { targetMode: 'multiple' })];
-  const lifecycleControls = runLifecycleControls();
-  const results = cases.map((spec) => mutate(spec));
-  const restoration = repositoryRestored() ? 'PASS' : 'FAIL';
-  const finalPassed = allGatesPassed({ baseline, targetControls, lifecycleControls, results, restoration });
-  report = {
-    harness: 'batch1-release-blockers-mutation-verify', baseline, target_controls: targetControls,
-    lifecycle_controls: lifecycleControls, results, restoration, cleanup: 'PASS',
-    database: 'NOT_USED', container: 'NOT_USED', final_result: finalPassed ? 'PASS' : 'FAIL'
-  };
-  failed = !finalPassed;
+  const baseline = runCompleteBaseline(repoRoot);
+  if (!baseline.accepted) {
+    report = {
+      harness: 'batch1-release-blockers-mutation-verify', baseline,
+      baseline_control: 'NOT_RUN', post_control_baseline: 'NOT_RUN', target_controls: 'NOT_RUN',
+      lifecycle_controls: 'NOT_RUN', results: 'NOT_RUN', restoration: repositoryRestored() ? 'PASS' : 'FAIL',
+      cleanup: 'PASS', database: 'NOT_USED', container: 'NOT_USED', final_result: 'FAIL'
+    };
+    failed = true;
+  } else {
+  const baselineControl = runMountedFormBaselineControl();
+  const postControlBaseline = runCompleteBaseline(repoRoot);
+  if (!baselineControl.control_passed || !postControlBaseline.accepted) {
+    report = {
+      harness: 'batch1-release-blockers-mutation-verify', baseline, baseline_control: baselineControl,
+      post_control_baseline: postControlBaseline, target_controls: 'NOT_RUN', lifecycle_controls: 'NOT_RUN',
+      results: 'NOT_RUN', restoration: repositoryRestored() ? 'PASS' : 'FAIL', cleanup: 'PASS',
+      database: 'NOT_USED', container: 'NOT_USED', final_result: 'FAIL'
+    };
+    failed = true;
+  } else {
+    const targetControls = [mutate(cases[0], { targetMode: 'zero' }), mutate(cases[0], { targetMode: 'multiple' })];
+    const lifecycleControls = runLifecycleControls();
+    const results = cases.map((spec) => mutate(spec));
+    const restoration = repositoryRestored() ? 'PASS' : 'FAIL';
+    const finalPassed = allGatesPassed({ baseline, baselineControl, postControlBaseline, targetControls, lifecycleControls, results, restoration });
+    report = {
+      harness: 'batch1-release-blockers-mutation-verify', baseline, baseline_control: baselineControl,
+      post_control_baseline: postControlBaseline, target_controls: targetControls,
+      lifecycle_controls: lifecycleControls, results, restoration, cleanup: 'PASS',
+      database: 'NOT_USED', container: 'NOT_USED', final_result: finalPassed ? 'PASS' : 'FAIL'
+    };
+    failed = !finalPassed;
+  }
+  }
   } catch (error) {
   failed = true;
   report = {
@@ -248,11 +369,13 @@ function runVerifier() {
 
 if (process.argv.includes('--control=uncaught-final')) {
   const baseline = { accepted: true };
+  const baselineControl = { control_passed: true };
+  const postControlBaseline = { accepted: true };
   const targetControls = [{ control_passed: true }];
   const lifecycleControls = [{ control_passed: true }];
   const results = [{ accepted: false }];
   const restoration = 'PASS';
-  const passed = allGatesPassed({ baseline, targetControls, lifecycleControls, results, restoration });
+  const passed = allGatesPassed({ baseline, baselineControl, postControlBaseline, targetControls, lifecycleControls, results, restoration });
   process.stdout.write(`${JSON.stringify({ control: 'uncaught-final', restoration, final_result: passed ? 'PASS' : 'FAIL' })}\n`);
   if (!passed) process.exitCode = 1;
 } else {
