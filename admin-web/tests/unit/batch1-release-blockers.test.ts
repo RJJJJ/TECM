@@ -10,6 +10,7 @@ const migration = source('../supabase/migrations/20260830100127_batch1_staff_att
 const forms = source('components/operation-forms.tsx');
 const actions = source('lib/operations/actions.ts');
 const page = source('app/admin/attendance/page.tsx');
+const errors = source('lib/operations/errors.ts');
 
 test('Batch 1 staff attendance shares the revision, lock, lifecycle, and replay contract', () => {
   assert.match(migration, /create or replace function public\.submit_staff_attendance\(\s*target_session_id uuid,[\s\S]+?target_expected_revision bigint/, 'B1-M1 staff expected revision missing');
@@ -38,6 +39,22 @@ test('Batch 1 payment and intake keys are bound to canonical server fingerprints
   assert.match(migration, /existing_fingerprint <> request_fingerprint[\s\S]+?idempotency key payload mismatch/, 'B1-M6 intake payload comparison missing');
   assert.match(migration, /pg_advisory_xact_lock\(hashtextextended\(\s*'record-payment:'/);
   assert.match(migration, /pg_advisory_xact_lock\(hashtextextended\(\s*'intake-package:'/);
+  assert.match(migration, /request_fingerprint_version smallint/);
+  assert.match(migration, /request_fingerprint, request_fingerprint_version, created_by[\s\S]+?request_fingerprint, 1, auth\.uid\(\)/, 'B1-M10 trusted payment provenance missing');
+  assert.match(migration, /request_fingerprint, request_fingerprint_version[\s\S]+?normalized_key, request_fingerprint, 1/, 'B1-M11 trusted intake provenance missing');
+  assert.match(migration, /payment_row\.request_fingerprint is null[\s\S]+?legacy idempotency key conflict/, 'B1-M8 payment legacy conflict missing');
+  assert.match(migration, /existing_fingerprint is null[\s\S]+?legacy idempotency key conflict/, 'B1-M9 intake legacy conflict missing');
+  assert.doesNotMatch(migration, /with payment_payloads as|with intake_payloads as|legacy_guardian_name|legacy_student_name/);
+});
+
+test('Batch 1 makes operation identity unreachable through authenticated direct DML', () => {
+  assert.match(
+    migration,
+    /revoke insert, update, delete on table public\.payments, public\.student_packages, public\.payment_allocations from authenticated;/,
+    'B1-M12 authenticated operation DML revoke missing'
+  );
+  assert.match(migration, /grant select on table public\.payments, public\.student_packages, public\.payment_allocations to authenticated;/);
+  assert.doesNotMatch(migration, /grant update \([^)]*(?:idempotency_key|request_fingerprint|organization_id|amount_minor|guardian_id|student_id|fee_plan_id)/);
 });
 
 test('mounted operation forms rotate keys only after confirmed success and remain pending-safe', () => {
@@ -67,6 +84,10 @@ test('sensitive database mismatch and attendance conflicts map to exact safe ope
     const stale = safeErrorMessage({ code: 'P0001', message: 'attendance has changed; reload before submitting private-row-token' });
     assert.equal(stale, '此點名已被其他操作更新，請重新載入後再提交。');
     assert.doesNotMatch(stale, /private|token|P0001/i);
+    const legacy = safeErrorMessage({ code: 'P0001', message: 'legacy idempotency key conflict internal-row-uuid' });
+    assert.equal(legacy, '此操作識別碼來自舊版本，不能安全重試。請重新載入頁面後重新操作。');
+    assert.doesNotMatch(legacy, /legacy|internal|uuid|P0001/i);
+    assert.match(errors, /LEGACY_IDEMPOTENCY_ERROR_MESSAGE/);
   } finally {
     console.error = originalConsoleError;
   }

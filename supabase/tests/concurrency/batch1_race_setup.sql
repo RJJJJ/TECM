@@ -58,3 +58,50 @@ select race,(select count(*) from public.notifications),(select count(*) from pu
 from (values ('staff-existing'),('staff-absent'),('staff-cross-role')) names(race)
 on conflict(race) do update set notification_count=excluded.notification_count,outbox_count=excluded.outbox_count,
   credit_count=excluded.credit_count,leave_count=excluded.leave_count,entitlement_count=excluded.entitlement_count;
+
+create table if not exists public.__test_batch1_worker_results (
+  race text not null,
+  worker text not null check (worker in ('first','second')),
+  operation text not null check (operation in ('payment','intake')),
+  outcome text not null check (outcome in ('committed','rejected')),
+  sqlstate text,
+  classification text not null check (classification in (
+    'committed','idempotency_payload_mismatch','unique_violation','unexpected_sql_failure'
+  )),
+  error_identifier text,
+  payload_identity text not null,
+  fingerprint_classification text not null,
+  result_id uuid,
+  recorded_at timestamptz not null default statement_timestamp(),
+  primary key (race,worker),
+  check (
+    (outcome='committed' and classification='committed' and sqlstate is null
+      and error_identifier is null and result_id is not null)
+    or
+    (outcome='rejected' and classification<>'committed' and sqlstate is not null
+      and result_id is null)
+  )
+);
+truncate table public.__test_batch1_worker_results;
+revoke all on table public.__test_batch1_worker_results from public,anon,authenticated;
+grant insert,select on table public.__test_batch1_worker_results to authenticated;
+grant select,insert,update,delete on table public.__test_batch1_worker_results to service_role;
+
+create table if not exists public.__test_batch1_operation_baseline (
+  race text primary key,
+  audit_count bigint not null,
+  notification_count bigint not null,
+  outbox_count bigint not null,
+  receipt_count bigint not null,
+  payment_count bigint not null,
+  allocation_count bigint not null,
+  parent_count bigint not null,
+  child_count bigint not null,
+  student_count bigint not null,
+  parent_link_count bigint not null,
+  cohort_count bigint not null,
+  package_count bigint not null,
+  credit_count bigint not null,
+  charge_count bigint not null
+);
+truncate table public.__test_batch1_operation_baseline;

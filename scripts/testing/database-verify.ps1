@@ -24,6 +24,8 @@ $unsafeDatabase = 'tecm_unsafe_preflight'
 $containerStarted = $false
 $revisionGuardMigration = '/workspace/supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql'
 $overrideDirectory = $null
+$verificationError = $null
+$cleanupError = $null
 
 if ($RevisionGuardMigrationOverride) {
   $overridePath = (Resolve-Path -LiteralPath $RevisionGuardMigrationOverride).Path
@@ -316,6 +318,117 @@ try {
     }
   }
 
+  function Set-Batch1OperationBaseline {
+    param([Parameter(Mandatory)][string]$RaceName)
+    if ($RaceName -notmatch '^batch1-(payment|intake)-(same|different)$') {
+      throw "Invalid Batch 1 operation race name: $RaceName"
+    }
+    $baselineSql = "delete from public.__test_batch1_worker_results where race='$RaceName'; " +
+      "insert into public.__test_batch1_operation_baseline(" +
+      "race,audit_count,notification_count,outbox_count,receipt_count,payment_count,allocation_count," +
+      "parent_count,child_count,student_count,parent_link_count,cohort_count,package_count,credit_count,charge_count) " +
+      "select '$RaceName',(select count(*) from public.audit_logs),(select count(*) from public.notifications)," +
+      "(select count(*) from public.notification_outbox),(select count(*) from public.receipts)," +
+      "(select count(*) from public.payments),(select count(*) from public.payment_allocations)," +
+      "(select count(*) from public.parent_profiles),(select count(*) from public.children)," +
+      "(select count(*) from public.students),(select count(*) from public.parent_student_links)," +
+      "(select count(*) from public.cohort_students),(select count(*) from public.student_packages)," +
+      "(select count(*) from public.credit_ledger),(select count(*) from public.charges) " +
+      "on conflict(race) do update set audit_count=excluded.audit_count,notification_count=excluded.notification_count," +
+      "outbox_count=excluded.outbox_count,receipt_count=excluded.receipt_count,payment_count=excluded.payment_count," +
+      "allocation_count=excluded.allocation_count,parent_count=excluded.parent_count,child_count=excluded.child_count," +
+      "student_count=excluded.student_count,parent_link_count=excluded.parent_link_count,cohort_count=excluded.cohort_count," +
+      "package_count=excluded.package_count,credit_count=excluded.credit_count,charge_count=excluded.charge_count"
+    docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -c $baselineSql | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not capture Batch 1 operation baseline: $RaceName" }
+  }
+
+  function Test-Batch1WorkerResultContract {
+    param([object[]]$Rows,[string]$Operation,[string]$Mode,[string]$WinnerIdentity,[string]$LoserIdentity)
+    if ($Rows.Count -ne 2) { return $false }
+    $first = @($Rows | Where-Object worker -eq 'first')
+    $second = @($Rows | Where-Object worker -eq 'second')
+    if ($first.Count -ne 1 -or $second.Count -ne 1) { return $false }
+    if (@($Rows | Where-Object operation -ne $Operation).Count -ne 0) { return $false }
+    if ($first[0].outcome -ne 'committed' -or $first[0].classification -ne 'committed' -or
+        $first[0].sqlstate -or $first[0].error_identifier -or -not $first[0].result_id -or
+        $first[0].payload_identity -ne $WinnerIdentity -or
+        $first[0].fingerprint_classification -ne 'winner-canonical-v1') { return $false }
+    if ($Mode -eq 'same') {
+      return $second[0].outcome -eq 'committed' -and $second[0].classification -eq 'committed' -and
+        -not $second[0].sqlstate -and -not $second[0].error_identifier -and
+        $second[0].payload_identity -eq $LoserIdentity -and
+        $second[0].fingerprint_classification -eq 'same-canonical-v1' -and
+        $second[0].result_id -eq $first[0].result_id
+    }
+    if ($Mode -eq 'different') {
+      return $second[0].outcome -eq 'rejected' -and
+        $second[0].classification -eq 'idempotency_payload_mismatch' -and
+        $second[0].sqlstate -eq 'P0001' -and
+        $second[0].error_identifier -eq 'idempotency_key_payload_mismatch' -and
+        $second[0].payload_identity -eq $LoserIdentity -and
+        $second[0].fingerprint_classification -eq 'loser-mismatch' -and -not $second[0].result_id
+    }
+    return $false
+  }
+
+  function Assert-Batch1WorkerResultContract {
+    param(
+      [Parameter(Mandatory)][string]$RaceName,[Parameter(Mandatory)][string]$Operation,
+      [Parameter(Mandatory)][string]$Mode,[Parameter(Mandatory)][string]$WinnerIdentity,
+      [Parameter(Mandatory)][string]$LoserIdentity
+    )
+    $json = docker exec $containerName psql -q -U postgres -d $database -Atc `
+      "select coalesce(jsonb_agg(to_jsonb(r) order by worker),'[]'::jsonb) from public.__test_batch1_worker_results r where race='$RaceName'"
+    if ($LASTEXITCODE -ne 0 -or -not $json) { throw "Batch 1 worker result query failed: $RaceName" }
+    try {
+      $parsedRows = $json | ConvertFrom-Json
+      $rows = @()
+      foreach ($parsedRow in $parsedRows) { $rows += $parsedRow }
+    } catch { throw "Batch 1 worker result JSON was invalid: $RaceName" }
+    if (-not (Test-Batch1WorkerResultContract -Rows $rows -Operation $Operation -Mode $Mode `
+      -WinnerIdentity $WinnerIdentity -LoserIdentity $LoserIdentity)) {
+      Write-Host "[RACE CONTRACT OUTPUT] $RaceName $json"
+      throw "Batch 1 structured worker result contract failed: $RaceName"
+    }
+    Write-Host "[RACE CONTRACT PASS] $RaceName"
+  }
+
+  # Executable fail-closed controls for unrelated SQL failure, unique violation,
+  # missing classification/incomplete output, and bounded timeout cleanup.
+  $controlCommitted = [pscustomobject]@{
+    worker='first';operation='payment';outcome='committed';classification='committed';sqlstate=$null;
+    error_identifier=$null;payload_identity='winner';fingerprint_classification='winner-canonical-v1';
+    result_id='00000000-0000-4000-8000-000000000001'
+  }
+  $controlUnexpected = [pscustomobject]@{
+    worker='second';operation='payment';outcome='rejected';classification='unexpected_sql_failure';sqlstate='42501';
+    error_identifier='unexpected_sql_failure';payload_identity='loser';fingerprint_classification='loser-mismatch';result_id=$null
+  }
+  $controlUnique = $controlUnexpected.PSObject.Copy()
+  $controlUnique.classification='unique_violation';$controlUnique.sqlstate='23505';$controlUnique.error_identifier='unique_violation'
+  $controlIncomplete = $controlUnexpected.PSObject.Copy()
+  $controlIncomplete.classification=$null;$controlIncomplete.sqlstate=$null
+  foreach ($control in @($controlUnexpected,$controlUnique,$controlIncomplete)) {
+    if (Test-Batch1WorkerResultContract -Rows @($controlCommitted,$control) -Operation 'payment' `
+      -Mode 'different' -WinnerIdentity 'winner' -LoserIdentity 'loser') {
+      throw 'Batch 1 structured worker result parser accepted a negative control.'
+    }
+  }
+  if (Test-Batch1WorkerResultContract -Rows @($controlCommitted) -Operation 'payment' `
+    -Mode 'different' -WinnerIdentity 'winner' -LoserIdentity 'loser') {
+    throw 'Batch 1 structured worker result parser accepted incomplete output.'
+  }
+  $timeoutControl = Start-Job -Name 'batch1-timeout-negative-control' -ScriptBlock { Start-Sleep -Seconds 5 }
+  $timeoutRejected = $false
+  try {
+    Wait-DatabaseRaceJobs -Jobs @($timeoutControl) -TimeoutSeconds 1 | Out-Null
+  } catch {
+    if ($_.Exception.Message -like 'Database race timed out after 1s:*') { $timeoutRejected=$true } else { throw }
+  }
+  if (-not $timeoutRejected) { throw 'Database race timeout negative control did not fail closed.' }
+  Write-Host '[PASS] Batch 1 structured-result unrelated/unique/incomplete and timeout negative controls'
+
   function Invoke-TeacherAttendanceContention {
     param(
       [Parameter(Mandatory)]
@@ -517,40 +630,70 @@ try {
     -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_attendance_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Cross-role teacher/staff attendance race assertion failed.' }
 
+  Set-Batch1OperationBaseline -RaceName 'batch1-payment-same'
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/batch1_payment_worker.sql' `
     -SecondFile '/workspace/supabase/tests/concurrency/batch1_payment_worker.sql' `
-    -ExpectedExitPairs @('0,0') -StartSecondDelayMilliseconds 0 -BarrierRaceName 'batch1-payment-same' `
-    -FirstPsqlVariables @('race_name=batch1-payment-same','worker_name=first','charge_id=41000000-0000-4000-8000-000000000021','amount_minor=100000','method=cash','idempotency_key=batch1-payment-race-same') `
-    -SecondPsqlVariables @('race_name=batch1-payment-same','worker_name=second','charge_id=41000000-0000-4000-8000-000000000021','amount_minor=100000','method=cash','idempotency_key=batch1-payment-race-same')
-  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -v 'idempotency_key=batch1-payment-race-same' -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_payment_assert.sql'
+    -ExpectedExitPairs @('0,0') -ReleaseFirstBeforeSecond -StartSecondDelayMilliseconds 0 -BarrierRaceName 'batch1-payment-same' `
+    -FirstPsqlVariables @('race_name=batch1-payment-same','worker_name=first','charge_id=41000000-0000-4000-8000-000000000021','amount_minor=100000','method=cash','idempotency_key=batch1-payment-race-same','payload_identity=payment-same-100000-cash','fingerprint_classification=winner-canonical-v1') `
+    -SecondPsqlVariables @('race_name=batch1-payment-same','worker_name=second','charge_id=41000000-0000-4000-8000-000000000021','amount_minor=100000','method=cash','idempotency_key=batch1-payment-race-same','payload_identity=payment-same-100000-cash','fingerprint_classification=same-canonical-v1')
+  Assert-Batch1WorkerResultContract -RaceName 'batch1-payment-same' -Operation 'payment' -Mode 'same' `
+    -WinnerIdentity 'payment-same-100000-cash' -LoserIdentity 'payment-same-100000-cash'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 `
+    -v 'race_name=batch1-payment-same' -v 'idempotency_key=batch1-payment-race-same' -v 'expected_mode=same' `
+    -v 'winner_charge_id=41000000-0000-4000-8000-000000000021' -v 'winner_amount_minor=100000' `
+    -v 'winner_identity=payment-same-100000-cash' -v 'loser_identity=payment-same-100000-cash' `
+    -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_payment_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Concurrent same-payload payment assertion failed.' }
 
+  Set-Batch1OperationBaseline -RaceName 'batch1-payment-different'
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/batch1_payment_worker.sql' `
     -SecondFile '/workspace/supabase/tests/concurrency/batch1_payment_worker.sql' `
-    -ExpectedExitPairs @('0,3','3,0') -StartSecondDelayMilliseconds 0 -BarrierRaceName 'batch1-payment-different' `
-    -FirstPsqlVariables @('race_name=batch1-payment-different','worker_name=first','charge_id=41000000-0000-4000-8000-000000000022','amount_minor=110000','method=cash','idempotency_key=batch1-payment-race-different') `
-    -SecondPsqlVariables @('race_name=batch1-payment-different','worker_name=second','charge_id=41000000-0000-4000-8000-000000000022','amount_minor=120000','method=cash','idempotency_key=batch1-payment-race-different')
-  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -v 'idempotency_key=batch1-payment-race-different' -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_payment_assert.sql'
+    -ExpectedExitPairs @('0,0') -ReleaseFirstBeforeSecond -StartSecondDelayMilliseconds 0 -BarrierRaceName 'batch1-payment-different' `
+    -FirstPsqlVariables @('race_name=batch1-payment-different','worker_name=first','charge_id=41000000-0000-4000-8000-000000000022','amount_minor=110000','method=cash','idempotency_key=batch1-payment-race-different','payload_identity=payment-winner-110000-cash','fingerprint_classification=winner-canonical-v1') `
+    -SecondPsqlVariables @('race_name=batch1-payment-different','worker_name=second','charge_id=41000000-0000-4000-8000-000000000022','amount_minor=120000','method=cash','idempotency_key=batch1-payment-race-different','payload_identity=payment-loser-120000-cash','fingerprint_classification=loser-mismatch')
+  Assert-Batch1WorkerResultContract -RaceName 'batch1-payment-different' -Operation 'payment' -Mode 'different' `
+    -WinnerIdentity 'payment-winner-110000-cash' -LoserIdentity 'payment-loser-120000-cash'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 `
+    -v 'race_name=batch1-payment-different' -v 'idempotency_key=batch1-payment-race-different' -v 'expected_mode=different' `
+    -v 'winner_charge_id=41000000-0000-4000-8000-000000000022' -v 'winner_amount_minor=110000' `
+    -v 'winner_identity=payment-winner-110000-cash' -v 'loser_identity=payment-loser-120000-cash' `
+    -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_payment_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Concurrent changed-payload payment assertion failed.' }
 
+  Set-Batch1OperationBaseline -RaceName 'batch1-intake-same'
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/batch1_intake_worker.sql' `
     -SecondFile '/workspace/supabase/tests/concurrency/batch1_intake_worker.sql' `
-    -ExpectedExitPairs @('0,0') -StartSecondDelayMilliseconds 0 -BarrierRaceName 'batch1-intake-same' `
-    -FirstPsqlVariables @('race_name=batch1-intake-same','worker_name=first','guardian_name=Batch1 Same Guardian','phone=+85363000001','student_name=Batch1 Same Student','idempotency_key=batch1-intake-race-same') `
-    -SecondPsqlVariables @('race_name=batch1-intake-same','worker_name=second','guardian_name=Batch1 Same Guardian','phone=+85363000001','student_name=Batch1 Same Student','idempotency_key=batch1-intake-race-same')
-  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -v 'idempotency_key=batch1-intake-race-same' -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_intake_assert.sql'
+    -ExpectedExitPairs @('0,0') -ReleaseFirstBeforeSecond -StartSecondDelayMilliseconds 0 -BarrierRaceName 'batch1-intake-same' `
+    -FirstPsqlVariables @('race_name=batch1-intake-same','worker_name=first','guardian_name=Batch1 Same Guardian','phone=+85363000001','student_name=Batch1 Same Student','idempotency_key=batch1-intake-race-same','payload_identity=intake-same-student','fingerprint_classification=winner-canonical-v1') `
+    -SecondPsqlVariables @('race_name=batch1-intake-same','worker_name=second','guardian_name=Batch1 Same Guardian','phone=+85363000001','student_name=Batch1 Same Student','idempotency_key=batch1-intake-race-same','payload_identity=intake-same-student','fingerprint_classification=same-canonical-v1')
+  Assert-Batch1WorkerResultContract -RaceName 'batch1-intake-same' -Operation 'intake' -Mode 'same' `
+    -WinnerIdentity 'intake-same-student' -LoserIdentity 'intake-same-student'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 `
+    -v 'race_name=batch1-intake-same' -v 'idempotency_key=batch1-intake-race-same' -v 'expected_mode=same' `
+    -v 'winner_guardian_name=Batch1 Same Guardian' -v 'winner_phone=+85363000001' `
+    -v 'winner_student_name=Batch1 Same Student' -v 'loser_student_name=Batch1 Same Student' `
+    -v 'winner_identity=intake-same-student' -v 'loser_identity=intake-same-student' `
+    -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_intake_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Concurrent same-payload intake assertion failed.' }
 
+  Set-Batch1OperationBaseline -RaceName 'batch1-intake-different'
   Invoke-DatabaseRace `
     -FirstFile '/workspace/supabase/tests/concurrency/batch1_intake_worker.sql' `
     -SecondFile '/workspace/supabase/tests/concurrency/batch1_intake_worker.sql' `
-    -ExpectedExitPairs @('0,3','3,0') -StartSecondDelayMilliseconds 0 -BarrierRaceName 'batch1-intake-different' `
-    -FirstPsqlVariables @('race_name=batch1-intake-different','worker_name=first','guardian_name=Batch1 Diff Guardian','phone=+85363000002','student_name=Batch1 Diff Student A','idempotency_key=batch1-intake-race-different') `
-    -SecondPsqlVariables @('race_name=batch1-intake-different','worker_name=second','guardian_name=Batch1 Diff Guardian','phone=+85363000002','student_name=Batch1 Diff Student B','idempotency_key=batch1-intake-race-different')
-  docker exec $containerName psql -q -v ON_ERROR_STOP=1 -v 'idempotency_key=batch1-intake-race-different' -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_intake_assert.sql'
+    -ExpectedExitPairs @('0,0') -ReleaseFirstBeforeSecond -StartSecondDelayMilliseconds 0 -BarrierRaceName 'batch1-intake-different' `
+    -FirstPsqlVariables @('race_name=batch1-intake-different','worker_name=first','guardian_name=Batch1 Diff Guardian','phone=+85363000002','student_name=Batch1 Diff Student A','idempotency_key=batch1-intake-race-different','payload_identity=intake-winner-student-a','fingerprint_classification=winner-canonical-v1') `
+    -SecondPsqlVariables @('race_name=batch1-intake-different','worker_name=second','guardian_name=Batch1 Diff Guardian','phone=+85363000002','student_name=Batch1 Diff Student B','idempotency_key=batch1-intake-race-different','payload_identity=intake-loser-student-b','fingerprint_classification=loser-mismatch')
+  Assert-Batch1WorkerResultContract -RaceName 'batch1-intake-different' -Operation 'intake' -Mode 'different' `
+    -WinnerIdentity 'intake-winner-student-a' -LoserIdentity 'intake-loser-student-b'
+  docker exec $containerName psql -q -v ON_ERROR_STOP=1 `
+    -v 'race_name=batch1-intake-different' -v 'idempotency_key=batch1-intake-race-different' -v 'expected_mode=different' `
+    -v 'winner_guardian_name=Batch1 Diff Guardian' -v 'winner_phone=+85363000002' `
+    -v 'winner_student_name=Batch1 Diff Student A' -v 'loser_student_name=Batch1 Diff Student B' `
+    -v 'winner_identity=intake-winner-student-a' -v 'loser_identity=intake-loser-student-b' `
+    -U postgres -d $database -f '/workspace/supabase/tests/concurrency/batch1_intake_assert.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Concurrent changed-payload intake assertion failed.' }
 
   Invoke-DatabaseRace `
@@ -771,8 +914,12 @@ try {
      union all select 'pending_makeup',count(*) from makeup_entitlements where organization_id='10000000-0000-4000-8000-000000000000' and status='available'
      union all select 'completed_makeup',count(*) from makeup_sessions where organization_id='10000000-0000-4000-8000-000000000000' and status='completed';"
   if ($LASTEXITCODE -ne 0) { throw 'Could not read final verification counts.' }
+} catch {
+  $verificationError = $_
 } finally {
   if ($containerStarted) {
+    $cleanupErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     $databaseCleanupPassed = $true
     foreach ($cleanupDatabase in @($unsafeDatabase,$database)) {
       docker exec $containerName dropdb -U postgres --if-exists $cleanupDatabase 2>$null | Out-Null
@@ -791,7 +938,14 @@ try {
     $containerCleanupLabel = if ($containerCleanupPassed) { 'PASS' } else { 'FAIL' }
     Write-Host "[CLEANUP] database=$databaseCleanupLabel container=$containerCleanupLabel"
     if (-not $databaseCleanupPassed -or -not $containerCleanupPassed) {
-      throw 'Database verification cleanup failed.'
+      $cleanupError = 'Database verification cleanup failed.'
     }
+    $ErrorActionPreference = $cleanupErrorAction
   }
 }
+
+if ($verificationError) {
+  if ($cleanupError) { Write-Host "[CLEANUP ERROR] $cleanupError" }
+  throw $verificationError
+}
+if ($cleanupError) { throw $cleanupError }

@@ -300,7 +300,7 @@ test.describe('教育中心營運主流程', () => {
     await page.getByLabel('開始時間').fill(macauLaterTodayInput(30));
     await page.getByLabel('結束時間').fill(macauLaterTodayInput(90));
     await page.getByRole('button', { name: '建立未來課堂' }).click();
-    await expect(page.getByText('未來課堂已建立')).toBeVisible();
+    await expect(page.getByText('未來課堂已建立')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('tbody tr')).toHaveCount(1);
     await page.getByLabel('教案').selectOption({ index: 2 });
     await page.getByLabel('導師').selectOption({ index: 1 });

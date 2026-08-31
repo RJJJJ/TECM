@@ -4,6 +4,7 @@ export const DUPLICATE_ERROR_MESSAGE = '已有相同記錄，請勿重複建立�
 export const LEAVE_SESSION_ERROR_MESSAGE = '這名學生沒有報讀所選課堂的班別，或該課堂已取消、已開始或不再接受請假。請重新選擇。';
 export const TEACHER_IDENTITY_ERROR_MESSAGE = '此登入身份已連結其他機構或其他職員角色，不能改為導師。';
 export const IDEMPOTENCY_ERROR_MESSAGE = '表單內容已在提交後改變。請重新整理頁面，再重新操作。';
+export const LEGACY_IDEMPOTENCY_ERROR_MESSAGE = '此操作識別碼來自舊版本，不能安全重試。請重新載入頁面後重新操作。';
 export const COHORT_COURSE_REQUIRED_MESSAGE = '此班別尚未連結課程，請先選擇所屬課程。';
 export const SAME_COURSE_ENROLLMENT_MESSAGE = '學生已報讀此課程的另一班別。如需更換，請使用轉班。';
 
@@ -81,6 +82,11 @@ export function safeErrorMessage(
   if (/idempotency key payload mismatch/.test(message)) {
     logSafeFailure(operation, error, referenceId);
     return IDEMPOTENCY_ERROR_MESSAGE;
+  }
+
+  if (/legacy idempotency key conflict/.test(message)) {
+    logSafeFailure(operation, error, referenceId);
+    return LEGACY_IDEMPOTENCY_ERROR_MESSAGE;
   }
 
   if (/cohort course is not linked/.test(message)) {

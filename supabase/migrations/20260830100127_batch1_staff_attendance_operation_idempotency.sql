@@ -27,6 +27,10 @@ alter table public.payments
   add column if not exists request_fingerprint text;
 alter table public.student_packages
   add column if not exists request_fingerprint text;
+alter table public.payments
+  add column if not exists request_fingerprint_version smallint;
+alter table public.student_packages
+  add column if not exists request_fingerprint_version smallint;
 
 do $$
 begin
@@ -48,83 +52,35 @@ begin
       add constraint student_packages_request_fingerprint_format
       check (request_fingerprint is null or request_fingerprint ~ '^[0-9a-f]{64}$');
   end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.payments'::regclass
+      and conname = 'payments_request_fingerprint_provenance'
+  ) then
+    alter table public.payments
+      add constraint payments_request_fingerprint_provenance check (
+        (request_fingerprint is null and request_fingerprint_version is null)
+        or (request_fingerprint is not null and request_fingerprint_version = 1)
+      );
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.student_packages'::regclass
+      and conname = 'student_packages_request_fingerprint_provenance'
+  ) then
+    alter table public.student_packages
+      add constraint student_packages_request_fingerprint_provenance check (
+        (request_fingerprint is null and request_fingerprint_version is null)
+        or (request_fingerprint is not null and request_fingerprint_version = 1)
+      );
+  end if;
 end
 $$;
 
--- Existing payment rows are backfilled only when their original single-charge
--- request is unambiguous. Ambiguous legacy rows remain NULL and are compared
--- against persisted business fields by the RPC below.
-with payment_payloads as (
-  select
-    p.id,
-    public.operation_payload_fingerprint(jsonb_build_object(
-      'operation', 'record_payment',
-      'organization_id', p.organization_id,
-      'guardian_id', p.guardian_id,
-      'charge_id', (array_agg(pa.charge_id order by pa.id))[1],
-      'amount_minor', p.amount_minor,
-      'method', lower(btrim(p.method))
-    )) as fingerprint
-  from public.payments p
-  join public.payment_allocations pa
-    on pa.organization_id = p.organization_id
-   and pa.payment_id = p.id
-  where p.request_fingerprint is null
-  group by p.id
-  having count(*) = 1 and min(pa.amount_minor) = p.amount_minor
-)
-update public.payments p
-set request_fingerprint = pp.fingerprint
-from payment_payloads pp
-where p.id = pp.id
-  and p.request_fingerprint is null;
-
--- Intake/package rows create a new student, primary parent link, and initial
--- cohort membership in one transaction. The earliest rows are the only
--- unambiguous legacy representation of that canonical request.
-with intake_payloads as (
-  select
-    sp.id,
-    public.operation_payload_fingerprint(jsonb_build_object(
-      'operation', 'create_guardian_student_enrollment_package',
-      'organization_id', sp.organization_id,
-      'guardian_name', btrim(pp.full_name),
-      'guardian_phone', btrim(pp.phone),
-      'student_name', btrim(s.display_name),
-      'school_name', nullif(btrim(coalesce(s.school_name, '')), ''),
-      'cohort_id', enrollment.cohort_id,
-      'fee_plan_id', sp.fee_plan_id
-    )) as fingerprint
-  from public.student_packages sp
-  join public.students s
-    on s.organization_id = sp.organization_id
-   and s.id = sp.student_id
-  join lateral (
-    select psl.parent_profile_id
-    from public.parent_student_links psl
-    where psl.organization_id = sp.organization_id
-      and psl.student_id = sp.student_id
-    order by psl.created_at, psl.id
-    limit 1
-  ) parent_link on true
-  join public.parent_profiles pp
-    on pp.organization_id = sp.organization_id
-   and pp.id = parent_link.parent_profile_id
-  join lateral (
-    select cs.cohort_id
-    from public.cohort_students cs
-    where cs.organization_id = sp.organization_id
-      and cs.student_id = sp.student_id
-    order by cs.created_at, cs.id
-    limit 1
-  ) enrollment on true
-  where sp.request_fingerprint is null
-)
-update public.student_packages sp
-set request_fingerprint = ip.fingerprint
-from intake_payloads ip
-where sp.id = ip.id
-  and sp.request_fingerprint is null;
+-- Historical rows have no immutable request envelope. Mutable payment,
+-- profile, student, and enrollment state is not evidence of the original
+-- request, so every pre-Batch-1 row deliberately remains (NULL, NULL). The
+-- canonical RPCs fail closed when an existing key has that legacy provenance.
 
 create or replace function public.record_payment(
   target_organization_id uuid,
@@ -137,16 +93,14 @@ create or replace function public.record_payment(
 returns uuid
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog
 as $$
 declare
   payment_row public.payments%rowtype;
-  allocation_row public.payment_allocations%rowtype;
   charge_row public.charges%rowtype;
   normalized_method text := lower(btrim(coalesce(target_method, '')));
   normalized_key text := btrim(coalesce(target_idempotency_key, ''));
   request_fingerprint text;
-  allocation_count bigint;
   paid bigint;
 begin
   if auth.uid() is null then raise exception 'authenticated user required'; end if;
@@ -181,29 +135,11 @@ begin
   for update;
 
   if payment_row.id is not null then
-    if payment_row.request_fingerprint is not null then
-      if payment_row.request_fingerprint <> request_fingerprint then
-        raise exception 'idempotency key payload mismatch';
-      end if;
-      return payment_row.id;
+    if payment_row.request_fingerprint is null
+       or payment_row.request_fingerprint_version is distinct from 1 then
+      raise exception 'legacy idempotency key conflict';
     end if;
-
-    select count(*) into allocation_count
-    from public.payment_allocations
-    where organization_id = target_organization_id
-      and payment_id = payment_row.id;
-    select * into allocation_row
-    from public.payment_allocations
-    where organization_id = target_organization_id
-      and payment_id = payment_row.id
-    order by id
-    limit 1;
-    if allocation_count <> 1
-       or payment_row.guardian_id is distinct from target_guardian_id
-       or payment_row.amount_minor <> target_amount_minor
-       or lower(btrim(payment_row.method)) <> normalized_method
-       or allocation_row.charge_id <> target_charge_id
-       or allocation_row.amount_minor <> target_amount_minor then
+    if payment_row.request_fingerprint <> request_fingerprint then
       raise exception 'idempotency key payload mismatch';
     end if;
     return payment_row.id;
@@ -223,11 +159,11 @@ begin
 
   insert into public.payments (
     organization_id, guardian_id, amount_minor, currency_code, method,
-    idempotency_key, request_fingerprint, created_by
+    idempotency_key, request_fingerprint, request_fingerprint_version, created_by
   ) values (
     target_organization_id, target_guardian_id, target_amount_minor,
     charge_row.currency_code, normalized_method, normalized_key,
-    request_fingerprint, auth.uid()
+    request_fingerprint, 1, auth.uid()
   ) returning * into payment_row;
 
   insert into public.payment_allocations (
@@ -416,7 +352,7 @@ create or replace function public.create_guardian_student_enrollment_package(
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog
 as $$
 declare
   normalized_guardian_name text := btrim(coalesce(target_guardian_name, ''));
@@ -431,12 +367,7 @@ declare
   v_package_id uuid;
   v_charge_id uuid;
   existing_fingerprint text;
-  legacy_guardian_name text;
-  legacy_guardian_phone text;
-  legacy_student_name text;
-  legacy_school_name text;
-  legacy_cohort_id uuid;
-  legacy_fee_plan_id uuid;
+  existing_fingerprint_version smallint;
   plan_row public.fee_plans%rowtype;
 begin
   if auth.uid() is null then raise exception 'authenticated user required'; end if;
@@ -463,48 +394,19 @@ begin
     0
   ));
 
-  select sp.id, sp.student_id, sp.fee_plan_id, sp.request_fingerprint
-    into v_package_id, v_student_id, legacy_fee_plan_id, existing_fingerprint
+  select sp.id, sp.student_id, sp.request_fingerprint, sp.request_fingerprint_version
+    into v_package_id, v_student_id, existing_fingerprint, existing_fingerprint_version
   from public.student_packages sp
   where sp.organization_id = target_organization_id
     and sp.idempotency_key = normalized_key
   for update;
 
   if v_package_id is not null then
-    if existing_fingerprint is not null then
-      if existing_fingerprint <> request_fingerprint then
-        raise exception 'idempotency key payload mismatch';
-      end if;
-    else
-      select btrim(pp.full_name), btrim(pp.phone), pp.id
-        into legacy_guardian_name, legacy_guardian_phone, v_guardian_id
-      from public.parent_student_links psl
-      join public.parent_profiles pp
-        on pp.organization_id = psl.organization_id
-       and pp.id = psl.parent_profile_id
-      where psl.organization_id = target_organization_id
-        and psl.student_id = v_student_id
-      order by psl.created_at, psl.id
-      limit 1;
-      select btrim(s.display_name), nullif(btrim(coalesce(s.school_name, '')), '')
-        into legacy_student_name, legacy_school_name
-      from public.students s
-      where s.organization_id = target_organization_id
-        and s.id = v_student_id;
-      select cs.cohort_id into legacy_cohort_id
-      from public.cohort_students cs
-      where cs.organization_id = target_organization_id
-        and cs.student_id = v_student_id
-      order by cs.created_at, cs.id
-      limit 1;
-      if legacy_guardian_name is distinct from normalized_guardian_name
-         or legacy_guardian_phone is distinct from normalized_guardian_phone
-         or legacy_student_name is distinct from normalized_student_name
-         or legacy_school_name is distinct from normalized_school_name
-         or legacy_cohort_id is distinct from target_cohort_id
-         or legacy_fee_plan_id is distinct from target_fee_plan_id then
-        raise exception 'idempotency key payload mismatch';
-      end if;
+    if existing_fingerprint is null or existing_fingerprint_version is distinct from 1 then
+      raise exception 'legacy idempotency key conflict';
+    end if;
+    if existing_fingerprint <> request_fingerprint then
+      raise exception 'idempotency key payload mismatch';
     end if;
 
     if v_guardian_id is null then
@@ -557,10 +459,10 @@ begin
   values (target_organization_id, target_cohort_id, v_student_id, 'active');
   insert into public.student_packages (
     organization_id, student_id, fee_plan_id, status, idempotency_key,
-    request_fingerprint
+    request_fingerprint, request_fingerprint_version
   ) values (
     target_organization_id, v_student_id, target_fee_plan_id, 'active',
-    normalized_key, request_fingerprint
+    normalized_key, request_fingerprint, 1
   ) returning id into v_package_id;
   insert into public.credit_ledger (
     organization_id, student_package_id, student_id, delta_units, entry_type,
@@ -602,6 +504,16 @@ revoke insert, update, delete on table public.attendance_records from anon;
 revoke insert, update, delete on table public.attendance_records from authenticated;
 grant select on table public.attendance_records to authenticated;
 grant select, insert, update, delete on table public.attendance_records to service_role;
+
+-- Root operation identity and the payment allocation payload are writable only
+-- by the migration owner / SECURITY DEFINER RPCs and trusted service-role code.
+-- RLS still governs retained authenticated reads, but cannot substitute for
+-- these object privileges.
+revoke insert, update, delete on table public.payments, public.student_packages, public.payment_allocations from public;
+revoke insert, update, delete on table public.payments, public.student_packages, public.payment_allocations from anon;
+revoke insert, update, delete on table public.payments, public.student_packages, public.payment_allocations from authenticated;
+grant select on table public.payments, public.student_packages, public.payment_allocations to authenticated;
+grant select, insert, update, delete on table public.payments, public.student_packages, public.payment_allocations to service_role;
 
 revoke all on function public.record_payment(uuid,uuid,uuid,bigint,text,text) from public;
 revoke all on function public.record_payment(uuid,uuid,uuid,bigint,text,text) from anon;
