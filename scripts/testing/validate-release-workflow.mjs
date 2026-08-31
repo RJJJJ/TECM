@@ -110,6 +110,20 @@ function Get-Ancestors([System.Management.Automation.Language.Ast]$Node) {
   @($items)
 }
 
+function Get-EnclosingPipeline([System.Management.Automation.Language.Ast]$Node) {
+  $current = $Node.Parent
+  while ($null -ne $current) {
+    if ($current -is [System.Management.Automation.Language.PipelineAst]) {
+      return [ordered]@{
+        type = $current.GetType().Name
+        extent = Convert-Extent $current.Extent
+      }
+    }
+    $current = $current.Parent
+  }
+  return $null
+}
+
 function Get-NearestFunction([System.Management.Automation.Language.Ast]$Node) {
   $current = $Node.Parent
   while ($null -ne $current) {
@@ -177,6 +191,7 @@ try {
         elements = @($_.CommandElements | ForEach-Object { Convert-Element $_ })
         nearest_function = Get-NearestFunction $_
         ancestors = @(Get-Ancestors $_)
+        enclosing_pipeline = Get-EnclosingPipeline $_
         extent = Convert-Extent $_.Extent
       }
     })
@@ -291,7 +306,9 @@ function parseAstProcessResult(result) {
   if (document.schema_version !== 1 || document.runtime?.parser_type !== 'System.Management.Automation.Language.Parser' ||
       !Array.isArray(document.parse_errors) || !Array.isArray(document.commands) || !Array.isArray(document.functions) ||
       !Array.isArray(document.ifs) || !Array.isArray(document.throws) || !Array.isArray(document.assignments) ||
-      !Array.isArray(document.tries)) {
+      !Array.isArray(document.tries) || document.commands.some((command) =>
+        !Array.isArray(command?.ancestors) || command?.enclosing_pipeline?.type !== 'PipelineAst' ||
+        !command?.enclosing_pipeline?.extent || !command?.extent)) {
     throw new Error('PowerShell AST output schema is invalid');
   }
   return document;
@@ -317,6 +334,7 @@ function extractPowerShellAst(targetPath) {
 
 const normalizeAstText = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
 const inside = (child, parent) => child?.start_offset >= parent?.start_offset && child?.end_offset <= parent?.end_offset;
+const sameExtent = (left, right) => left?.start_offset === right?.start_offset && left?.end_offset === right?.end_offset;
 
 function bindCommand(command, contract) {
   const byName = new Map(contract.map((parameter, index) => [parameter.name.toLowerCase(), { ...parameter, index }]));
@@ -395,12 +413,31 @@ function exactCommandElements(command, expected) {
   return actual.length === expected.length && actual.every((value, index) => value === expected[index]);
 }
 
-function hasForbiddenReachabilityAncestor(command) {
+function directMainStatementOwnership(command, mainTry) {
   const forbidden = new Set([
+    'ScriptBlockExpressionAst', 'ScriptBlockAst', 'TryStatementAst', 'CatchClauseAst',
     'FunctionDefinitionAst', 'IfStatementAst', 'ForEachStatementAst', 'ForStatementAst',
-    'WhileStatementAst', 'DoWhileStatementAst', 'DoUntilStatementAst', 'SwitchStatementAst', 'TrapStatementAst'
+    'WhileStatementAst', 'DoWhileStatementAst', 'DoUntilStatementAst', 'SwitchStatementAst',
+    'TrapStatementAst', 'SubExpressionAst', 'ParenExpressionAst', 'ArrayExpressionAst', 'HashtableAst'
   ]);
-  return command.ancestors.some((ancestor) => forbidden.has(ancestor.type));
+  const owners = mainTry.body_statements.flatMap((statement, index) =>
+    inside(command.extent, statement.extent) ? [{ statement, index }] : []);
+  const owner = owners.length === 1 ? owners[0] : null;
+  const forbiddenAncestors = command.ancestors.filter((ancestor) =>
+    forbidden.has(ancestor.type) && inside(ancestor, mainTry.body_extent));
+  const pipelineMatchesDirectStatement = owner?.statement.type === 'PipelineAst' &&
+    command.enclosing_pipeline?.type === 'PipelineAst' &&
+    sameExtent(command.enclosing_pipeline.extent, owner.statement.extent);
+  return {
+    accepted: command.nearest_function === null && inside(command.extent, mainTry.body_extent) &&
+      owners.length === 1 && pipelineMatchesDirectStatement && forbiddenAncestors.length === 0,
+    statement_index: owner?.index ?? -1,
+    statement_type: owner?.statement.type ?? null,
+    owner_count: owners.length,
+    pipeline_type: command.enclosing_pipeline?.type ?? null,
+    pipeline_matches_direct_statement: pipelineMatchesDirectStatement,
+    forbidden_ancestors: [...new Set(forbiddenAncestors.map((ancestor) => ancestor.type))]
+  };
 }
 
 function extractWorkflowJob(text, jobName) {
@@ -474,25 +511,29 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
     'database.main_try', 'Database verifier must retain its top-level try/catch/finally execution path');
   if (!mainTry) return { issues, evidence: { runtime: ast.runtime, process: extraction.process } };
 
-  const directMainCommands = ast.commands.filter((command) => command.nearest_function === null &&
-    inside(command.extent, mainTry.body_extent) && !hasForbiddenReachabilityAncestor(command))
+  const mainBodyCommands = ast.commands.filter((command) => command.nearest_function === null &&
+    inside(command.extent, mainTry.body_extent))
     .sort((left, right) => left.extent.start_offset - right.extent.start_offset);
-  const statementIndexFor = (extent) => mainTry.body_statements.findIndex((statement) => inside(extent, statement.extent));
   const ifForStatement = (statement) => ast.ifs.find((entry) => entry.nearest_function === null &&
     entry.extent.start_offset === statement?.extent.start_offset && entry.extent.end_offset === statement?.extent.end_offset);
   const throwWithin = (extent, nearestFunction, exactText) => ast.throws.some((entry) =>
     entry.nearest_function === nearestFunction && inside(entry.extent, extent) && normalizeAstText(entry.extent.text) === exactText);
+  const ownershipEvidence = { setup: null, races: [] };
 
   const setupPath = '/workspace/supabase/tests/concurrency/batch1_race_setup.sql';
   const setupExpected = ['value:exec', 'expression:$containerName', 'value:psql', 'parameter:q',
     'parameter:v', 'value:ON_ERROR_STOP=1', 'parameter:u', 'value:postgres',
     'parameter:d', 'expression:$database', 'parameter:f', `value:${setupPath}`];
-  const setupCommands = directMainCommands.filter((command) => command.command_name === 'docker' &&
+  const setupCommands = mainBodyCommands.filter((command) => command.command_name === 'docker' &&
     command.elements.some((element) => element.value === setupPath));
   add(setupCommands.length === 1 && exactCommandElements(setupCommands[0], setupExpected),
     'setup.command_count', 'Batch 1 race setup must be one exact executable docker command');
   if (setupCommands.length === 1) {
-    const setupStatementIndex = statementIndexFor(setupCommands[0].extent);
+    const setupOwnership = directMainStatementOwnership(setupCommands[0], mainTry);
+    ownershipEvidence.setup = setupOwnership;
+    add(setupOwnership.accepted, 'setup.executable_reachability',
+      'Batch 1 setup command must directly own one top-level main-try PipelineAst statement');
+    const setupStatementIndex = setupOwnership.statement_index;
     const failureStatement = mainTry.body_statements[setupStatementIndex + 1];
     const failureIf = ifForStatement(failureStatement);
     add(setupStatementIndex >= 0 && failureIf?.clauses.length === 1 &&
@@ -501,7 +542,7 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
     'setup.reachable_failure', 'Batch 1 setup must be unconditional and immediately fail closed');
   }
 
-  const directInvocations = directMainCommands.filter((command) => command.command_name === 'Invoke-DatabaseRace')
+  const directInvocations = mainBodyCommands.filter((command) => command.command_name === 'Invoke-DatabaseRace')
     .map((command) => ({ command, bound: bindCommand(command, invokeRaceContract) }));
   const invocationOrder = [];
   for (const spec of staffRaceSpecs) {
@@ -510,6 +551,9 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
     if (matches.length !== 1) continue;
     const { command, bound } = matches[0];
     invocationOrder.push(command.extent.start_offset);
+    const invocationOwnership = directMainStatementOwnership(command, mainTry);
+    add(invocationOwnership.accepted, `race.${spec.name}.executable_reachability`,
+      `${spec.name} race invocation must directly own one top-level main-try PipelineAst statement`);
     const bindingNames = [...bound.bindings.keys()].sort();
     add(bound.errors.length === 0 && bindingNames.length === approvedRaceBindings.length &&
       bindingNames.every((name, index) => name === approvedRaceBindings[index]),
@@ -528,10 +572,10 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
     add(staticValueMatches(bound.bindings.get('SecondPsqlVariables'), spec.secondVariables),
       `race.${spec.name}.second_fixture`, `${spec.name} second worker fixture association is incorrect`);
 
-    const invocationStatement = statementIndexFor(command.extent);
+    const invocationStatement = invocationOwnership.statement_index;
     const assertionStatement = mainTry.body_statements[invocationStatement + 1];
     const failureStatement = mainTry.body_statements[invocationStatement + 2];
-    const assertionCommands = directMainCommands.filter((candidate) => inside(candidate.extent, assertionStatement?.extent));
+    const assertionCommands = mainBodyCommands.filter((candidate) => inside(candidate.extent, assertionStatement?.extent));
     const assertion = assertionCommands.length === 1 ? assertionCommands[0] : null;
     const assertionExpected = ['value:exec', 'expression:$containerName', 'value:psql', 'parameter:q',
       'parameter:v', 'value:ON_ERROR_STOP=1'];
@@ -540,7 +584,11 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
       'parameter:f', 'value:/workspace/supabase/tests/concurrency/batch1_attendance_assert.sql');
     add(invocationStatement >= 0 && assertion?.command_name === 'docker' && exactCommandElements(assertion, assertionExpected),
       `race.${spec.name}.assertion_reachable`, `${spec.name} exact assertion command must execute immediately after both worker results`);
+    const assertionOwnership = assertion ? directMainStatementOwnership(assertion, mainTry) : null;
     if (assertion) {
+      add(assertionOwnership.accepted && assertionOwnership.statement_index === invocationStatement + 1,
+        `race.${spec.name}.assertion_executable_reachability`,
+        `${spec.name} assertion must directly own the next top-level main-try PipelineAst statement`);
       add(assertion.elements.some((element) => element.value === '/workspace/supabase/tests/concurrency/batch1_attendance_assert.sql'),
         `race.${spec.name}.assertion_file`, `${spec.name} must execute batch1_attendance_assert.sql`);
       add(exactCommandElements(assertion, assertionExpected),
@@ -550,6 +598,11 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
     add(failureIf?.clauses.length === 1 && normalizeAstText(failureIf.clauses[0].condition) === '$LASTEXITCODE -ne 0' &&
       throwWithin(failureIf.extent, null, normalizeAstText(spec.assertionFailure).replace(/^if \([^)]*\) \{ /, '').replace(/ \}$/, '')),
     `race.${spec.name}.assertion_failure`, `${spec.name} assertion failure must immediately propagate`);
+    ownershipEvidence.races.push({
+      race: spec.name,
+      invocation: invocationOwnership,
+      assertion: assertionOwnership
+    });
   }
   add(invocationOrder.length === 3 && invocationOrder.every((value, index) => index === 0 || invocationOrder[index - 1] < value),
     'race.order', 'Staff existing, absent, and cross-role races must remain in approved executable order');
@@ -652,7 +705,8 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
       parse_errors: ast.parse_errors.length,
       commands: ast.commands.length,
       functions: ast.functions.length,
-      source_path: ast.source_path
+      source_path: ast.source_path,
+      direct_statement_ownership: ownershipEvidence
     }
   };
 }
@@ -699,6 +753,7 @@ function runTopologyControl(spec) {
     writeFileSync(workflowCopy, workflowBytes);
     let fixture = { database: databaseBytes.toString('utf8'), workflow: workflowBytes.toString('utf8') };
     fixture = spec.mutate(fixture);
+    const tokensRetained = (spec.requiredTokens ?? []).every((token) => fixture.database.includes(token));
     writeFileSync(databaseCopy, fixture.database);
     writeFileSync(workflowCopy, fixture.workflow);
     const validation = validateBatch1RaceTopology(databaseCopy, readFileSync(workflowCopy, 'utf8'));
@@ -708,7 +763,10 @@ function runTopologyControl(spec) {
       intended_failure: spec.expectedCode,
       observed_failures: controlIssues.map((issue) => issue.code),
       parser_valid: validation.evidence?.parse_errors === 0,
-      control_passed: controlIssues.some((issue) => issue.code === spec.expectedCode) &&
+      approved_tokens_retained: tokensRetained,
+      control_passed: (spec.exactFailure ?
+        controlIssues.length === 1 && controlIssues[0].code === spec.expectedCode :
+        controlIssues.some((issue) => issue.code === spec.expectedCode)) && tokensRetained &&
         (spec.allowParseFailure ? controlIssues.some((issue) => issue.code === 'powershell.parse') :
           validation.evidence?.parse_errors === 0 && !controlIssues.some((issue) => issue.code === 'powershell.runtime_or_output'))
     };
@@ -727,11 +785,40 @@ function runTopologyControl(spec) {
 }
 
 function replaceAssertionCommandWith(segment, replacement) {
+  return mutateAssertionCommand(segment, () => replacement);
+}
+
+function mutateAssertionCommand(segment, mutator) {
   const start = segment.indexOf('  docker exec $containerName psql');
   const end = segment.indexOf('  if ($LASTEXITCODE -ne 0)', start);
   if (start < 0 || end < 0) throw new Error('negative control could not locate assertion command');
-  return segment.slice(0, start) + replacement + segment.slice(end);
+  return segment.slice(0, start) + mutator(segment.slice(start, end)) + segment.slice(end);
 }
+
+const indentPowerShell = (text, spaces = 2) => text.split(/\r?\n/)
+  .map((line) => `${' '.repeat(spaces)}${line}`)
+  .join('\n');
+
+const staffExistingSpec = staffRaceSpecs[0];
+const staffExistingRaceTokens = [
+  'Invoke-DatabaseRace',
+  `-FirstFile '${staffExistingSpec.firstFile}'`,
+  `-SecondFile '${staffExistingSpec.secondFile}'`,
+  "-ExpectedExitPairs @('0,3') -ReleaseFirstBeforeSecond",
+  '-StartSecondDelayMilliseconds 0',
+  "-BarrierRaceName 'staff-existing'",
+  `-FirstPsqlVariables ${staffExistingSpec.firstVariables}`,
+  `-SecondPsqlVariables ${staffExistingSpec.secondVariables}`
+];
+const staffExistingAssertionTokens = [
+  'docker exec $containerName psql',
+  ...staffExistingSpec.assertionVariables.map((variable) => `-v '${variable}'`),
+  "-f '/workspace/supabase/tests/concurrency/batch1_attendance_assert.sql'"
+];
+const setupReachabilityTokens = [
+  'docker exec $containerName psql', '-q -v ON_ERROR_STOP=1', '-U postgres -d $database',
+  "-f '/workspace/supabase/tests/concurrency/batch1_race_setup.sql'"
+];
 
 const topologyControlSpecs = [
   ...staffRaceSpecs.map((race) => ({
@@ -764,7 +851,7 @@ const topologyControlSpecs = [
     mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-existing', (segment) => replaceExactly(segment, 'batch1_attendance_assert.sql', 'batch1_payment_assert.sql')) })
   },
   {
-    id: 'CONTROL-DISCONNECTED-ASSERTION', expectedCode: 'race.staff-existing.assertion_reachable',
+    id: 'CONTROL-DISCONNECTED-ASSERTION', expectedCode: 'race.staff-existing.assertion_executable_reachability',
     mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-existing', (segment) => replaceExactly(segment, '  docker exec $containerName psql', '  if ($false) {\n    docker exec $containerName psql') + '\n  }') })
   },
   {
@@ -874,6 +961,37 @@ const topologyControlSpecs = [
     ) })
   },
   {
+    id: 'CONTROL-STAFF-EXISTING-RACE-UNINVOKED-SCRIPTBLOCK',
+    expectedCode: 'race.staff-existing.executable_reachability', exactFailure: true,
+    requiredTokens: staffExistingRaceTokens,
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-existing', (segment) =>
+      `  $unusedRace = {\n${indentPowerShell(segment.trimEnd())}\n  }\n`, { includeAssertion: false }) })
+  },
+  {
+    id: 'CONTROL-STAFF-EXISTING-ASSERTION-UNINVOKED-SCRIPTBLOCK',
+    expectedCode: 'race.staff-existing.assertion_executable_reachability', exactFailure: true,
+    requiredTokens: staffExistingAssertionTokens,
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-existing', (segment) =>
+      mutateAssertionCommand(segment, (command) =>
+        `  $unusedAssertion = {\n${indentPowerShell(command.trimEnd())}\n  }\n`)) })
+  },
+  {
+    id: 'CONTROL-STAFF-EXISTING-RACE-UNREACHED-NESTED-CATCH',
+    expectedCode: 'race.staff-existing.executable_reachability', exactFailure: true,
+    requiredTokens: staffExistingRaceTokens,
+    mutate: (fixture) => ({ ...fixture, database: mutateRaceSegment(fixture.database, 'staff-existing', (segment) =>
+      `  try {\n    Write-Host 'reachability control non-throwing body'\n  } catch {\n${indentPowerShell(segment.trimEnd())}\n  }\n`, { includeAssertion: false }) })
+  },
+  {
+    id: 'CONTROL-SETUP-UNINVOKED-SCRIPTBLOCK',
+    expectedCode: 'setup.executable_reachability', exactFailure: true,
+    requiredTokens: setupReachabilityTokens,
+    mutate: (fixture) => ({ ...fixture, database: fixture.database.replace(
+      /  docker exec \$containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d \$database `\r?\n    -f '\/workspace\/supabase\/tests\/concurrency\/batch1_race_setup\.sql'/,
+      "  $unusedSetup = {\n    docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `\n      -f '/workspace/supabase/tests/concurrency/batch1_race_setup.sql'\n  }"
+    ) })
+  },
+  {
     id: 'CONTROL-FAILURE-PROPAGATION-TEXT-ONLY', expectedCode: 'helper.exit_failure_propagation',
     mutate: (fixture) => ({ ...fixture, database: replaceExactly(fixture.database,
       'throw "Unexpected race exit pair: $actualExitPair"',
@@ -923,6 +1041,23 @@ function runSourceOverrideControl() {
     control_passed: result.status === 2 && !result.signal && !result.error &&
       /does not accept source-path or test-only overrides/.test(result.stderr ?? ''),
     process: compactProcess(result)
+  };
+}
+
+function buildDirectTopologyPositiveControl(validation) {
+  const ownership = validation.evidence?.direct_statement_ownership;
+  const races = staffRaceSpecs.map((spec) => ownership?.races?.find((entry) => entry.race === spec.name));
+  const setupAccepted = ownership?.setup?.accepted === true && ownership.setup.statement_type === 'PipelineAst' &&
+    ownership.setup.pipeline_matches_direct_statement === true;
+  const racesAccepted = races.every((entry) => entry?.invocation?.accepted === true &&
+    entry.invocation.statement_type === 'PipelineAst' && entry.invocation.pipeline_matches_direct_statement === true &&
+    entry?.assertion?.accepted === true && entry.assertion.statement_type === 'PipelineAst' &&
+    entry.assertion.pipeline_matches_direct_statement === true);
+  return {
+    id: 'CONTROL-DIRECT-EXECUTABLE-BATCH1-TOPOLOGY',
+    intended_result: 'setup plus three races plus three assertions are direct main-try PipelineAst statements',
+    control_passed: validation.issues.length === 0 && setupAccepted && racesAccepted,
+    ownership
   };
 }
 
@@ -1019,6 +1154,10 @@ requireMatch(batch1Mutation, /if \(failed\) process\.exitCode = 1;/, 'Batch 1 mu
 
 const topologyValidation = validateBatch1RaceTopology(databaseVerifyPath, workflow);
 for (const issue of topologyValidation.issues) failures.push(`[${issue.code}] ${issue.message}`);
+const positiveTopologyControl = buildDirectTopologyPositiveControl(topologyValidation);
+if (!positiveTopologyControl.control_passed) failures.push(
+  `[${positiveTopologyControl.id}] repository commands are not direct executable main-try PipelineAst statements`
+);
 const topologyControls = topologyControlSpecs.map(runTopologyControl);
 for (const control of topologyControls) {
   if (!control.control_passed) failures.push(
@@ -1031,7 +1170,7 @@ for (const control of astBoundaryControls) {
 }
 const sourceOverrideControl = runSourceOverrideControl();
 if (!sourceOverrideControl.control_passed) failures.push('[CONTROL-NO-SOURCE-PATH-OVERRIDE] normal invocation accepted an override');
-const allControlsPassed = topologyControls.every((control) => control.control_passed) &&
+const allControlsPassed = positiveTopologyControl.control_passed && topologyControls.every((control) => control.control_passed) &&
   astBoundaryControls.every((control) => control.control_passed) && sourceOverrideControl.control_passed;
 const restorationPassed = repositoryTopologyRestored();
 const cleanupPassed = topologyControls.every((control) => control.cleanup === 'PASS');
@@ -1054,6 +1193,7 @@ if (failures.length > 0) {
       failure_propagation: 'database verifier throw',
       cleanup: 'race jobs plus database/container finalization'
     })),
+    positive_control: positiveTopologyControl,
     negative_controls: topologyControls,
     ast_extraction: topologyValidation.evidence,
     ast_boundary_controls: astBoundaryControls,
