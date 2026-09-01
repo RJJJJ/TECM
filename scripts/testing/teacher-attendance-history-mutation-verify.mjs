@@ -13,6 +13,7 @@ import { dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
+const databaseProbeTimeoutMilliseconds = 1_200_000;
 const testPath = 'admin-web/tests/unit/teacher-attendance-history.test.ts';
 const verifierPath = 'scripts/testing/teacher-attendance-history-mutation-verify.mjs';
 const sourceFiles = [
@@ -230,18 +231,14 @@ function runTest(root, testNamePattern) {
   });
 }
 
-function runDatabaseProbe(migrationPath) {
+function runDatabaseProbe(root = repoRoot) {
   return spawnSync('pwsh', [
-    '-NoLogo', '-NoProfile', '-File', resolve(repoRoot, 'scripts/testing/database-verify.ps1'),
-    '-TeacherAttendanceContentionOnly',
-    '-RevisionGuardMigrationOverride', migrationPath,
-    '-ConcurrencyTimeoutSeconds', '15',
-    '-ContentionHardTimeoutSeconds', '10'
+    '-NoLogo', '-NoProfile', '-File', resolve(root, 'scripts/testing/database-verify.ps1')
   ], {
-    cwd: repoRoot,
+    cwd: root,
     encoding: 'utf8',
     env: process.env,
-    timeout: 240_000,
+    timeout: databaseProbeTimeoutMilliseconds,
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024
   });
@@ -278,14 +275,17 @@ function databaseFailureClassification(result, mutation) {
   const expectedSafetyFailure = output.includes(mutation.expectedFailure);
   const databaseCleanup = /\[CLEANUP\] database=PASS container=PASS/.test(output);
   const containerCleanup = databaseCleanup;
-  const lifecycleFailure = timedOut || Boolean(result.signal)
+  const exactProcessFailure = result.status === 1 && !result.error && !result.signal;
+  const lifecycleFailure = timedOut || Boolean(result.error) || Boolean(result.signal) || result.status === null
     || /Docker Desktop is not available|Could not start PostgreSQL|PostgreSQL did not become ready|cleanup failed/i.test(output)
     || !databaseCleanup || !containerCleanup;
   return {
-    caught: result.status !== 0 && expectedSafetyFailure && !lifecycleFailure,
+    caught: exactProcessFailure && expectedSafetyFailure && !lifecycleFailure,
     exit_code: result.status,
     timed_out: timedOut,
     signal: result.signal ?? null,
+    process_error: result.error ? { code: result.error.code ?? null, message: result.error.message ?? String(result.error) } : null,
+    exact_process_failure: exactProcessFailure,
     expected_safety_failure: expectedSafetyFailure,
     lifecycle_failure: lifecycleFailure,
     database_cleanup: databaseCleanup ? 'PASS' : 'FAIL',
@@ -305,17 +305,17 @@ function runBaseline() {
 }
 
 function runDatabaseBaseline() {
-  const migrationPath = resolve(repoRoot, 'supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql');
-  const result = runDatabaseProbe(migrationPath);
+  const result = runDatabaseProbe();
   const output = outputOf(result);
-  if (result.status !== 0 || result.error?.code === 'ETIMEDOUT' || result.signal
-      || !/\[PASS\] bounded existing\/absent attendance contention/.test(output)
+  if (result.status !== 0 || result.error || result.signal
+      || !/\[PASS\] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-020,/.test(output)
       || !/\[CLEANUP\] database=PASS container=PASS/.test(output)) {
-    throw new VerifierError('DATABASE_BASELINE_FAILED', 'M40 database baseline must prove bounded contention and cleanup', {
+    throw new VerifierError('DATABASE_BASELINE_FAILED', 'M40 database baseline must prove the complete verifier and cleanup', {
       exit_code: result.status,
       timed_out: result.error?.code === 'ETIMEDOUT',
       signal: result.signal ?? null,
-      bounded_contention: /\[PASS\] bounded existing\/absent attendance contention/.test(output),
+      process_error: result.error ? { code: result.error.code ?? null, message: result.error.message ?? String(result.error) } : null,
+      complete_verifier: /\[PASS\] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-020,/.test(output),
       database_cleanup: /\[CLEANUP\] database=PASS/.test(output),
       container_cleanup: /container=PASS/.test(output)
     });
@@ -328,7 +328,167 @@ function transformLineEndings(bytes, eol, withBom = false) {
   return encodeText(normalized, { hasBom: withBom, eol });
 }
 
+function runDatabaseClassificationControls(mutation) {
+  const expectedOutput = `${mutation.expectedFailure} for teacher-attendance-contention-existing (exit 3)\n[CLEANUP] database=PASS container=PASS`;
+  const specs = [
+    { id: 'CONTROL-DATABASE-EXPECTED-FAILURE', expectedCaught: true, result: { status: 1, signal: null, stdout: expectedOutput, stderr: '' } },
+    { id: 'CONTROL-DATABASE-TIMEOUT', expectedCaught: false, result: { status: null, signal: null, error: { code: 'ETIMEDOUT', message: 'timed out' }, stdout: expectedOutput, stderr: '' } },
+    { id: 'CONTROL-DATABASE-SIGNAL', expectedCaught: false, result: { status: null, signal: 'SIGTERM', stdout: expectedOutput, stderr: '' } },
+    { id: 'CONTROL-DATABASE-SPAWN-ERROR', expectedCaught: false, result: { status: null, signal: null, error: { code: 'ENOENT', message: 'spawn failed' }, stdout: expectedOutput, stderr: '' } },
+    { id: 'CONTROL-DATABASE-STATUS-ZERO', expectedCaught: false, result: { status: 0, signal: null, stdout: expectedOutput, stderr: '' } },
+    { id: 'CONTROL-DATABASE-UNRELATED-FAILURE', expectedCaught: false, result: { status: 1, signal: null, stdout: 'Could not start PostgreSQL\n[CLEANUP] database=PASS container=PASS', stderr: '' } },
+    { id: 'CONTROL-DATABASE-CLEANUP-MISSING', expectedCaught: false, result: { status: 1, signal: null, stdout: mutation.expectedFailure, stderr: '' } }
+  ];
+  return specs.map((spec) => {
+    const classification = databaseFailureClassification(spec.result, mutation);
+    if (classification.caught !== spec.expectedCaught) {
+      throw new VerifierError('DATABASE_CLASSIFICATION_CONTROL_FAILED', `${spec.id} did not fail closed`, {
+        control: spec.id,
+        expected_caught: spec.expectedCaught,
+        classification
+      });
+    }
+    return { id: spec.id, expected_caught: spec.expectedCaught, observed_caught: classification.caught, result: 'PASS' };
+  });
+}
+
+function runDatabaseMutation(mutation, options = {}) {
+  const parentRoot = mkdtempSync(resolve(tmpdir(), `tecm-teacher-attendance-${mutation.id.toLowerCase()}-`));
+  const worktreeRoot = resolve(parentRoot, 'repository');
+  let worktreeAdded = false;
+  let worktreeRemoved = false;
+  let target;
+  let original;
+  let failure;
+  let evidence;
+  let restored = false;
+  let cleaned = false;
+  try {
+    const addResult = spawnSync('git', ['worktree', 'add', '--detach', worktreeRoot, 'HEAD'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 60_000,
+      windowsHide: true,
+      maxBuffer: 2 * 1024 * 1024
+    });
+    if (addResult.status !== 0 || addResult.error || addResult.signal) {
+      throw new VerifierError('WORKTREE_CREATE_FAILED', `${mutation.id} could not create an isolated complete-verifier worktree`, {
+        exit_code: addResult.status,
+        signal: addResult.signal ?? null,
+        process_error: addResult.error?.message ?? null,
+        output: outputOf(addResult)
+      });
+    }
+    worktreeAdded = true;
+
+    const databaseVerifierRelative = 'scripts/testing/database-verify.ps1';
+    writeFileSync(resolve(worktreeRoot, databaseVerifierRelative), readFileSync(resolve(repoRoot, databaseVerifierRelative)));
+    target = resolve(worktreeRoot, mutation.file);
+    writeFileSync(target, readFileSync(resolve(repoRoot, mutation.file)));
+    if (options.fixtureTransform) {
+      writeFileSync(target, options.fixtureTransform(readFileSync(target), mutation));
+    }
+    original = snapshot(readFileSync(target), mutation.file);
+    const mutated = mutateBytes(original.bytes, mutation);
+    writeFileSync(target, mutated.bytes);
+
+    const result = runDatabaseProbe(worktreeRoot);
+    const classification = databaseFailureClassification(result, mutation);
+    if (!classification.caught) {
+      throw new VerifierError('WRONG_FAILURE_CLASSIFICATION', `${mutation.id} was not caught for the intended database safety assertion`, {
+        mutation: mutation.id,
+        classification
+      });
+    }
+    evidence = {
+      id: mutation.id,
+      file: mutation.file,
+      matches: mutated.matches,
+      expected_test: mutation.expectedTest,
+      expected_failure: mutation.expectedFailure,
+      caught: true,
+      input_eol: mutated.eol,
+      input_utf8_bom: mutated.utf8_bom,
+      source_sha256: original.sha256,
+      source_git_blob: original.gitBlob,
+      source_raw_git_blob: original.rawGitBlob,
+      semantic_mapping: mutation.semanticMapping ?? null,
+      mutation_target: mutation.mutationTarget ?? mutation.file,
+      lifecycle_failure: classification.lifecycle_failure,
+      database_cleanup: classification.database_cleanup,
+      container_cleanup: classification.container_cleanup,
+      process_contract: {
+        exit_code: classification.exit_code,
+        timed_out: classification.timed_out,
+        signal: classification.signal,
+        process_error: classification.process_error,
+        exact_process_failure: classification.exact_process_failure,
+        expected_safety_failure: classification.expected_safety_failure
+      }
+    };
+  } catch (error) {
+    failure = error instanceof VerifierError
+      ? error
+      : new VerifierError('UNEXPECTED_VERIFIER_FAILURE', String(error));
+  } finally {
+    if (target && original) {
+      try {
+        writeFileSync(target, original.bytes);
+        if (options.injectRestorationMismatch) writeFileSync(target, Buffer.concat([original.bytes, Buffer.from('mismatch')]));
+        const restoredBytes = readFileSync(target);
+        restored = restoredBytes.equals(original.bytes)
+          && sha256(restoredBytes) === original.sha256
+          && filteredGitBlob(restoredBytes, mutation.file) === original.gitBlob
+          && rawGitBlob(restoredBytes) === original.rawGitBlob;
+        if (!restored && !failure) {
+          failure = new VerifierError('RESTORATION_MISMATCH', `${mutation.id} isolated worktree restoration mismatch`);
+        }
+      } catch (error) {
+        if (!failure) failure = new VerifierError('RESTORATION_FAILED', `${mutation.id} isolated worktree restoration failed`, { error: String(error) });
+      }
+    }
+    if (worktreeAdded) {
+      const removeResult = spawnSync('git', ['worktree', 'remove', '--force', worktreeRoot], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        timeout: 60_000,
+        windowsHide: true,
+        maxBuffer: 2 * 1024 * 1024
+      });
+      worktreeRemoved = removeResult.status === 0 && !removeResult.error && !removeResult.signal;
+      if (!worktreeRemoved && !failure) {
+        failure = new VerifierError('WORKTREE_CLEANUP_FAILED', `${mutation.id} isolated worktree could not be removed`, {
+          exit_code: removeResult.status,
+          signal: removeResult.signal ?? null,
+          process_error: removeResult.error?.message ?? null,
+          output: outputOf(removeResult)
+        });
+      }
+    }
+    rmSync(parentRoot, { recursive: true, force: true });
+    cleaned = !existsSync(parentRoot) && (!worktreeAdded || worktreeRemoved);
+    const repository = repoRestorationEvidence();
+    if (!cleaned && !failure) failure = new VerifierError('CLEANUP_FAILED', `${mutation.id} workspace cleanup failed`);
+    if (repository.status !== 'PASS' && !failure) {
+      failure = new VerifierError('SOURCE_RESTORATION_FAILED', `${mutation.id} protected repository source changed`, { repository });
+    }
+    if (failure) {
+      failure.cleanup = cleaned ? 'PASS' : 'FAIL';
+      failure.details = { ...failure.details, repository_restoration: repository.status, worktree_removed: worktreeRemoved };
+    }
+  }
+  if (failure) throw failure;
+  return {
+    ...evidence,
+    restoration: restored ? 'PASS' : 'FAIL',
+    workspace_cleanup: cleaned ? 'PASS' : 'FAIL',
+    cleanup: cleaned ? 'PASS' : 'FAIL',
+    final_result: restored && cleaned ? 'PASS' : 'FAIL'
+  };
+}
+
 function runMutation(mutation, options = {}) {
+  if (mutation.databaseProbe) return runDatabaseMutation(mutation, options);
   const tempRoot = mkdtempSync(resolve(tmpdir(), `tecm-teacher-attendance-${mutation.id.toLowerCase()}-`));
   let failure;
   let evidence;
@@ -343,12 +503,8 @@ function runMutation(mutation, options = {}) {
     const original = snapshot(readFileSync(target), mutation.file);
     const mutated = mutateBytes(original.bytes, mutation);
     writeFileSync(target, mutated.bytes);
-    const result = mutation.databaseProbe
-      ? runDatabaseProbe(target)
-      : runTest(tempRoot, mutation.expectedTest);
-    const classification = mutation.databaseProbe
-      ? databaseFailureClassification(result, mutation)
-      : testFailureClassification(result, mutation);
+    const result = runTest(tempRoot, mutation.expectedTest);
+    const classification = testFailureClassification(result, mutation);
     if (!classification.caught) {
       throw new VerifierError(
         'WRONG_FAILURE_CLASSIFICATION',
@@ -545,12 +701,18 @@ function successOutput(payload) {
   if (restoration.status !== 'PASS') {
     throw new VerifierError('SOURCE_RESTORATION_FAILED', 'Protected repository source changed', { restoration });
   }
+  const usedDatabaseVerifier = payload.cases?.some((entry) => entry.database_cleanup === 'PASS') ?? false;
   process.stdout.write(`${JSON.stringify({
     result: 'passed',
     ...payload,
     restoration,
     cleanup: 'PASS',
-    resources: { databases: 'NOT_CREATED', containers: 'NOT_CREATED', volumes: 'NOT_CREATED', workspaces: 'REMOVED' }
+    resources: {
+      databases: usedDatabaseVerifier ? 'REMOVED' : 'NOT_CREATED',
+      containers: usedDatabaseVerifier ? 'REMOVED' : 'NOT_CREATED',
+      volumes: 'NOT_CREATED',
+      workspaces: 'REMOVED'
+    }
   })}\n`);
 }
 
@@ -569,10 +731,13 @@ function main() {
   runBaseline();
   const selected = focused ? cases.filter(({ id }) => id === focused) : cases;
   if (selected.length === 0) throw new VerifierError('UNKNOWN_MUTATION', `Unknown mutation case: ${focused}`);
-  if (selected.some(({ databaseProbe }) => databaseProbe)) runDatabaseBaseline();
+  const databaseControls = selected.some(({ databaseProbe }) => databaseProbe)
+    ? runDatabaseClassificationControls(cases.find(({ id }) => id === 'M40'))
+    : null;
+  if (databaseControls) runDatabaseBaseline();
   const controls = focused ? null : runM31Controls();
   const evidence = selected.map((mutation) => runMutation(mutation));
-  successOutput({ cases: evidence, controls });
+  successOutput({ cases: evidence, controls, database_controls: databaseControls });
 }
 
 try {

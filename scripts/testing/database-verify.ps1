@@ -12,7 +12,6 @@ param(
   [switch]$InjectConcurrencyHang,
   [ValidateRange(2, 30)]
   [int]$ContentionHardTimeoutSeconds = 10,
-  [switch]$TeacherAttendanceContentionOnly,
   [string]$RevisionGuardMigrationOverride
 )
 
@@ -549,11 +548,6 @@ try {
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_retry_cleanup.sql'
   if ($LASTEXITCODE -ne 0) { throw 'Attendance contention retry or cleanup assertion failed.' }
-
-  if ($TeacherAttendanceContentionOnly) {
-    Write-Host '[PASS] bounded existing/absent attendance contention, deliberate retries, and fixture cleanup'
-    return
-  }
 
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
     -f '/workspace/supabase/tests/concurrency/teacher_attendance_setup.sql'
