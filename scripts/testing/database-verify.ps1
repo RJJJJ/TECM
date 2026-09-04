@@ -25,6 +25,76 @@ $revisionGuardMigration = '/workspace/supabase/migrations/20260825150954_teacher
 $overrideDirectory = $null
 $verificationError = $null
 $cleanupError = $null
+$m40SemanticPrefix = '@@TECM_M40_SEMANTIC@@'
+$m40SemanticSchema = 'tecm.m40.semantic.v1'
+$m40SemanticProducer = 'database-verify.ps1/Invoke-TeacherAttendanceContention'
+
+function Write-M40SemanticRecord {
+  param(
+    [Parameter(Mandatory)][string]$RaceName,
+    [Parameter(Mandatory)][string]$Classification,
+    [AllowNull()][object]$SqlClassification,
+    [AllowNull()][object]$SqlState,
+    [AllowNull()][object]$ErrorIdentifier,
+    [AllowNull()][object]$ElapsedMilliseconds,
+    [Parameter(Mandatory)][string]$WorkerState,
+    [AllowNull()][object]$WorkerExitCode,
+    [bool]$WorkerTimedOut = $false,
+    [AllowNull()][object]$WorkerSignal,
+    [AllowNull()][object]$WorkerProcessError,
+    [Parameter(Mandatory)][string]$Readiness,
+    [bool]$UnauthorizedMarkerObserved = $false
+  )
+
+  $record = [ordered]@{
+    schema = $m40SemanticSchema
+    producer = $m40SemanticProducer
+    race = $RaceName
+    classification = $Classification
+    sql = [ordered]@{
+      classification = $SqlClassification
+      sqlstate = $SqlState
+      error_identifier = $ErrorIdentifier
+      elapsed_milliseconds = $ElapsedMilliseconds
+      unauthorized_marker_observed = $UnauthorizedMarkerObserved
+    }
+    worker = [ordered]@{
+      state = $WorkerState
+      exit_code = $WorkerExitCode
+      timed_out = $WorkerTimedOut
+      signal = $WorkerSignal
+      process_error = $WorkerProcessError
+    }
+    readiness = $Readiness
+  }
+  Write-Host ($m40SemanticPrefix + ($record | ConvertTo-Json -Compress -Depth 6))
+}
+
+function Get-SanitizedM40SqlDiagnostic {
+  param([object[]]$Output)
+
+  $text = (@($Output | ForEach-Object { [string]$_ }) -join "`n")
+  $match = [regex]::Match($text, 'ERROR:\s+([0-9A-Z]{5}):\s*([^\r\n]*)')
+  $sqlState = if ($match.Success) { $match.Groups[1].Value } else { $null }
+  $message = if ($match.Success) { $match.Groups[2].Value.Trim() } else { '' }
+  $safeIdentifiers = @(
+    'UNRELATED_M40_SQL_PROBE',
+    'GENERIC_P0001_M40_PROBE',
+    'UNAUTHORIZED_M40_MARKER_PROBE'
+  )
+  $errorIdentifier = if ($message -in $safeIdentifiers) {
+    $message
+  } elseif ($message) {
+    'redacted_unexpected_sql_error'
+  } else {
+    'unavailable_sql_diagnostic'
+  }
+  [pscustomobject]@{
+    SqlState = $sqlState
+    ErrorIdentifier = $errorIdentifier
+    UnauthorizedMarkerObserved = $text.Contains($m40SemanticPrefix)
+  }
+}
 
 if ($RevisionGuardMigrationOverride) {
   $overridePath = (Resolve-Path -LiteralPath $RevisionGuardMigrationOverride).Path
@@ -431,6 +501,7 @@ try {
   function Invoke-TeacherAttendanceContention {
     param(
       [Parameter(Mandatory)]
+      [ValidatePattern('^teacher-attendance-contention-(existing|absent)$')]
       [string]$RaceName,
       [Parameter(Mandatory)]
       [string]$SessionId,
@@ -467,26 +538,143 @@ try {
         Start-Sleep -Milliseconds 100
       }
       if (-not $holderReady) {
+        Write-M40SemanticRecord -RaceName $RaceName `
+          -Classification 'readiness_failure' -SqlClassification $null -SqlState $null `
+          -ErrorIdentifier 'holder_readiness_failed' -ElapsedMilliseconds $null `
+          -WorkerState 'NotStarted' -WorkerExitCode $null -WorkerSignal $null `
+          -WorkerProcessError $null -Readiness 'FAIL'
         throw "Contention holder did not acquire the exact attendance identity lock: $RaceName"
       }
 
       $competitor = Start-Job -Name "${RaceName}-competitor" -ScriptBlock {
         param($Name,$Db,$Race,$Session,$Revision,$Status,$Request)
-        & docker exec $Name psql -q -v ON_ERROR_STOP=1 `
-          -v "race_name=$Race" -v "session_id=$Session" `
-          -v "expected_revision=$Revision" -v "target_status=$Status" `
-          -v "request_id=$Request" `
-          -U postgres -d $Db `
-          -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_competitor.sql' 2>&1
-        [pscustomobject]@{ ExitCode = $LASTEXITCODE }
+        $workerExitCode = $null
+        $workerProcessError = $null
+        try {
+          & docker exec $Name psql -q -v ON_ERROR_STOP=1 `
+            -v "race_name=$Race" -v "session_id=$Session" `
+            -v "expected_revision=$Revision" -v "target_status=$Status" `
+            -v "request_id=$Request" `
+            -U postgres -d $Db `
+            -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_competitor.sql' 2>&1
+          $workerExitCode = $LASTEXITCODE
+        } catch {
+          $workerProcessError = 'docker_exec_process_error'
+        }
+        [pscustomobject]@{
+          ExitCode = $workerExitCode
+          Signal = $null
+          ProcessError = $workerProcessError
+        }
       } -ArgumentList $containerName,$database,$RaceName,$SessionId,$ExpectedRevision,$TargetStatus,$RequestId
 
-      $competitorResults = @(Wait-DatabaseRaceJobs -Jobs @($competitor) -TimeoutSeconds $ContentionHardTimeoutSeconds)
+      try {
+        $competitorResults = @(Wait-DatabaseRaceJobs -Jobs @($competitor) -TimeoutSeconds $ContentionHardTimeoutSeconds)
+      } catch {
+        if ($_.Exception.Message -like 'Database race timed out after *') {
+          Write-M40SemanticRecord -RaceName $RaceName `
+            -Classification 'worker_lifecycle_failure' -SqlClassification $null -SqlState $null `
+            -ErrorIdentifier 'worker_timeout' -ElapsedMilliseconds $null `
+            -WorkerState ([string]$competitor.State) -WorkerExitCode $null -WorkerTimedOut $true `
+            -WorkerSignal $null -WorkerProcessError $null -Readiness 'PASS'
+        }
+        throw
+      }
       $competitorOutput = $competitorResults[0].Output
-      $competitorExit = ($competitorOutput | Where-Object { $null -ne $_.ExitCode } | Select-Object -Last 1).ExitCode
-      if ($null -eq $competitorExit -or $competitorExit -ne 0) {
-        Write-Host "[CONTENTION OUTPUT] competitor:`n$($competitorOutput | Out-String)"
-        throw "M40 bounded contention classification missing for $RaceName (exit $competitorExit)"
+      $workerResults = @($competitorOutput | Where-Object {
+        $null -ne $_.PSObject.Properties['ExitCode'] -and
+        $null -ne $_.PSObject.Properties['ProcessError']
+      })
+      $workerResult = if ($workerResults.Count -eq 1) { $workerResults[0] } else { $null }
+      $competitorExit = if ($workerResult) { $workerResult.ExitCode } else { $null }
+      $workerSignal = if ($workerResult) { $workerResult.Signal } else { $null }
+      $workerProcessError = if ($workerResult) { $workerResult.ProcessError } else { 'worker_result_contract_error' }
+      $workerState = [string]$competitorResults[0].State
+      $diagnosticOutput = @($competitorOutput | Where-Object {
+        $null -eq $_.PSObject.Properties['ExitCode'] -or
+        $null -eq $_.PSObject.Properties['ProcessError']
+      })
+
+      $previousErrorAction = $ErrorActionPreference
+      $ErrorActionPreference = 'Continue'
+      try {
+        $databaseRecordOutput = @(
+          docker exec $containerName psql -qAt -v ON_ERROR_STOP=1 -U postgres -d $database -c `
+            "select json_build_object('race',race,'classification',classification,'elapsed_milliseconds',elapsed_milliseconds)::text from public.__test_teacher_attendance_contention_result where race='$RaceName'" 2>$null
+        )
+        $databaseRecordExit = $LASTEXITCODE
+      } finally {
+        $ErrorActionPreference = $previousErrorAction
+      }
+
+      $databaseRecord = $null
+      $databaseRecordValid = $false
+      if ($databaseRecordExit -eq 0 -and $databaseRecordOutput.Count -eq 1) {
+        try {
+          $databaseRecord = $databaseRecordOutput[0] | ConvertFrom-Json
+          $recordProperties = @($databaseRecord.PSObject.Properties.Name | Sort-Object)
+          $databaseRecordValid = ($recordProperties -join ',') -eq 'classification,elapsed_milliseconds,race' -and
+            $databaseRecord.race -eq $RaceName -and
+            $databaseRecord.classification -is [string] -and
+            $null -ne $databaseRecord.elapsed_milliseconds
+        } catch {
+          $databaseRecordValid = $false
+        }
+      }
+
+      $elapsedMilliseconds = if ($databaseRecordValid) {
+        [double]$databaseRecord.elapsed_milliseconds
+      } else {
+        $null
+      }
+      $workerLifecycleValid = $workerResults.Count -eq 1 -and
+        $workerState -eq 'Completed' -and
+        $null -eq $workerSignal -and
+        $null -eq $workerProcessError
+
+      if ($workerLifecycleValid -and $competitorExit -eq 0 -and $databaseRecordValid -and
+          $databaseRecord.classification -eq 'attendance update is already in progress' -and
+          $elapsedMilliseconds -ge 0 -and $elapsedMilliseconds -lt 2000) {
+        Write-M40SemanticRecord -RaceName $RaceName `
+          -Classification 'attendance_contention_rejected' `
+          -SqlClassification $databaseRecord.classification -SqlState 'P0001' `
+          -ErrorIdentifier 'attendance_contention_in_progress' -ElapsedMilliseconds $elapsedMilliseconds `
+          -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerSignal $null -WorkerProcessError $null `
+          -Readiness 'PASS'
+      } elseif ($workerLifecycleValid -and $competitorExit -eq 0 -and $databaseRecordValid -and
+                $databaseRecord.classification -eq 'm40_blocking_statement_timeout_v1' -and
+                $elapsedMilliseconds -ge 2500 -and $elapsedMilliseconds -lt 5000) {
+        Write-M40SemanticRecord -RaceName $RaceName `
+          -Classification 'm40_blocking_contention' `
+          -SqlClassification $databaseRecord.classification -SqlState '57014' `
+          -ErrorIdentifier 'statement_timeout' -ElapsedMilliseconds $elapsedMilliseconds `
+          -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerSignal $null -WorkerProcessError $null `
+          -Readiness 'PASS'
+        throw "M40 semantic defect detected for $RaceName"
+      } elseif ($workerLifecycleValid -and $competitorExit -ne 0 -and -not $databaseRecordValid) {
+        $diagnostic = Get-SanitizedM40SqlDiagnostic -Output $diagnosticOutput
+        Write-M40SemanticRecord -RaceName $RaceName `
+          -Classification 'unrelated_sql_error' `
+          -SqlClassification 'unexpected_sql_failure' -SqlState $diagnostic.SqlState `
+          -ErrorIdentifier $diagnostic.ErrorIdentifier -ElapsedMilliseconds $null `
+          -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerSignal $null -WorkerProcessError $null `
+          -Readiness 'PASS' -UnauthorizedMarkerObserved $diagnostic.UnauthorizedMarkerObserved
+        throw "Teacher attendance contention competitor produced an unrelated SQL failure for $RaceName"
+      } else {
+        $failureClassification = if (-not $workerLifecycleValid) {
+          'worker_lifecycle_failure'
+        } elseif (-not $databaseRecordValid) {
+          'missing_or_malformed_sql_semantic_record'
+        } else {
+          'contradictory_sql_semantic_record'
+        }
+        Write-M40SemanticRecord -RaceName $RaceName `
+          -Classification $failureClassification `
+          -SqlClassification $(if ($databaseRecordValid) { $databaseRecord.classification } else { $null }) `
+          -SqlState $null -ErrorIdentifier $failureClassification -ElapsedMilliseconds $elapsedMilliseconds `
+          -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerSignal $workerSignal -WorkerProcessError $workerProcessError `
+          -Readiness 'PASS'
+        throw "Teacher attendance contention semantic contract failed for $RaceName"
       }
 
       $assertArguments = @(

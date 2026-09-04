@@ -1,4 +1,5 @@
 \set ON_ERROR_STOP on
+\set VERBOSITY verbose
 
 set statement_timeout = '3s';
 set role authenticated;
@@ -13,6 +14,9 @@ do $$
 declare
   started_at timestamptz := clock_timestamp();
   elapsed_ms numeric;
+  caught_sqlstate text;
+  caught_message text;
+  semantic_classification text;
 begin
   begin
     perform public.submit_teacher_attendance(
@@ -24,22 +28,54 @@ begin
       current_setting('app.test_request_id')
     );
     raise exception 'contention competitor unexpectedly mutated attendance';
-  exception when others then
-    if sqlerrm <> 'attendance update is already in progress' then
-      raise exception 'M40 bounded contention classification missing';
-    end if;
+  exception
+    when sqlstate '57014' then
+      get stacked diagnostics
+        caught_sqlstate = returned_sqlstate,
+        caught_message = message_text;
+      elapsed_ms := extract(epoch from (clock_timestamp() - started_at)) * 1000;
+      if caught_sqlstate <> '57014'
+         or caught_message <> 'canceling statement due to statement timeout'
+         or elapsed_ms < 2500
+         or elapsed_ms >= 5000 then
+        raise;
+      end if;
+      semantic_classification := 'm40_blocking_statement_timeout_v1';
+    when others then
+      get stacked diagnostics
+        caught_sqlstate = returned_sqlstate,
+        caught_message = message_text;
+      elapsed_ms := extract(epoch from (clock_timestamp() - started_at)) * 1000;
+      if caught_sqlstate <> 'P0001'
+         or caught_message <> 'attendance update is already in progress'
+         or elapsed_ms >= 2000 then
+        raise;
+      end if;
+      semantic_classification := 'attendance update is already in progress';
   end;
 
-  elapsed_ms := extract(epoch from (clock_timestamp() - started_at)) * 1000;
-  if elapsed_ms >= 2000 then
+  if semantic_classification is null then
+    raise exception 'contention competitor produced no semantic classification';
+  end if;
+
+  if elapsed_ms is null then
+    elapsed_ms := extract(epoch from (clock_timestamp() - started_at)) * 1000;
+  end if;
+
+  if semantic_classification = 'attendance update is already in progress'
+     and elapsed_ms >= 2000 then
     raise exception 'contention competitor exceeded the bounded interval';
+  end if;
+  if semantic_classification = 'm40_blocking_statement_timeout_v1'
+     and (elapsed_ms < 2500 or elapsed_ms >= 5000) then
+    raise exception 'contention competitor statement-timeout classification was outside its exact interval';
   end if;
 
   insert into public.__test_teacher_attendance_contention_result (
     race, classification, elapsed_milliseconds
   ) values (
     current_setting('app.test_race'),
-    'attendance update is already in progress',
+    semantic_classification,
     elapsed_ms
   );
 end
@@ -47,4 +83,4 @@ $$;
 
 reset role;
 reset statement_timeout;
-select 'teacher attendance contention competitor: immediate safe classification' as passed;
+select 'teacher attendance contention competitor: exact semantic classification recorded' as passed;
