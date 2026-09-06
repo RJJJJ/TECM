@@ -259,26 +259,52 @@ function exactKeys(value, expected) {
   return actual.length === expected.length && actual.every((key, index) => key === [...expected].sort()[index]);
 }
 
-function isM40SemanticRecord(record) {
-  return exactKeys(record, ['schema', 'producer', 'race', 'classification', 'sql', 'worker', 'readiness'])
-    && record.schema === m40SemanticSchema
-    && record.producer === m40SemanticProducer
-    && typeof record.race === 'string'
-    && typeof record.classification === 'string'
-    && exactKeys(record.sql, ['classification', 'sqlstate', 'error_identifier', 'elapsed_milliseconds', 'unauthorized_marker_observed'])
-    && (record.sql.classification === null || typeof record.sql.classification === 'string')
+function m40SemanticRecordValidationCodes(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return ['M40_RECORD_TYPE_INVALID'];
+  }
+  if (!exactKeys(record, ['schema', 'producer', 'race', 'classification', 'sql', 'worker', 'readiness'])) {
+    return ['M40_RECORD_TOP_LEVEL_FIELDS_INVALID'];
+  }
+
+  const codes = [];
+  if (record.schema !== m40SemanticSchema) codes.push('M40_RECORD_SCHEMA_VERSION_INVALID');
+  if (record.producer !== m40SemanticProducer) codes.push('M40_RECORD_PRODUCER_INVALID');
+  if (typeof record.race !== 'string'
+      || typeof record.classification !== 'string'
+      || typeof record.readiness !== 'string') {
+    codes.push('M40_RECORD_TOP_LEVEL_TYPES_INVALID');
+  }
+
+  if (!exactKeys(record.sql, ['classification', 'sqlstate', 'error_identifier', 'elapsed_milliseconds', 'unauthorized_marker_observed'])) {
+    codes.push('M40_RECORD_SQL_FIELDS_INVALID');
+  } else if (!(
+    (record.sql.classification === null || typeof record.sql.classification === 'string')
     && (record.sql.sqlstate === null || /^[0-9A-Z]{5}$/.test(record.sql.sqlstate))
     && (record.sql.error_identifier === null || typeof record.sql.error_identifier === 'string')
     && (record.sql.elapsed_milliseconds === null
       || (typeof record.sql.elapsed_milliseconds === 'number' && Number.isFinite(record.sql.elapsed_milliseconds)))
     && typeof record.sql.unauthorized_marker_observed === 'boolean'
-    && exactKeys(record.worker, ['state', 'exit_code', 'timed_out', 'signal', 'process_error'])
-    && typeof record.worker.state === 'string'
+  )) {
+    codes.push('M40_RECORD_SQL_TYPES_INVALID');
+  }
+
+  if (!exactKeys(record.worker, ['state', 'exit_code', 'timed_out', 'signal', 'process_error'])) {
+    codes.push('M40_RECORD_WORKER_FIELDS_INVALID');
+  } else if (!(
+    typeof record.worker.state === 'string'
     && (record.worker.exit_code === null || Number.isInteger(record.worker.exit_code))
     && typeof record.worker.timed_out === 'boolean'
     && (record.worker.signal === null || typeof record.worker.signal === 'string')
     && (record.worker.process_error === null || typeof record.worker.process_error === 'string')
-    && typeof record.readiness === 'string';
+  )) {
+    codes.push('M40_RECORD_WORKER_TYPES_INVALID');
+  }
+  return codes.sort();
+}
+
+function isM40SemanticRecord(record) {
+  return m40SemanticRecordValidationCodes(record).length === 0;
 }
 
 function semanticSignature(record) {
@@ -295,26 +321,32 @@ function parseM40SemanticRecords(output) {
   const candidateLines = output.split(/\r?\n/).filter((line) => line.includes(m40SemanticPrefix));
   const records = [];
   const malformed = [];
+  const validationCodes = [];
   for (const line of candidateLines) {
     if (!line.startsWith(m40SemanticPrefix)
         || countOccurrences(line, m40SemanticPrefix) !== 1) {
       malformed.push('invalid_prefix_or_occurrence');
+      validationCodes.push('M40_RECORD_PREFIX_INVALID');
       continue;
     }
     try {
       const record = JSON.parse(line.slice(m40SemanticPrefix.length));
-      if (!isM40SemanticRecord(record)) {
+      const recordValidationCodes = m40SemanticRecordValidationCodes(record);
+      if (recordValidationCodes.length > 0) {
         malformed.push('invalid_schema');
+        validationCodes.push(...recordValidationCodes);
         continue;
       }
       records.push(record);
     } catch {
       malformed.push('invalid_json');
+      validationCodes.push('M40_RECORD_JSON_INVALID');
     }
   }
   return {
     records,
     malformed,
+    validation_codes: [...new Set(validationCodes)].sort(),
     signatures: records.map(semanticSignature).sort(),
     occurrence_count: candidateLines.length
   };
@@ -385,6 +417,29 @@ function databaseFailureClassification(result, mutation) {
   const lifecycleFailure = timedOut || Boolean(result.error) || Boolean(result.signal) || result.status === null
     || /Docker Desktop is not available|Could not start PostgreSQL|PostgreSQL did not become ready|cleanup failed/i.test(output)
     || cleanup.database !== 'PASS' || cleanup.container !== 'PASS';
+  const rejectionCodes = new Set(semantic.validation_codes);
+  if (semantic.occurrence_count !== 1) rejectionCodes.add('M40_SEMANTIC_RECORD_COUNT_INVALID');
+  for (const record of unexpectedRecords) {
+    if (record.race !== 'teacher-attendance-contention-existing') {
+      rejectionCodes.add('M40_RECORD_RACE_INVALID');
+    } else if (record.sql.unauthorized_marker_observed === true) {
+      rejectionCodes.add('M40_UNAUTHORIZED_MARKER_OBSERVED');
+    } else if (record.classification === 'unrelated_sql_error') {
+      rejectionCodes.add('M40_UNRELATED_SQL_FAILURE');
+    } else {
+      rejectionCodes.add('M40_SEMANTIC_RECORD_UNEXPECTED');
+    }
+    if (record.classification === 'unrelated_sql_error') {
+      rejectionCodes.add('M40_UNRELATED_SQL_FAILURE');
+    }
+  }
+  if (result.status !== 1) rejectionCodes.add('M40_PROCESS_STATUS_INVALID');
+  if (timedOut) rejectionCodes.add('M40_PROCESS_TIMEOUT');
+  if (result.error && !timedOut) rejectionCodes.add('M40_PROCESS_ERROR');
+  if (result.signal) rejectionCodes.add('M40_PROCESS_SIGNAL');
+  if (cleanup.occurrence_count !== 1) rejectionCodes.add('M40_CLEANUP_RECORD_COUNT_INVALID');
+  if (cleanup.database !== 'PASS') rejectionCodes.add('M40_DATABASE_CLEANUP_FAILED');
+  if (cleanup.container !== 'PASS') rejectionCodes.add('M40_CONTAINER_CLEANUP_FAILED');
   return {
     caught: exactProcessFailure && exactSemanticClassification && !lifecycleFailure,
     exit_code: result.status,
@@ -395,14 +450,17 @@ function databaseFailureClassification(result, mutation) {
     exact_semantic_classification: exactSemanticClassification,
     semantic_occurrence_count: semantic.occurrence_count,
     semantic_malformed: semantic.malformed,
+    semantic_validation_codes: semantic.validation_codes,
     semantic_signatures: semantic.signatures,
+    semantic_sqlstates: semantic.records.map(({ sql }) => sql.sqlstate).sort(),
     expected_semantic_records: expectedRecords.length,
     unexpected_semantic_records: unexpectedRecords.length,
     unrelated_sql_classification: semantic.records.some(({ classification }) => classification === 'unrelated_sql_error'),
     lifecycle_failure: lifecycleFailure,
     database_cleanup: cleanup.database,
     container_cleanup: cleanup.container,
-    cleanup_occurrence_count: cleanup.occurrence_count
+    cleanup_occurrence_count: cleanup.occurrence_count,
+    rejection_codes: [...rejectionCodes].sort()
   };
 }
 
@@ -431,7 +489,15 @@ function evaluateM40Caught({
     && classification.container_cleanup === 'PASS'
     && worktreeCleanup === 'PASS'
     && workspaceCleanup === 'PASS';
-  return { caught };
+  const rejectionCodes = new Set(classification.rejection_codes ?? []);
+  if (baselinePassed !== true) rejectionCodes.add('M40_BASELINE_INCOMPLETE');
+  if (mutationMatches !== 1) rejectionCodes.add('M40_MUTATION_TARGET_COUNT_INVALID');
+  if (intendedMutationApplied !== true) rejectionCodes.add('M40_INTENDED_MUTATION_NOT_APPLIED');
+  if (completeNoArgumentVerifierRan !== true) rejectionCodes.add('M40_COMPLETE_VERIFIER_NOT_RUN');
+  if (sourceRestoration !== 'PASS') rejectionCodes.add('M40_SOURCE_RESTORATION_FAILED');
+  if (worktreeCleanup !== 'PASS') rejectionCodes.add('M40_WORKTREE_CLEANUP_FAILED');
+  if (workspaceCleanup !== 'PASS') rejectionCodes.add('M40_WORKSPACE_CLEANUP_FAILED');
+  return { caught, rejection_codes: [...rejectionCodes].sort() };
 }
 
 function runBaseline() {
@@ -511,6 +577,13 @@ function runDatabaseClassificationControls(mutation, baselineEvidence) {
   const expectedLine = semanticLine(makeM40Record());
   const expectedSignature = semanticSignature(makeM40Record());
   const cleanupPass = '[CLEANUP] database=PASS container=PASS';
+  const wrongSchema = makeM40Record({ schema: 'tecm.m40.semantic.v0' });
+  const missingTopLevel = makeM40Record();
+  delete missingTopLevel.readiness;
+  const missingSqlField = makeM40Record();
+  delete missingSqlField.sql.error_identifier;
+  const missingWorkerField = makeM40Record();
+  delete missingWorkerField.worker.timed_out;
   const unrelated = makeM40Record({
     classification: 'unrelated_sql_error',
     sql: {
@@ -522,25 +595,34 @@ function runDatabaseClassificationControls(mutation, baselineEvidence) {
   });
   const unrelatedSignature = semanticSignature(unrelated);
   const specs = [
-    { id: 'CONTROL-M40-EXPECTED-SEMANTIC', expectedCaught: true, expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}` },
-    { id: 'CONTROL-M40-DUPLICATED-SEMANTIC', expectedCaught: false, expectedSignatures: [expectedSignature, expectedSignature], output: `${expectedLine}\n${expectedLine}\n${cleanupPass}` },
-    { id: 'CONTROL-M40-MALFORMED-SEMANTIC', expectedCaught: false, expectedSignatures: [], expectedMalformed: ['invalid_json'], expectedOccurrences: 1, output: `${m40SemanticPrefix}{\"schema\":\n${cleanupPass}` },
-    { id: 'CONTROL-M40-EXPECTED-PLUS-UNRELATED', expectedCaught: false, expectedSignatures: [expectedSignature, unrelatedSignature].sort(), output: `${expectedLine}\n${semanticLine(unrelated)}\n${cleanupPass}` },
-    { id: 'CONTROL-M40-UNAUTHORIZED-HUMAN-MARKER', expectedCaught: false, expectedSignatures: [], expectedOccurrences: 0, output: `M40 bounded contention classification missing\n${cleanupPass}` },
-    { id: 'CONTROL-M40-TIMEOUT', expectedCaught: false, expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, status: null, error: { code: 'ETIMEDOUT', message: 'timed out' } },
-    { id: 'CONTROL-M40-SIGNAL', expectedCaught: false, expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, status: null, signal: 'SIGTERM' },
-    { id: 'CONTROL-M40-PROCESS-ERROR', expectedCaught: false, expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, status: null, error: { code: 'ENOENT', message: 'spawn failed' } },
-    { id: 'CONTROL-M40-DATABASE-CLEANUP-FAILURE', expectedCaught: false, expectedSignatures: [expectedSignature], output: `${expectedLine}\n[CLEANUP] database=FAIL container=PASS` },
-    { id: 'CONTROL-M40-CONTAINER-CLEANUP-FAILURE', expectedCaught: false, expectedSignatures: [expectedSignature], output: `${expectedLine}\n[CLEANUP] database=PASS container=FAIL` },
-    { id: 'CONTROL-M40-SOURCE-RESTORATION-FAILURE', expectedCaught: false, expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, sourceRestoration: 'FAIL' },
-    { id: 'CONTROL-M40-WORKTREE-CLEANUP-FAILURE', expectedCaught: false, expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, worktreeCleanup: 'FAIL' },
-    { id: 'CONTROL-M40-WORKSPACE-CLEANUP-FAILURE', expectedCaught: false, expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, workspaceCleanup: 'FAIL' },
-    { id: 'CONTROL-M40-BASELINE-FAILURE', expectedCaught: false, expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, baselinePassed: false },
-    { id: 'CONTROL-M40-INCOMPLETE-VERIFIER', expectedCaught: false, expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, completeNoArgumentVerifierRan: false },
-    { id: 'CONTROL-M40-WRONG-MUTATION', expectedCaught: false, expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, intendedMutationApplied: false },
-    { id: 'CONTROL-M40-STATUS-ZERO', expectedCaught: false, expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, status: 0 }
+    { id: 'CONTROL-M40-EXPECTED-SEMANTIC', expectedCaught: true, expectedCodes: [], expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}` },
+    { id: 'CONTROL-M40-WRONG-SCHEMA-VERSION', expectedCaught: false, expectedCodes: ['M40_RECORD_SCHEMA_VERSION_INVALID'], expectedSignatures: [], expectedOccurrences: 1, output: `${semanticLine(wrongSchema)}\n${cleanupPass}` },
+    { id: 'CONTROL-M40-MISSING-TOP-LEVEL-FIELD', expectedCaught: false, expectedCodes: ['M40_RECORD_TOP_LEVEL_FIELDS_INVALID'], expectedSignatures: [], expectedOccurrences: 1, output: `${semanticLine(missingTopLevel)}\n${cleanupPass}` },
+    { id: 'CONTROL-M40-MISSING-SQL-FIELD', expectedCaught: false, expectedCodes: ['M40_RECORD_SQL_FIELDS_INVALID'], expectedSignatures: [], expectedOccurrences: 1, output: `${semanticLine(missingSqlField)}\n${cleanupPass}` },
+    { id: 'CONTROL-M40-MISSING-WORKER-FIELD', expectedCaught: false, expectedCodes: ['M40_RECORD_WORKER_FIELDS_INVALID'], expectedSignatures: [], expectedOccurrences: 1, output: `${semanticLine(missingWorkerField)}\n${cleanupPass}` },
+    { id: 'CONTROL-M40-WRONG-RACE', expectedCaught: false, expectedCodes: ['M40_RECORD_RACE_INVALID'], expectedSignatures: [expectedSignature], output: `${semanticLine(makeM40Record({ race: 'teacher-attendance-contention-absent' }))}\n${cleanupPass}` },
+    { id: 'CONTROL-M40-WRONG-PRODUCER', expectedCaught: false, expectedCodes: ['M40_RECORD_PRODUCER_INVALID'], expectedSignatures: [], expectedOccurrences: 1, output: `${semanticLine(makeM40Record({ producer: 'sql-worker/forged-producer' }))}\n${cleanupPass}` },
+    { id: 'CONTROL-M40-DUPLICATED-SEMANTIC', expectedCaught: false, expectedCodes: ['M40_SEMANTIC_RECORD_COUNT_INVALID'], expectedSignatures: [expectedSignature, expectedSignature], output: `${expectedLine}\n${expectedLine}\n${cleanupPass}` },
+    { id: 'CONTROL-M40-MALFORMED-SEMANTIC', expectedCaught: false, expectedCodes: ['M40_RECORD_JSON_INVALID'], expectedSignatures: [], expectedOccurrences: 1, output: `${m40SemanticPrefix}{\"schema\":\n${cleanupPass}` },
+    { id: 'CONTROL-M40-EXPECTED-PLUS-UNRELATED', expectedCaught: false, expectedCodes: ['M40_SEMANTIC_RECORD_COUNT_INVALID', 'M40_UNRELATED_SQL_FAILURE'], expectedSignatures: [expectedSignature, unrelatedSignature].sort(), output: `${expectedLine}\n${semanticLine(unrelated)}\n${cleanupPass}` },
+    { id: 'CONTROL-M40-UNAUTHORIZED-MARKER-OUTPUT', expectedCaught: false, expectedCodes: ['M40_RECORD_PREFIX_INVALID', 'M40_SEMANTIC_RECORD_COUNT_INVALID'], expectedSignatures: [expectedSignature], expectedOccurrences: 2, output: `${expectedLine}\nNOTICE: ${expectedLine}\n${cleanupPass}` },
+    { id: 'CONTROL-M40-EXPECTED-FREE-TEXT', expectedCaught: false, expectedCodes: ['M40_SEMANTIC_RECORD_COUNT_INVALID'], expectedSignatures: [], expectedOccurrences: 0, output: `M40 bounded contention classification missing\n${cleanupPass}` },
+    { id: 'CONTROL-M40-STATUS-ZERO', expectedCaught: false, expectedCodes: ['M40_PROCESS_STATUS_INVALID'], expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, status: 0 },
+    { id: 'CONTROL-M40-TIMEOUT', expectedCaught: false, expectedCodes: ['M40_PROCESS_STATUS_INVALID', 'M40_PROCESS_TIMEOUT'], expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, status: null, error: { code: 'ETIMEDOUT', message: 'timed out' } },
+    { id: 'CONTROL-M40-SIGNAL', expectedCaught: false, expectedCodes: ['M40_PROCESS_SIGNAL', 'M40_PROCESS_STATUS_INVALID'], expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, status: null, signal: 'SIGTERM' },
+    { id: 'CONTROL-M40-PROCESS-ERROR', expectedCaught: false, expectedCodes: ['M40_PROCESS_ERROR', 'M40_PROCESS_STATUS_INVALID'], expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, status: null, error: { code: 'ENOENT', message: 'spawn failed' } },
+    { id: 'CONTROL-M40-DATABASE-CLEANUP-FAILURE', expectedCaught: false, expectedCodes: ['M40_DATABASE_CLEANUP_FAILED'], expectedSignatures: [expectedSignature], output: `${expectedLine}\n[CLEANUP] database=FAIL container=PASS` },
+    { id: 'CONTROL-M40-CONTAINER-CLEANUP-FAILURE', expectedCaught: false, expectedCodes: ['M40_CONTAINER_CLEANUP_FAILED'], expectedSignatures: [expectedSignature], output: `${expectedLine}\n[CLEANUP] database=PASS container=FAIL` },
+    { id: 'CONTROL-M40-SOURCE-RESTORATION-FAILURE', expectedCaught: false, expectedCodes: ['M40_SOURCE_RESTORATION_FAILED'], expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, sourceRestoration: 'FAIL' },
+    { id: 'CONTROL-M40-WORKTREE-CLEANUP-FAILURE', expectedCaught: false, expectedCodes: ['M40_WORKTREE_CLEANUP_FAILED'], expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, worktreeCleanup: 'FAIL' },
+    { id: 'CONTROL-M40-WORKSPACE-CLEANUP-FAILURE', expectedCaught: false, expectedCodes: ['M40_WORKSPACE_CLEANUP_FAILED'], expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, workspaceCleanup: 'FAIL' },
+    { id: 'CONTROL-M40-BASELINE-FAILURE', expectedCaught: false, expectedCodes: ['M40_BASELINE_INCOMPLETE'], expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, baselinePassed: false },
+    { id: 'CONTROL-M40-INCOMPLETE-VERIFIER', expectedCaught: false, expectedCodes: ['M40_COMPLETE_VERIFIER_NOT_RUN'], expectedSignatures: [expectedSignature], output: `${expectedLine}\n${cleanupPass}`, completeNoArgumentVerifierRan: false }
   ];
   return specs.map((spec) => {
+    if (!spec.expectedCaught && spec.expectedCodes.length === 0) {
+      throw new VerifierError('DATABASE_CLASSIFICATION_CONTROL_INVALID', `${spec.id} must define expected rejection codes`);
+    }
     const tempRoot = mkdtempSync(resolve(tmpdir(), `tecm-m40-classifier-${spec.id.toLowerCase()}-`));
     const target = resolve(tempRoot, 'classifier-control.txt');
     const sentinel = `UNIQUE_${spec.id}_TARGET`;
@@ -569,7 +651,7 @@ function runDatabaseClassificationControls(mutation, baselineEvidence) {
         sourceRestoration: spec.sourceRestoration ?? 'PASS',
         worktreeCleanup: spec.worktreeCleanup ?? 'PASS',
         workspaceCleanup: spec.workspaceCleanup ?? 'PASS'
-      }).caught;
+      });
       writeFileSync(target, original);
       restored = readFileSync(target).equals(original);
     } finally {
@@ -578,21 +660,21 @@ function runDatabaseClassificationControls(mutation, baselineEvidence) {
     }
     const signaturesMatch = classification.semantic_signatures.length === spec.expectedSignatures.length
       && classification.semantic_signatures.every((value, index) => value === spec.expectedSignatures[index]);
-    const expectedMalformed = spec.expectedMalformed ?? [];
-    const malformedMatch = classification.semantic_malformed.length === expectedMalformed.length
-      && classification.semantic_malformed.every((value, index) => value === expectedMalformed[index]);
     const expectedOccurrences = spec.expectedOccurrences ?? spec.expectedSignatures.length;
     const occurrencesMatch = classification.semantic_occurrence_count === expectedOccurrences;
-    if (observed !== spec.expectedCaught || !signaturesMatch || !malformedMatch
+    const expectedCodes = [...spec.expectedCodes].sort();
+    const codesMatch = observed.rejection_codes.length === expectedCodes.length
+      && observed.rejection_codes.every((value, index) => value === expectedCodes[index]);
+    if (observed.caught !== spec.expectedCaught || !codesMatch || !signaturesMatch
         || !occurrencesMatch || !restored || !cleaned) {
       throw new VerifierError('DATABASE_CLASSIFICATION_CONTROL_FAILED', `${spec.id} did not fail closed`, {
         control: spec.id,
         expected_caught: spec.expectedCaught,
-        observed_caught: observed,
+        observed_caught: observed.caught,
+        expected_rejection_codes: expectedCodes,
+        observed_rejection_codes: observed.rejection_codes,
         expected_semantic_classifications: spec.expectedSignatures,
         observed_semantic_classifications: classification.semantic_signatures,
-        expected_malformed_classifications: expectedMalformed,
-        observed_malformed_classifications: classification.semantic_malformed,
         expected_occurrences: expectedOccurrences,
         observed_occurrences: classification.semantic_occurrence_count,
         classification,
@@ -603,11 +685,11 @@ function runDatabaseClassificationControls(mutation, baselineEvidence) {
     return {
       id: spec.id,
       expected_caught: spec.expectedCaught,
-      observed_caught: observed,
+      observed_caught: observed.caught,
+      expected_rejection_codes: expectedCodes,
+      observed_rejection_codes: observed.rejection_codes,
       expected_classifications: spec.expectedSignatures,
       observed_classifications: classification.semantic_signatures,
-      expected_malformed_classifications: expectedMalformed,
-      observed_malformed_classifications: classification.semantic_malformed,
       expected_occurrences: expectedOccurrences,
       observed_occurrences: classification.semantic_occurrence_count,
       contract_override: {
@@ -763,7 +845,7 @@ function runDatabaseMutation(mutation, options = {}) {
   const sourceRestoration = restored ? 'PASS' : 'FAIL';
   const worktreeCleanup = worktreeRemoved ? 'PASS' : 'FAIL';
   const workspaceCleanup = cleaned ? 'PASS' : 'FAIL';
-  const caught = evaluateM40Caught({
+  const evaluation = evaluateM40Caught({
     baselinePassed: options.baselineEvidence?.passed === true,
     mutationMatches: mutationEvidence.matches,
     intendedMutationApplied: mutationEvidence.intended_applied,
@@ -772,8 +854,15 @@ function runDatabaseMutation(mutation, options = {}) {
     sourceRestoration,
     worktreeCleanup,
     workspaceCleanup
-  }).caught;
+  });
+  const caught = evaluation.caught;
   const expectedCaught = options.expectedCaught ?? true;
+  const expectedRejectionCodes = [...(options.expectedRejectionCodes ?? [])].sort();
+  if (!expectedCaught && expectedRejectionCodes.length === 0) {
+    throw new VerifierError('M40_CONTROL_CONTRACT_INVALID', `${controlId} must define expected rejection codes`);
+  }
+  const rejectionCodesMatch = evaluation.rejection_codes.length === expectedRejectionCodes.length
+    && evaluation.rejection_codes.every((value, index) => value === expectedRejectionCodes[index]);
   const observedSignatures = [...classification.semantic_signatures].sort();
   const expectedSignatures = [...(options.expectedSemanticSignatures ?? [
     'm40_blocking_contention|m40_blocking_statement_timeout_v1|57014|statement_timeout|false'
@@ -786,14 +875,28 @@ function runDatabaseMutation(mutation, options = {}) {
     && classification.process_error === null
     && classification.database_cleanup === 'PASS'
     && classification.container_cleanup === 'PASS';
-  if (caught !== expectedCaught || !signaturesMatch || !completeProcessContract
+  const requiredSqlState = options.requiredObservedSqlState ?? null;
+  const sourceMutationExecuted = controlMutationEvidence
+    ? controlMutationEvidence.intended_applied === true
+    : mutationEvidence.intended_applied === true;
+  const sqlExecutionProved = requiredSqlState === null || (
+    sourceMutationExecuted
+    && classification.semantic_sqlstates.length === 1
+    && classification.semantic_sqlstates[0] === requiredSqlState
+  );
+  if (caught !== expectedCaught || !rejectionCodesMatch || !signaturesMatch || !completeProcessContract
+      || !sqlExecutionProved
       || sourceRestoration !== 'PASS' || worktreeCleanup !== 'PASS' || workspaceCleanup !== 'PASS') {
     throw new VerifierError('M40_CONTROL_CONTRACT_FAILED', `${controlId} did not satisfy the complete M40 contract`, {
       control: controlId,
       expected_caught: expectedCaught,
       observed_caught: caught,
+      expected_rejection_codes: expectedRejectionCodes,
+      observed_rejection_codes: evaluation.rejection_codes,
       expected_semantic_classifications: expectedSignatures,
       observed_semantic_classifications: observedSignatures,
+      required_sqlstate: requiredSqlState,
+      sql_execution_proved: sqlExecutionProved,
       classification,
       source_restoration: sourceRestoration,
       worktree_cleanup: worktreeCleanup,
@@ -809,6 +912,8 @@ function runDatabaseMutation(mutation, options = {}) {
     expected_failure: mutation.expectedFailure,
     caught,
     expected_caught: expectedCaught,
+    expected_rejection_codes: expectedRejectionCodes,
+    observed_rejection_codes: evaluation.rejection_codes,
     input_eol: mutationEvidence.input_eol,
     input_utf8_bom: mutationEvidence.input_utf8_bom,
     source_sha256: mutationEvidence.source_sha256,
@@ -817,6 +922,8 @@ function runDatabaseMutation(mutation, options = {}) {
     semantic_mapping: mutation.semanticMapping ?? null,
     mutation_target: mutation.mutationTarget ?? mutation.file,
     control_mutation: controlMutationEvidence,
+    required_sqlstate: requiredSqlState,
+    sql_statement_executed: sqlExecutionProved,
     expected_semantic_classifications: expectedSignatures,
     observed_semantic_classifications: observedSignatures,
     lifecycle_failure: classification.lifecycle_failure,
@@ -837,45 +944,83 @@ function runM40SqlControls(mutation, baselineEvidence) {
   const controls = [
     {
       id: 'M40-REAL-UNRELATED-SQL',
-      error: 'UNRELATED_M40_SQL_PROBE',
+      statement: "raise exception using errcode = '22023', message = 'UNRELATED_M40_SQL_PROBE';",
       unauthorizedMarker: false,
-      expectedSignature: 'unrelated_sql_error|unexpected_sql_failure|P0001|UNRELATED_M40_SQL_PROBE|false'
+      expectedSignature: 'unrelated_sql_error|unexpected_sql_failure|22023|UNRELATED_M40_SQL_PROBE|false',
+      expectedRejectionCodes: ['M40_UNRELATED_SQL_FAILURE'],
+      requiredObservedSqlState: '22023'
     },
     {
       id: 'M40-REAL-OLD-HUMAN-TEXT',
       error: 'M40 bounded contention classification missing',
       unauthorizedMarker: false,
-      expectedSignature: 'unrelated_sql_error|unexpected_sql_failure|P0001|redacted_unexpected_sql_error|false'
+      expectedSignature: 'unrelated_sql_error|unexpected_sql_failure|P0001|redacted_unexpected_sql_error|false',
+      expectedRejectionCodes: ['M40_UNRELATED_SQL_FAILURE']
     },
     {
       id: 'M40-REAL-GENERIC-P0001',
       error: 'GENERIC_P0001_M40_PROBE',
       unauthorizedMarker: false,
-      expectedSignature: 'unrelated_sql_error|unexpected_sql_failure|P0001|GENERIC_P0001_M40_PROBE|false'
+      expectedSignature: 'unrelated_sql_error|unexpected_sql_failure|P0001|GENERIC_P0001_M40_PROBE|false',
+      expectedRejectionCodes: ['M40_UNRELATED_SQL_FAILURE']
     },
     {
       id: 'M40-REAL-UNAUTHORIZED-MARKER',
       error: 'UNAUTHORIZED_M40_MARKER_PROBE',
       unauthorizedMarker: true,
-      expectedSignature: 'unrelated_sql_error|unexpected_sql_failure|P0001|UNAUTHORIZED_M40_MARKER_PROBE|true'
+      expectedSignature: 'unrelated_sql_error|unexpected_sql_failure|P0001|UNAUTHORIZED_M40_MARKER_PROBE|true',
+      expectedRejectionCodes: ['M40_UNAUTHORIZED_MARKER_OBSERVED', 'M40_UNRELATED_SQL_FAILURE']
     }
   ];
   return controls.map((control) => {
     const notice = control.unauthorizedMarker
       ? `    raise notice '${unauthorizedRecordText}';\n`
       : '';
+    const statement = control.statement ?? `raise exception '${control.error}';`;
     return runDatabaseMutation(mutation, {
       controlId: control.id,
       baselineEvidence,
       expectedCaught: false,
+      expectedRejectionCodes: control.expectedRejectionCodes,
       expectedSemanticSignatures: [control.expectedSignature],
+      requiredObservedSqlState: control.requiredObservedSqlState,
       competitorMutation: {
         id: control.id,
         search: callTarget,
-        replacement: `${notice}    raise exception '${control.error}';\n${callTarget}`
+        replacement: `${notice}    ${statement}\n${callTarget}`
       }
     });
   });
+}
+
+function runM40DifferentMutationControl(baselineEvidence) {
+  const mutation = {
+    id: 'M40-REAL-DIFFERENT-MUTATION',
+    file: 'supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql',
+    search: "    raise exception 'attendance update is already in progress';",
+    replacement: "    raise exception 'GENERIC_P0001_M40_PROBE';",
+    expectedTest: 'database existing/absent attendance contention proof',
+    expectedFailure: 'unrelated_sql_error',
+    databaseProbe: true,
+    mutationTarget: 'canonical immediate-contention diagnostic, without changing the nonblocking advisory lock'
+  };
+  const evidence = runDatabaseMutation(mutation, {
+    baselineEvidence,
+    expectedCaught: false,
+    expectedRejectionCodes: ['M40_UNRELATED_SQL_FAILURE'],
+    expectedSemanticSignatures: [
+      'unrelated_sql_error|unexpected_sql_failure|P0001|GENERIC_P0001_M40_PROBE|false'
+    ],
+    requiredObservedSqlState: 'P0001'
+  });
+  const postRestorationBaseline = runDatabaseBaseline();
+  return {
+    ...evidence,
+    semantic_difference: 'nonblocking lock retained; canonical rejection diagnostic changed in the disposable migration',
+    mutation_body_executed: evidence.sql_statement_executed,
+    post_restoration_baseline: postRestorationBaseline,
+    final_result: postRestorationBaseline.passed ? 'PASS' : 'FAIL'
+  };
 }
 
 function runM40TargetCountControls(baselineEvidence) {
@@ -1179,6 +1324,9 @@ function main() {
   const m40SqlControls = needsDatabase
     ? runM40SqlControls(cases.find(({ id }) => id === 'M40'), databaseBaseline)
     : null;
+  const m40DifferentMutationControl = needsDatabase
+    ? runM40DifferentMutationControl(databaseBaseline)
+    : null;
   const controls = focused ? null : runM31Controls();
   const evidence = selected.map((mutation) => runMutation(
     mutation,
@@ -1190,7 +1338,8 @@ function main() {
     database_baseline: databaseBaseline,
     database_controls: databaseControls,
     m40_target_count_controls: m40TargetCountControls,
-    m40_sql_controls: m40SqlControls
+    m40_sql_controls: m40SqlControls,
+    m40_different_mutation_control: m40DifferentMutationControl
   });
 }
 
