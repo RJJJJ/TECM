@@ -27,7 +27,50 @@ $verificationError = $null
 $cleanupError = $null
 $m40SemanticPrefix = '@@TECM_M40_SEMANTIC@@'
 $m40SemanticSchema = 'tecm.m40.semantic.v1'
+$m40SidecarSemanticSchema = 'tecm.m40.semantic.v2'
 $m40SemanticProducer = 'database-verify.ps1/Invoke-TeacherAttendanceContention'
+$m40SidecarPathEnvironment = 'TECM_M40_SEMANTIC_RECORD_PATH'
+$m40SidecarCorrelationEnvironment = 'TECM_M40_SEMANTIC_CORRELATION'
+$m40SidecarMaximumBytes = 16KB
+$m40SidecarPathInput = [Environment]::GetEnvironmentVariable($m40SidecarPathEnvironment, 'Process')
+$m40SidecarCorrelationInput = [Environment]::GetEnvironmentVariable($m40SidecarCorrelationEnvironment, 'Process')
+[Environment]::SetEnvironmentVariable($m40SidecarPathEnvironment, $null, 'Process')
+[Environment]::SetEnvironmentVariable($m40SidecarCorrelationEnvironment, $null, 'Process')
+$m40SidecarMode = $false
+$m40SidecarPath = $null
+$m40SidecarCorrelation = $null
+$m40SidecarWriteCount = 0
+
+function Initialize-M40SemanticSidecar {
+  $hasPath = -not [string]::IsNullOrWhiteSpace($m40SidecarPathInput)
+  $hasCorrelation = -not [string]::IsNullOrWhiteSpace($m40SidecarCorrelationInput)
+  if (-not $hasPath -and -not $hasCorrelation) { return }
+  if (-not $hasPath -or -not $hasCorrelation) {
+    throw 'M40 sidecar path and correlation must be supplied together.'
+  }
+
+  [Guid]$parsedCorrelation = [Guid]::Empty
+  if (-not [Guid]::TryParseExact($m40SidecarCorrelationInput, 'D', [ref]$parsedCorrelation)) {
+    throw 'M40 sidecar correlation must be a canonical UUID.'
+  }
+  $candidatePath = [IO.Path]::GetFullPath($m40SidecarPathInput)
+  $repositoryPrefix = $repoRoot.TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+  if ($candidatePath.Equals($repoRoot, [StringComparison]::OrdinalIgnoreCase) -or
+      $candidatePath.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'M40 sidecar path must be outside the repository.'
+  }
+  $candidateParent = [IO.Path]::GetDirectoryName($candidatePath)
+  if (-not [IO.Directory]::Exists($candidateParent)) {
+    throw 'M40 sidecar parent must already exist.'
+  }
+  if ([IO.File]::Exists($candidatePath) -or [IO.Directory]::Exists($candidatePath)) {
+    throw 'M40 sidecar path must not exist before verifier start.'
+  }
+
+  $script:m40SidecarPath = $candidatePath
+  $script:m40SidecarCorrelation = $parsedCorrelation.ToString('D')
+  $script:m40SidecarMode = $true
+}
 
 function Write-M40SemanticRecord {
   param(
@@ -46,28 +89,85 @@ function Write-M40SemanticRecord {
     [bool]$UnauthorizedMarkerObserved = $false
   )
 
-  $record = [ordered]@{
-    schema = $m40SemanticSchema
-    producer = $m40SemanticProducer
-    race = $RaceName
-    classification = $Classification
-    sql = [ordered]@{
-      classification = $SqlClassification
-      sqlstate = $SqlState
-      error_identifier = $ErrorIdentifier
-      elapsed_milliseconds = $ElapsedMilliseconds
-      unauthorized_marker_observed = $UnauthorizedMarkerObserved
-    }
-    worker = [ordered]@{
-      state = $WorkerState
-      exit_code = $WorkerExitCode
-      timed_out = $WorkerTimedOut
-      signal = $WorkerSignal
-      process_error = $WorkerProcessError
-    }
-    readiness = $Readiness
+  $sqlRecord = [ordered]@{
+    classification = $SqlClassification
+    sqlstate = $SqlState
+    error_identifier = $ErrorIdentifier
+    elapsed_milliseconds = $ElapsedMilliseconds
+    unauthorized_marker_observed = $UnauthorizedMarkerObserved
   }
-  Write-Host ($m40SemanticPrefix + ($record | ConvertTo-Json -Compress -Depth 6))
+  $workerRecord = [ordered]@{
+    state = $WorkerState
+    exit_code = $WorkerExitCode
+    timed_out = $WorkerTimedOut
+    signal = $WorkerSignal
+    process_error = $WorkerProcessError
+  }
+  $record = if ($m40SidecarMode) {
+    [ordered]@{
+      schema = $m40SidecarSemanticSchema
+      producer = $m40SemanticProducer
+      correlation = $m40SidecarCorrelation
+      race = $RaceName
+      classification = $Classification
+      sql = $sqlRecord
+      worker = $workerRecord
+      readiness = $Readiness
+    }
+  } else {
+    [ordered]@{
+      schema = $m40SemanticSchema
+      producer = $m40SemanticProducer
+      race = $RaceName
+      classification = $Classification
+      sql = $sqlRecord
+      worker = $workerRecord
+      readiness = $Readiness
+    }
+  }
+  $recordJson = $record | ConvertTo-Json -Compress -Depth 6
+  if (-not $m40SidecarMode) {
+    Write-Host ($m40SemanticPrefix + $recordJson)
+    return
+  }
+
+  $temporaryPath = "$m40SidecarPath.$m40SidecarCorrelation.tmp"
+  try {
+    if ($m40SidecarWriteCount -ne 0) { throw 'M40 sidecar already contains an authoritative record.' }
+    if ([IO.File]::Exists($m40SidecarPath) -or [IO.Directory]::Exists($m40SidecarPath)) {
+      throw 'M40 sidecar target appeared before the authoritative write.'
+    }
+    $recordBytes = [Text.UTF8Encoding]::new($false).GetBytes($recordJson)
+    if ($recordBytes.Length -eq 0 -or $recordBytes.Length -gt $m40SidecarMaximumBytes) {
+      throw 'M40 sidecar record exceeded its bounded size contract.'
+    }
+    $stream = [IO.FileStream]::new(
+      $temporaryPath,
+      [IO.FileMode]::CreateNew,
+      [IO.FileAccess]::Write,
+      [IO.FileShare]::None,
+      4096,
+      [IO.FileOptions]::WriteThrough
+    )
+    try {
+      $stream.Write($recordBytes, 0, $recordBytes.Length)
+      $stream.Flush($true)
+    } finally {
+      $stream.Dispose()
+    }
+    [IO.File]::Move($temporaryPath, $m40SidecarPath)
+    $writtenBytes = [IO.File]::ReadAllBytes($m40SidecarPath)
+    $writtenJson = [Text.UTF8Encoding]::new($false, $true).GetString($writtenBytes)
+    if ($writtenBytes.Length -ne $recordBytes.Length -or $writtenJson -cne $recordJson) {
+      throw 'M40 sidecar record verification failed after the atomic move.'
+    }
+    $script:m40SidecarWriteCount = 1
+  } catch {
+    if ([IO.File]::Exists($temporaryPath)) {
+      Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+    }
+    throw "[M40 SIDECAR WRITE FAILURE] $($_.Exception.Message)"
+  }
 }
 
 function Get-SanitizedM40SqlDiagnostic {
@@ -77,12 +177,31 @@ function Get-SanitizedM40SqlDiagnostic {
   $match = [regex]::Match($text, 'ERROR:\s+([0-9A-Z]{5}):\s*([^\r\n]*)')
   $sqlState = if ($match.Success) { $match.Groups[1].Value } else { $null }
   $message = if ($match.Success) { $match.Groups[2].Value.Trim() } else { '' }
+  $phaseMatches = [regex]::Matches($text, '@@TECM_M40_PHASE@@([a-z_]+)')
+  $phase = if ($phaseMatches.Count -gt 0) {
+    $phaseMatches[$phaseMatches.Count - 1].Groups[1].Value
+  } else {
+    $null
+  }
+  $timeoutPhaseIdentifiers = @{
+    session_setup = 'session_setup_statement_timeout'
+    rpc_timeout_armed = 'timeout_arm_statement_timeout'
+    pre_rpc_timeout_control = 'pre_rpc_statement_timeout'
+    rpc_statement_started = 'rpc_wrapper_pre_invocation_timeout'
+    rpc_invoked = 'rpc_statement_timeout_unclassified'
+    rpc_timeout_sqlstate_invalid = 'rpc_timeout_sqlstate_invalid'
+    rpc_timeout_message_invalid = 'rpc_timeout_message_invalid'
+    rpc_timeout_elapsed_below_minimum = 'rpc_timeout_elapsed_below_minimum'
+    rpc_timeout_elapsed_above_maximum = 'rpc_timeout_elapsed_above_maximum'
+  }
   $safeIdentifiers = @(
     'UNRELATED_M40_SQL_PROBE',
     'GENERIC_P0001_M40_PROBE',
     'UNAUTHORIZED_M40_MARKER_PROBE'
   )
-  $errorIdentifier = if ($message -in $safeIdentifiers) {
+  $errorIdentifier = if ($sqlState -eq '57014' -and $phase -and $timeoutPhaseIdentifiers.ContainsKey($phase)) {
+    $timeoutPhaseIdentifiers[$phase]
+  } elseif ($message -in $safeIdentifiers) {
     $message
   } elseif ($message) {
     'redacted_unexpected_sql_error'
@@ -106,6 +225,7 @@ if ($RevisionGuardMigrationOverride) {
 }
 
 try {
+  Initialize-M40SemanticSidecar
   docker info --format '{{.ServerVersion}}' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop is not available.' }
 
@@ -594,6 +714,11 @@ try {
         $null -eq $_.PSObject.Properties['ExitCode'] -or
         $null -eq $_.PSObject.Properties['ProcessError']
       })
+      $rawCompetitorText = (@($diagnosticOutput | ForEach-Object { [string]$_ }) -join "`n")
+      $unauthorizedMarkerObserved = $rawCompetitorText.Contains($m40SemanticPrefix)
+      if ($unauthorizedMarkerObserved -and $diagnosticOutput.Count -gt 0) {
+        $diagnosticOutput | Out-String | Write-Host
+      }
 
       $previousErrorAction = $ErrorActionPreference
       $ErrorActionPreference = 'Continue'
@@ -640,7 +765,7 @@ try {
           -SqlClassification $databaseRecord.classification -SqlState 'P0001' `
           -ErrorIdentifier 'attendance_contention_in_progress' -ElapsedMilliseconds $elapsedMilliseconds `
           -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerSignal $null -WorkerProcessError $null `
-          -Readiness 'PASS'
+          -Readiness 'PASS' -UnauthorizedMarkerObserved $unauthorizedMarkerObserved
       } elseif ($workerLifecycleValid -and $competitorExit -eq 0 -and $databaseRecordValid -and
                 $databaseRecord.classification -eq 'm40_blocking_statement_timeout_v1' -and
                 $elapsedMilliseconds -ge 2500 -and $elapsedMilliseconds -lt 5000) {
@@ -649,7 +774,7 @@ try {
           -SqlClassification $databaseRecord.classification -SqlState '57014' `
           -ErrorIdentifier 'statement_timeout' -ElapsedMilliseconds $elapsedMilliseconds `
           -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerSignal $null -WorkerProcessError $null `
-          -Readiness 'PASS'
+          -Readiness 'PASS' -UnauthorizedMarkerObserved $unauthorizedMarkerObserved
         throw "M40 semantic defect detected for $RaceName"
       } elseif ($workerLifecycleValid -and $competitorExit -ne 0 -and -not $databaseRecordValid) {
         $diagnostic = Get-SanitizedM40SqlDiagnostic -Output $diagnosticOutput
@@ -658,7 +783,7 @@ try {
           -SqlClassification 'unexpected_sql_failure' -SqlState $diagnostic.SqlState `
           -ErrorIdentifier $diagnostic.ErrorIdentifier -ElapsedMilliseconds $null `
           -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerSignal $null -WorkerProcessError $null `
-          -Readiness 'PASS' -UnauthorizedMarkerObserved $diagnostic.UnauthorizedMarkerObserved
+          -Readiness 'PASS' -UnauthorizedMarkerObserved $unauthorizedMarkerObserved
         throw "Teacher attendance contention competitor produced an unrelated SQL failure for $RaceName"
       } else {
         $failureClassification = if (-not $workerLifecycleValid) {
@@ -673,7 +798,7 @@ try {
           -SqlClassification $(if ($databaseRecordValid) { $databaseRecord.classification } else { $null }) `
           -SqlState $null -ErrorIdentifier $failureClassification -ElapsedMilliseconds $elapsedMilliseconds `
           -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerSignal $workerSignal -WorkerProcessError $workerProcessError `
-          -Readiness 'PASS'
+          -Readiness 'PASS' -UnauthorizedMarkerObserved $unauthorizedMarkerObserved
         throw "Teacher attendance contention semantic contract failed for $RaceName"
       }
 
@@ -1104,6 +1229,9 @@ try {
     $ErrorActionPreference = 'Continue'
     $databaseCleanupPassed = $true
     foreach ($cleanupDatabase in @($unsafeDatabase,$database)) {
+      docker exec $containerName psql -q -U postgres -d postgres -c `
+        "select pg_terminate_backend(pid) from pg_stat_activity where datname='$cleanupDatabase' and pid <> pg_backend_pid()" 2>$null | Out-Null
+      if ($LASTEXITCODE -ne 0) { $databaseCleanupPassed = $false }
       docker exec $containerName dropdb -U postgres --if-exists $cleanupDatabase 2>$null | Out-Null
       if ($LASTEXITCODE -ne 0) { $databaseCleanupPassed = $false }
     }
