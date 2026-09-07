@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { TextDecoder } from 'node:util';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
 const testPath = 'admin-web/tests/unit/batch1-release-blockers.test.ts';
@@ -85,6 +86,118 @@ const cases = [
 ];
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const fatalUtf8Decoder = new TextDecoder('utf-8', { fatal: true });
+
+function decodeUtf8(bytes) {
+  const source = Buffer.from(bytes);
+  const hasBom = source.length >= 3 && source[0] === 0xef && source[1] === 0xbb && source[2] === 0xbf;
+  const payload = hasBom ? source.subarray(3) : source;
+  return { text: fatalUtf8Decoder.decode(payload), has_bom: hasBom };
+}
+
+function encodeUtf8(text, hasBom) {
+  const payload = Buffer.from(text, 'utf8');
+  return hasBom ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), payload]) : payload;
+}
+
+function inspectSourceBytes(bytes) {
+  const source = Buffer.from(bytes);
+  let decoded;
+  try {
+    decoded = decodeUtf8(source);
+  } catch {
+    return {
+      accepted: false, classification: 'invalid_utf8', style: null, valid_utf8: false,
+      has_bom: false, sha256: sha256(source), byte_length: source.length,
+      crlf_count: null, bare_lf_count: null, bare_cr_count: null
+    };
+  }
+  const crlfCount = count(decoded.text, '\r\n');
+  const withoutCrlf = decoded.text.replaceAll('\r\n', '');
+  const bareLfCount = count(withoutCrlf, '\n');
+  const bareCrCount = count(withoutCrlf, '\r');
+  let classification = 'accepted';
+  let style = null;
+  if (bareCrCount > 0) classification = 'unexpected_newline_shape';
+  else if (crlfCount > 0 && bareLfCount > 0) classification = 'mixed_eol';
+  else if (crlfCount > 0) style = 'CRLF';
+  else if (bareLfCount > 0) style = 'LF';
+  else classification = 'ambiguous_eol';
+  return {
+    accepted: classification === 'accepted', classification, style, valid_utf8: true,
+    has_bom: decoded.has_bom, sha256: sha256(source), byte_length: source.length,
+    crlf_count: crlfCount, bare_lf_count: bareLfCount, bare_cr_count: bareCrCount,
+    text: decoded.text
+  };
+}
+
+function materializeCanonicalEol(canonicalText, style) {
+  if (typeof canonicalText !== 'string' || canonicalText.length === 0 || canonicalText.includes('\r')) {
+    throw new Error('canonical mutation text must be non-empty LF text without carriage returns');
+  }
+  if (style !== 'LF' && style !== 'CRLF') throw new Error(`unsupported source EOL style: ${style}`);
+  return style === 'CRLF' ? canonicalText.replaceAll('\n', '\r\n') : canonicalText;
+}
+
+function prepareMutationBytes(sourceBytes, spec, { targetMode = 'one', neutral = false } = {}) {
+  const source = inspectSourceBytes(sourceBytes);
+  if (!source.accepted) {
+    return {
+      accepted: false, classification: source.classification, matches: null,
+      mutation_body_executed: false, source: withoutSourceText(source)
+    };
+  }
+  const canonicalSearch = targetMode === 'zero' ? '__BATCH1_ZERO_MATCH__' : spec.search;
+  const search = materializeCanonicalEol(canonicalSearch, source.style);
+  const eol = source.style === 'CRLF' ? '\r\n' : '\n';
+  const candidateSource = targetMode === 'multiple' ? `${source.text}${eol}${search}${eol}` : source.text;
+  const matches = count(candidateSource, search);
+  if (matches !== 1) {
+    return {
+      accepted: false,
+      classification: matches === 0 ? 'ZERO_MATCH_FAIL_CLOSED' : 'MULTIPLE_MATCH_FAIL_CLOSED',
+      matches, mutation_body_executed: false, source: withoutSourceText(source),
+      materialized_target_eol: source.style
+    };
+  }
+  const canonicalReplacement = neutral ? `${spec.search} ` : spec.replacement;
+  const replacement = materializeCanonicalEol(canonicalReplacement, source.style);
+  const replacementCountBefore = count(candidateSource, replacement);
+  const candidateText = candidateSource.replace(search, replacement);
+  const replacementCountAfter = count(candidateText, replacement);
+  const targetCountAfter = count(candidateText, search);
+  const candidateBytes = encodeUtf8(candidateText, source.has_bom);
+  const candidateSourceShape = inspectSourceBytes(candidateBytes);
+  const candidateChanged = !candidateBytes.equals(Buffer.from(sourceBytes));
+  const replacementInvariant = replacementCountAfter === replacementCountBefore + 1;
+  const targetInvariant = targetCountAfter === (neutral ? 1 : 0);
+  const eolInvariant = candidateSourceShape.accepted && candidateSourceShape.style === source.style;
+  if (!candidateChanged || !replacementInvariant || !targetInvariant || !eolInvariant) {
+    return {
+      accepted: false, classification: 'REPLACEMENT_INVARIANT_FAIL_CLOSED', matches,
+      mutation_body_executed: false, source: withoutSourceText(source),
+      materialized_target_eol: source.style, candidate_changed: candidateChanged,
+      replacement_count_before: replacementCountBefore, replacement_count_after: replacementCountAfter,
+      replacement_delta: replacementCountAfter - replacementCountBefore,
+      target_count_after: targetCountAfter, target_invariant: targetInvariant, eol_invariant: eolInvariant
+    };
+  }
+  return {
+    accepted: true, classification: 'MUTATION_READY', matches, mutation_body_executed: false,
+    source: withoutSourceText(source), materialized_target_eol: source.style,
+    candidate_bytes: candidateBytes, candidate_changed: true,
+    replacement_count_before: replacementCountBefore, replacement_count_after: replacementCountAfter,
+    replacement_delta: replacementCountAfter - replacementCountBefore,
+    target_count_after: targetCountAfter, target_invariant: true, eol_invariant: true,
+    candidate_sha256: sha256(candidateBytes), candidate_byte_length: candidateBytes.length
+  };
+}
+
+function withoutSourceText(source) {
+  const { text: _text, ...safe } = source;
+  return safe;
+}
+
 const snapshots = new Map(files.map((file) => [file, readFileSync(resolve(repoRoot, file))]));
 
 function copyInputs(root) {
@@ -214,12 +327,19 @@ function workspaceFiles(root, relative = '') {
   }).sort();
 }
 
-function workspaceState(root) {
-  const expectedFiles = [...snapshots.keys()].map((file) => file.replaceAll('\\', '/')).sort();
+function captureWorkspaceSnapshots(root) {
+  return new Map([...snapshots.keys()].map((file) => [file, readFileSync(resolve(root, file))]));
+}
+
+function workspaceState(root, expectedSnapshots = snapshots) {
+  const expectedFiles = [...expectedSnapshots.keys()].map((file) => file.replaceAll('\\', '/')).sort();
   const actualFiles = workspaceFiles(root);
-  const hashes = Object.fromEntries([...snapshots].map(([file, bytes]) => {
+  const hashes = Object.fromEntries([...expectedSnapshots].map(([file, bytes]) => {
     const current = readFileSync(resolve(root, file));
-    return [file, { expected: sha256(bytes), actual: sha256(current), matches: current.equals(bytes) }];
+    return [file, {
+      expected: sha256(bytes), actual: sha256(current), matches: current.equals(bytes),
+      expected_byte_length: bytes.length, actual_byte_length: current.length
+    }];
   }));
   return {
     pristine: actualFiles.length === expectedFiles.length && actualFiles.every((file, index) => file === expectedFiles[index]) &&
@@ -230,8 +350,8 @@ function workspaceState(root) {
   };
 }
 
-function restoreWorkspace(root) {
-  for (const [file, bytes] of snapshots) writeFileSync(resolve(root, file), bytes);
+function restoreWorkspace(root, expectedSnapshots = snapshots) {
+  for (const [file, bytes] of expectedSnapshots) writeFileSync(resolve(root, file), bytes);
 }
 
 function withWorkspace(label, action) {
@@ -246,8 +366,10 @@ function withWorkspace(label, action) {
   }
 }
 
-function runMutationCase(root, spec, { targetMode = 'one', neutral = false, beforeBaseline, onMutationBody } = {}) {
-  const initial = workspaceState(root);
+function runMutationCase(root, spec, {
+  targetMode = 'one', neutral = false, beforeBaseline, onMutationBody, expectedSnapshots = snapshots
+} = {}) {
+  const initial = workspaceState(root, expectedSnapshots);
   let baseline;
   let report;
   try {
@@ -266,33 +388,43 @@ function runMutationCase(root, spec, { targetMode = 'one', neutral = false, befo
         mutation_body_executed: false, matches: null, process: null
       };
     } else {
-      onMutationBody?.(root);
       const targetPath = resolve(root, spec.file);
-      let text = readFileSync(targetPath, 'utf8');
-      const search = targetMode === 'zero' ? '__BATCH1_ZERO_MATCH__' : spec.search;
-      if (targetMode === 'multiple') text += `\n${spec.search}\n`;
-      const matches = count(text, search);
-      if (matches !== 1) {
+      const mutation = prepareMutationBytes(readFileSync(targetPath), spec, { targetMode, neutral });
+      if (!mutation.accepted) {
         report = {
-          id: spec.id, accepted: false, baseline, matches,
-          classification: matches === 0 ? 'ZERO_MATCH_FAIL_CLOSED' : 'MULTIPLE_MATCH_FAIL_CLOSED',
-          control_passed: targetMode === 'zero' ? matches === 0 : matches > 1,
-          mutation_body_executed: true, process: null
+          id: spec.id, accepted: false, baseline, matches: mutation.matches,
+          classification: mutation.classification,
+          control_passed: targetMode === 'zero'
+            ? mutation.classification === 'ZERO_MATCH_FAIL_CLOSED' && mutation.matches === 0
+            : targetMode === 'multiple'
+              ? mutation.classification === 'MULTIPLE_MATCH_FAIL_CLOSED' && mutation.matches > 1
+              : false,
+          mutation_body_executed: false, process: null, mutation
         };
       } else {
-        const replacement = neutral ? `${spec.search} ` : spec.replacement;
-        writeFileSync(targetPath, text.replace(search, replacement));
-        const classified = classifyMutationRun(runTest(root, spec.test), spec);
-        report = {
-          id: spec.id, baseline, matches, classification: classified.accepted ? 'SEMANTIC_ASSERTION' : 'REJECTED',
-          mutation_body_executed: true, ...classified
-        };
+        onMutationBody?.(root);
+        writeFileSync(targetPath, mutation.candidate_bytes);
+        const written = readFileSync(targetPath);
+        if (!written.equals(mutation.candidate_bytes) || sha256(written) !== mutation.candidate_sha256) {
+          report = {
+            id: spec.id, accepted: false, baseline, matches: mutation.matches,
+            classification: 'MUTATION_WRITE_VERIFICATION_FAILED', mutation_body_executed: true,
+            process: null, mutation: { ...mutation, candidate_bytes: undefined }
+          };
+        } else {
+          const classified = classifyMutationRun(runTest(root, spec.test), spec);
+          report = {
+            id: spec.id, baseline, matches: mutation.matches,
+            classification: classified.accepted ? 'SEMANTIC_ASSERTION' : 'REJECTED',
+            mutation_body_executed: true, mutation: { ...mutation, candidate_bytes: undefined }, ...classified
+          };
+        }
       }
     }
   } finally {
-    restoreWorkspace(root);
+    restoreWorkspace(root, expectedSnapshots);
   }
-  const restored = workspaceState(root);
+  const restored = workspaceState(root, expectedSnapshots);
   report.restoration = restored.pristine ? 'PASS' : 'FAIL';
   report.cleanup = restored.pristine ? 'PASS' : 'FAIL';
   report.precondition = initial;
@@ -305,6 +437,211 @@ function mutate(spec, options = {}) {
   return withWorkspace(spec.id, (root) => {
     return runMutationCase(root, spec, options);
   });
+}
+
+function writeConsistentEolVariant(root, style) {
+  const sourcePath = resolve(root, migrationPath);
+  const before = inspectSourceBytes(readFileSync(sourcePath));
+  if (!before.accepted) throw new Error(`protected migration source EOL rejected: ${before.classification}`);
+  const canonicalLf = before.style === 'CRLF' ? before.text.replaceAll('\r\n', '\n') : before.text;
+  const variantText = style === 'CRLF' ? canonicalLf.replaceAll('\n', '\r\n') : canonicalLf;
+  writeFileSync(sourcePath, encodeUtf8(variantText, before.has_bom));
+  const after = inspectSourceBytes(readFileSync(sourcePath));
+  if (!after.accepted || after.style !== style) throw new Error(`could not create consistent ${style} disposable source`);
+  return withoutSourceText(after);
+}
+
+function sameSourceShape(left, right) {
+  return left.sha256 === right.sha256 && left.byte_length === right.byte_length &&
+    left.style === right.style && left.crlf_count === right.crlf_count &&
+    left.bare_lf_count === right.bare_lf_count && left.bare_cr_count === right.bare_cr_count;
+}
+
+function compactEolMutation(result) {
+  return {
+    accepted: result.accepted, classification: result.classification, matches: result.matches,
+    mutation_body_executed: result.mutation_body_executed,
+    baseline_accepted: result.baseline?.accepted ?? null,
+    lifecycle: result.lifecycle ?? null, assertion: result.assertion ?? null,
+    process: result.process, mutation: result.mutation,
+    restoration: result.restoration, cleanup: result.cleanup
+  };
+}
+
+function runEolPositiveControl(id, style) {
+  return withWorkspace(id, (root) => {
+    writeConsistentEolVariant(root, style);
+    const expectedSnapshots = captureWorkspaceSnapshots(root);
+    const sourcePath = resolve(root, migrationPath);
+    const before = withoutSourceText(inspectSourceBytes(readFileSync(sourcePath)));
+    const mutation = runMutationCase(root, cases[0], { expectedSnapshots });
+    const after = withoutSourceText(inspectSourceBytes(readFileSync(sourcePath)));
+    return {
+      id,
+      control_passed: mutation.accepted && mutation.classification === 'SEMANTIC_ASSERTION' &&
+        mutation.matches === 1 && mutation.mutation_body_executed && mutation.baseline?.accepted &&
+        mutation.mutation?.candidate_changed === true && mutation.mutation?.replacement_delta === 1 &&
+        mutation.mutation?.materialized_target_eol === style && mutation.restoration === 'PASS' &&
+        mutation.cleanup === 'PASS' && sameSourceShape(before, after),
+      source_eol: style, before, after, mutation: compactEolMutation(mutation),
+      restoration: sameSourceShape(before, after) ? 'PASS' : 'FAIL', cleanup: 'PASS'
+    };
+  });
+}
+
+function runEolTargetBoundaryVariant(id, style, targetMode) {
+  return withWorkspace(`${id}-${style}`, (root) => {
+    writeConsistentEolVariant(root, style);
+    const expectedSnapshots = captureWorkspaceSnapshots(root);
+    const sourcePath = resolve(root, migrationPath);
+    const before = withoutSourceText(inspectSourceBytes(readFileSync(sourcePath)));
+    let mutationBodyObserved = false;
+    const mutation = runMutationCase(root, cases[0], {
+      targetMode, expectedSnapshots, onMutationBody: () => { mutationBodyObserved = true; }
+    });
+    const after = withoutSourceText(inspectSourceBytes(readFileSync(sourcePath)));
+    const expectedClassification = targetMode === 'zero' ? 'ZERO_MATCH_FAIL_CLOSED' : 'MULTIPLE_MATCH_FAIL_CLOSED';
+    const expectedCount = targetMode === 'zero' ? mutation.matches === 0 : mutation.matches > 1;
+    return {
+      id: `${id}-${style}`,
+      control_passed: !mutation.accepted && mutation.classification === expectedClassification && expectedCount &&
+        mutation.mutation_body_executed === false && !mutationBodyObserved && mutation.baseline?.accepted &&
+        mutation.restoration === 'PASS' && mutation.cleanup === 'PASS' && sameSourceShape(before, after),
+      source_eol: style, before, after, mutation_body_callback_observed: mutationBodyObserved,
+      mutation: compactEolMutation(mutation),
+      restoration: sameSourceShape(before, after) ? 'PASS' : 'FAIL', cleanup: 'PASS'
+    };
+  });
+}
+
+function runMixedEolControl() {
+  return withWorkspace('eol-control-e-mixed', (root) => {
+    writeConsistentEolVariant(root, 'CRLF');
+    const sourcePath = resolve(root, migrationPath);
+    const consistent = inspectSourceBytes(readFileSync(sourcePath));
+    const mixedText = consistent.text.replace('\r\n', '\n');
+    if (mixedText === consistent.text) throw new Error('mixed EOL control could not replace one CRLF');
+    writeFileSync(sourcePath, encodeUtf8(mixedText, consistent.has_bom));
+    const expectedSnapshots = captureWorkspaceSnapshots(root);
+    const before = withoutSourceText(inspectSourceBytes(readFileSync(sourcePath)));
+    let mutationBodyObserved = false;
+    const mutation = runMutationCase(root, cases[0], {
+      expectedSnapshots, onMutationBody: () => { mutationBodyObserved = true; }
+    });
+    const after = withoutSourceText(inspectSourceBytes(readFileSync(sourcePath)));
+    return {
+      id: 'EOL-CONTROL-E-MIXED',
+      control_passed: before.classification === 'mixed_eol' && !mutation.accepted &&
+        mutation.classification === 'mixed_eol' && mutation.matches === null &&
+        mutation.mutation_body_executed === false && !mutationBodyObserved && mutation.baseline?.accepted &&
+        mutation.restoration === 'PASS' && mutation.cleanup === 'PASS' && sameSourceShape(before, after),
+      source_eol: 'mixed', before, after, mutation_body_callback_observed: mutationBodyObserved,
+      mutation: compactEolMutation(mutation),
+      restoration: sameSourceShape(before, after) ? 'PASS' : 'FAIL', cleanup: 'PASS'
+    };
+  });
+}
+
+function runProtectedMigrationRegressionControl(productionB1M1, poisonedBaselineControl) {
+  const expected = snapshots.get(migrationPath);
+  const current = readFileSync(resolve(repoRoot, migrationPath));
+  const before = withoutSourceText(inspectSourceBytes(expected));
+  const after = withoutSourceText(inspectSourceBytes(current));
+  const targetProbe = prepareMutationBytes(current, cases[0]);
+  const gitDiff = spawnSync('git', ['diff', '--quiet', '--', migrationPath], {
+    cwd: repoRoot, encoding: 'utf8', windowsHide: true
+  });
+  const unchanged = current.equals(expected) && sameSourceShape(before, after);
+  return {
+    id: 'EOL-CONTROL-F-PROTECTED-MIGRATION-REGRESSION',
+    control_passed: before.style === 'CRLF' && before.bare_lf_count === 0 && before.bare_cr_count === 0 &&
+      targetProbe.accepted && targetProbe.matches === 1 && targetProbe.materialized_target_eol === 'CRLF' &&
+      productionB1M1?.accepted && productionB1M1?.classification === 'SEMANTIC_ASSERTION' &&
+      poisonedBaselineControl?.control_passed && unchanged && gitDiff.status === 0 &&
+      !gitDiff.error && !gitDiff.signal && !(gitDiff.stdout ?? '') && !(gitDiff.stderr ?? ''),
+    before, after,
+    canonical_target_probe: {
+      accepted: targetProbe.accepted, classification: targetProbe.classification,
+      matches: targetProbe.matches, materialized_target_eol: targetProbe.materialized_target_eol,
+      candidate_changed: targetProbe.candidate_changed, replacement_delta: targetProbe.replacement_delta
+    },
+    production_b1_m1: compactEolMutation(productionB1M1),
+    poisoned_later_baseline: {
+      control_passed: poisonedBaselineControl?.control_passed ?? false,
+      restoration: poisonedBaselineControl?.restoration ?? null,
+      cleanup: poisonedBaselineControl?.cleanup ?? null
+    },
+    git_diff: compactProcess(gitDiff),
+    restoration: unchanged ? 'PASS' : 'FAIL', cleanup: 'PASS'
+  };
+}
+
+function runSourceShapeBoundaryControl(id, bytes, expectedClassification) {
+  return withWorkspace(id, (root) => {
+    const sourcePath = resolve(root, migrationPath);
+    writeFileSync(sourcePath, bytes);
+    const before = readFileSync(sourcePath);
+    const mutation = prepareMutationBytes(before, cases[0]);
+    const after = readFileSync(sourcePath);
+    return {
+      id,
+      control_passed: !mutation.accepted && mutation.classification === expectedClassification &&
+        mutation.matches === null && mutation.mutation_body_executed === false && after.equals(before),
+      expected_classification: expectedClassification,
+      observed_classification: mutation.classification,
+      mutation_body_executed: mutation.mutation_body_executed,
+      source_unchanged: after.equals(before),
+      before_sha256: sha256(before), after_sha256: sha256(after),
+      before_byte_length: before.length, after_byte_length: after.length,
+      restoration: after.equals(before) ? 'PASS' : 'FAIL', cleanup: 'PASS'
+    };
+  });
+}
+
+function runSourceShapeBoundaryControls() {
+  const controls = [
+    runSourceShapeBoundaryControl('EOL-BOUNDARY-INVALID-UTF8', Buffer.from([0xc3, 0x28, 0x0a]), 'invalid_utf8'),
+    runSourceShapeBoundaryControl('EOL-BOUNDARY-AMBIGUOUS-NO-NEWLINE', Buffer.from('single line', 'utf8'), 'ambiguous_eol'),
+    runSourceShapeBoundaryControl('EOL-BOUNDARY-UNEXPECTED-BARE-CR', Buffer.from('first\rsecond', 'utf8'), 'unexpected_newline_shape')
+  ];
+  return {
+    id: 'EOL-BOUNDARY-INVALID-AMBIGUOUS-NEWLINE-SHAPES',
+    control_passed: controls.every((control) => control.control_passed),
+    controls,
+    restoration: controls.every((control) => control.restoration === 'PASS') ? 'PASS' : 'FAIL',
+    cleanup: controls.every((control) => control.cleanup === 'PASS') ? 'PASS' : 'FAIL'
+  };
+}
+
+function runEolControls(productionB1M1, poisonedBaselineControl) {
+  const lfPositive = runEolPositiveControl('EOL-CONTROL-A-LF-POSITIVE', 'LF');
+  const crlfPositive = runEolPositiveControl('EOL-CONTROL-B-CRLF-POSITIVE', 'CRLF');
+  const zeroVariants = ['LF', 'CRLF'].map((style) => runEolTargetBoundaryVariant('EOL-CONTROL-C-ZERO', style, 'zero'));
+  const multipleVariants = ['LF', 'CRLF'].map((style) => runEolTargetBoundaryVariant('EOL-CONTROL-D-MULTIPLE', style, 'multiple'));
+  const mixed = runMixedEolControl();
+  const protectedRegression = runProtectedMigrationRegressionControl(productionB1M1, poisonedBaselineControl);
+  const sourceShapeBoundaries = runSourceShapeBoundaryControls();
+  return [
+    lfPositive,
+    crlfPositive,
+    {
+      id: 'EOL-CONTROL-C-ZERO-LF-AND-CRLF',
+      control_passed: zeroVariants.every((control) => control.control_passed),
+      variants: zeroVariants,
+      restoration: zeroVariants.every((control) => control.restoration === 'PASS') ? 'PASS' : 'FAIL',
+      cleanup: zeroVariants.every((control) => control.cleanup === 'PASS') ? 'PASS' : 'FAIL'
+    },
+    {
+      id: 'EOL-CONTROL-D-MULTIPLE-LF-AND-CRLF',
+      control_passed: multipleVariants.every((control) => control.control_passed),
+      variants: multipleVariants,
+      restoration: multipleVariants.every((control) => control.restoration === 'PASS') ? 'PASS' : 'FAIL',
+      cleanup: multipleVariants.every((control) => control.cleanup === 'PASS') ? 'PASS' : 'FAIL'
+    },
+    mixed,
+    protectedRegression,
+    sourceShapeBoundaries
+  ];
 }
 
 function runPoisonedLaterBaselineControl() {
@@ -378,10 +715,14 @@ function runMountedFormBaselineControl() {
   });
 }
 
-function allGatesPassed({ baseline, baselineControl, postControlBaseline, poisonedBaselineControl, targetControls, lifecycleControls, results, restoration }) {
+function allGatesPassed({
+  baseline, baselineControl, postControlBaseline, poisonedBaselineControl,
+  targetControls, lifecycleControls, eolControls, results, restoration
+}) {
   return baseline.accepted && baselineControl.control_passed && postControlBaseline.accepted && poisonedBaselineControl.control_passed &&
     targetControls.every((control) => control.control_passed) &&
     lifecycleControls.every((control) => control.control_passed) &&
+    eolControls.every((control) => control.control_passed && control.restoration === 'PASS' && control.cleanup === 'PASS') &&
     results.length === cases.length && results.every((result) => result.accepted && result.baseline?.accepted &&
       result.mutation_body_executed && result.restoration === 'PASS' && result.cleanup === 'PASS') && restoration === 'PASS';
 }
@@ -434,7 +775,7 @@ function runVerifier() {
     report = {
       harness: 'batch1-release-blockers-mutation-verify', baseline,
       baseline_control: 'NOT_RUN', post_control_baseline: 'NOT_RUN', poisoned_baseline_control: 'NOT_RUN', target_controls: 'NOT_RUN',
-      lifecycle_controls: 'NOT_RUN', results: 'NOT_RUN', restoration: repositoryRestored() ? 'PASS' : 'FAIL',
+      lifecycle_controls: 'NOT_RUN', eol_controls: 'NOT_RUN', results: 'NOT_RUN', restoration: repositoryRestored() ? 'PASS' : 'FAIL',
       cleanup: 'PASS', database: 'NOT_USED', container: 'NOT_USED', final_result: 'FAIL'
     };
     failed = true;
@@ -444,7 +785,7 @@ function runVerifier() {
   if (!baselineControl.control_passed || !postControlBaseline.accepted) {
     report = {
       harness: 'batch1-release-blockers-mutation-verify', baseline, baseline_control: baselineControl,
-      post_control_baseline: postControlBaseline, poisoned_baseline_control: 'NOT_RUN', target_controls: 'NOT_RUN', lifecycle_controls: 'NOT_RUN',
+      post_control_baseline: postControlBaseline, poisoned_baseline_control: 'NOT_RUN', target_controls: 'NOT_RUN', lifecycle_controls: 'NOT_RUN', eol_controls: 'NOT_RUN',
       results: 'NOT_RUN', restoration: repositoryRestored() ? 'PASS' : 'FAIL', cleanup: 'PASS',
       database: 'NOT_USED', container: 'NOT_USED', final_result: 'FAIL'
     };
@@ -454,12 +795,16 @@ function runVerifier() {
     const targetControls = [mutate(cases[0], { targetMode: 'zero' }), mutate(cases[0], { targetMode: 'multiple' })];
     const lifecycleControls = runLifecycleControls();
     const results = cases.map((spec) => mutate(spec));
+    const eolControls = runEolControls(results.find((result) => result.id === 'B1-M1'), poisonedBaselineControl);
     const restoration = repositoryRestored() ? 'PASS' : 'FAIL';
-    const finalPassed = allGatesPassed({ baseline, baselineControl, postControlBaseline, poisonedBaselineControl, targetControls, lifecycleControls, results, restoration });
+    const finalPassed = allGatesPassed({
+      baseline, baselineControl, postControlBaseline, poisonedBaselineControl,
+      targetControls, lifecycleControls, eolControls, results, restoration
+    });
     report = {
       harness: 'batch1-release-blockers-mutation-verify', baseline, baseline_control: baselineControl,
       post_control_baseline: postControlBaseline, poisoned_baseline_control: poisonedBaselineControl, target_controls: targetControls,
-      lifecycle_controls: lifecycleControls, results, restoration, cleanup: 'PASS',
+      lifecycle_controls: lifecycleControls, eol_controls: eolControls, results, restoration, cleanup: 'PASS',
       database: 'NOT_USED', container: 'NOT_USED', final_result: finalPassed ? 'PASS' : 'FAIL'
     };
     failed = !finalPassed;
@@ -477,6 +822,39 @@ function runVerifier() {
   if (failed) process.exitCode = 1;
 }
 
+function runFocusedEolControls() {
+  let report;
+  let failed = false;
+  try {
+    const baseline = runCompleteBaseline(repoRoot);
+    const productionB1M1 = baseline.accepted ? mutate(cases[0]) : null;
+    const poisonedBaselineControl = baseline.accepted ? runPoisonedLaterBaselineControl() : null;
+    const eolControls = baseline.accepted && productionB1M1?.accepted && poisonedBaselineControl?.control_passed
+      ? runEolControls(productionB1M1, poisonedBaselineControl)
+      : 'NOT_RUN';
+    const restoration = repositoryRestored() ? 'PASS' : 'FAIL';
+    const passed = baseline.accepted && productionB1M1?.accepted && poisonedBaselineControl?.control_passed &&
+      Array.isArray(eolControls) && eolControls.every((control) =>
+        control.control_passed && control.restoration === 'PASS' && control.cleanup === 'PASS') && restoration === 'PASS';
+    report = {
+      harness: 'batch1-release-blockers-eol-controls', baseline,
+      production_b1_m1: productionB1M1 ? compactEolMutation(productionB1M1) : 'NOT_RUN',
+      poisoned_baseline_control: poisonedBaselineControl ?? 'NOT_RUN',
+      eol_controls: eolControls, restoration, cleanup: 'PASS', final_result: passed ? 'PASS' : 'FAIL'
+    };
+    failed = !passed;
+  } catch (error) {
+    failed = true;
+    report = {
+      harness: 'batch1-release-blockers-eol-controls', final_result: 'FAIL',
+      error: error instanceof Error ? error.message : String(error),
+      restoration: repositoryRestored() ? 'PASS' : 'FAIL', cleanup: 'PASS'
+    };
+  }
+  process.stdout.write(`${JSON.stringify(report)}\n`);
+  if (failed) process.exitCode = 1;
+}
+
 if (process.argv.includes('--control=uncaught-final')) {
   const baseline = { accepted: true };
   const baselineControl = { control_passed: true };
@@ -484,11 +862,17 @@ if (process.argv.includes('--control=uncaught-final')) {
   const poisonedBaselineControl = { control_passed: true };
   const targetControls = [{ control_passed: true }];
   const lifecycleControls = [{ control_passed: true }];
+  const eolControls = [{ control_passed: true, restoration: 'PASS', cleanup: 'PASS' }];
   const results = [{ accepted: false }];
   const restoration = 'PASS';
-  const passed = allGatesPassed({ baseline, baselineControl, postControlBaseline, poisonedBaselineControl, targetControls, lifecycleControls, results, restoration });
+  const passed = allGatesPassed({
+    baseline, baselineControl, postControlBaseline, poisonedBaselineControl,
+    targetControls, lifecycleControls, eolControls, results, restoration
+  });
   process.stdout.write(`${JSON.stringify({ control: 'uncaught-final', restoration, final_result: passed ? 'PASS' : 'FAIL' })}\n`);
   if (!passed) process.exitCode = 1;
+} else if (process.argv.includes('--eol-controls')) {
+  runFocusedEolControls();
 } else {
   runVerifier();
 }

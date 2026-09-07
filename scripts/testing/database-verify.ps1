@@ -40,6 +40,9 @@ $m40SidecarMode = $false
 $m40SidecarPath = $null
 $m40SidecarCorrelation = $null
 $m40SidecarWriteCount = 0
+$m40LifecyclePrefix = '[M40 LIFECYCLE]'
+$m40RejectionPrefix = '[M40 REJECT]'
+$m40ExpectedTermination = 'M40_BLOCKING_CONTENTION_CAUGHT'
 
 function Initialize-M40SemanticSidecar {
   $hasPath = -not [string]::IsNullOrWhiteSpace($m40SidecarPathInput)
@@ -86,7 +89,8 @@ function Write-M40SemanticRecord {
     [AllowNull()][object]$WorkerSignal,
     [AllowNull()][object]$WorkerProcessError,
     [Parameter(Mandatory)][string]$Readiness,
-    [bool]$UnauthorizedMarkerObserved = $false
+    [bool]$UnauthorizedMarkerObserved = $false,
+    [AllowNull()][object]$Lifecycle
   )
 
   $sqlRecord = [ordered]@{
@@ -113,6 +117,7 @@ function Write-M40SemanticRecord {
       sql = $sqlRecord
       worker = $workerRecord
       readiness = $Readiness
+      lifecycle = $Lifecycle
     }
   } else {
     [ordered]@{
@@ -125,7 +130,10 @@ function Write-M40SemanticRecord {
       readiness = $Readiness
     }
   }
-  $recordJson = $record | ConvertTo-Json -Compress -Depth 6
+  if ($m40SidecarMode -and $null -eq $Lifecycle) {
+    throw 'M40 sidecar lifecycle record is required.'
+  }
+  $recordJson = $record | ConvertTo-Json -Compress -Depth 8
   if (-not $m40SidecarMode) {
     Write-Host ($m40SemanticPrefix + $recordJson)
     return
@@ -164,9 +172,10 @@ function Write-M40SemanticRecord {
     $script:m40SidecarWriteCount = 1
   } catch {
     if ([IO.File]::Exists($temporaryPath)) {
-      Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+      try { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction Stop } catch { }
     }
-    throw "[M40 SIDECAR WRITE FAILURE] $($_.Exception.Message)"
+    Write-Host "$m40RejectionPrefix M40_SIDECAR_WRITE_FAILED"
+    throw 'M40_SIDECAR_WRITE_FAILED'
   }
 }
 
@@ -618,6 +627,105 @@ try {
   if (-not $timeoutRejected) { throw 'Database race timeout negative control did not fail closed.' }
   Write-Host '[PASS] Batch 1 structured-result unrelated/unique/incomplete and timeout negative controls'
 
+  function Invoke-M40DockerCommand {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+
+    $nativeOutput = @()
+    $exitCode = $null
+    $processError = $null
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      try {
+        $nativeOutput = @(& docker @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+      } catch {
+        $processError = 'docker_process_error'
+      }
+    } finally {
+      $ErrorActionPreference = $previousErrorAction
+    }
+    [pscustomobject]@{
+      ExitCode = $exitCode
+      Signal = $null
+      ProcessError = $processError
+      Output = @($nativeOutput | ForEach-Object { [string]$_ })
+    }
+  }
+
+  function Wait-M40JobTerminal {
+    param(
+      [Parameter(Mandatory)][System.Management.Automation.Job]$Job,
+      [Parameter(Mandatory)][int]$TimeoutSeconds
+    )
+
+    $terminalStates = @('Completed', 'Failed', 'Stopped')
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    while ($Job.State -notin $terminalStates -and $deadline.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+      Start-Sleep -Milliseconds 100
+    }
+    if ($Job.State -notin $terminalStates) {
+      return [pscustomobject]@{
+        State = [string]$Job.State
+        TimedOut = $true
+        ReceiveError = $null
+        Output = @()
+      }
+    }
+
+    $received = @()
+    $receiveError = $null
+    try {
+      $received = @(Receive-Job -Job $Job -ErrorAction Stop)
+    } catch {
+      $receiveError = 'job_receive_failed'
+    }
+    [pscustomobject]@{
+      State = [string]$Job.State
+      TimedOut = $false
+      ReceiveError = $receiveError
+      Output = $received
+    }
+  }
+
+  function Finalize-M40OwnedJobs {
+    param([AllowEmptyCollection()][object[]]$Jobs)
+
+    $terminalStates = @('Completed', 'Failed', 'Stopped')
+    $stopRequired = $false
+    $stopPassed = $true
+    $removePassed = $true
+    foreach ($job in @($Jobs)) {
+      if ($null -eq $job) { continue }
+      if ($job.State -notin $terminalStates) {
+        $stopRequired = $true
+        try {
+          Stop-Job -Job $job -ErrorAction Stop
+          $null = Wait-Job -Job $job -Timeout $ContentionHardTimeoutSeconds -ErrorAction Stop
+          if ($job.State -notin $terminalStates) { $stopPassed = $false }
+        } catch {
+          $stopPassed = $false
+        }
+      }
+      try {
+        Remove-Job -Job $job -Force -ErrorAction Stop
+      } catch {
+        $removePassed = $false
+      }
+      try {
+        if (@(Get-Job | Where-Object { $_.Id -eq $job.Id }).Count -ne 0) {
+          $removePassed = $false
+        }
+      } catch {
+        $removePassed = $false
+      }
+    }
+    [pscustomobject]@{
+      JobsStopped = if (-not $stopRequired) { 'NOT_REQUIRED' } elseif ($stopPassed) { 'PASS' } else { 'FAIL' }
+      JobsRemoved = if ($removePassed) { 'PASS' } else { 'FAIL' }
+    }
+  }
+
   function Invoke-TeacherAttendanceContention {
     param(
       [Parameter(Mandatory)]
@@ -637,46 +745,79 @@ try {
     Write-Host "[CONTENTION] $RaceName"
     $holder = $null
     $competitor = $null
-    $released = $false
+    $holderReady = $false
+    $semanticCandidate = $null
+    $semanticCandidateReady = $false
+    $semanticRejectionCodes = [Collections.Generic.List[string]]::new()
+    $finalizationFailureCodes = [Collections.Generic.List[string]]::new()
+    $failureSqlState = $null
+    $postCandidateAssertion = 'NOT_REQUIRED'
+    $holderRelease = 'NOT_REQUIRED'
+    $holderTerminal = 'NOT_STARTED'
+    $competitorTerminal = 'NOT_STARTED'
+    $jobsStopped = 'NOT_REQUIRED'
+    $jobsRemoved = 'NOT_RUN'
+    $barrierCleanup = 'NOT_RUN'
+    $workerState = 'NotStarted'
+    $competitorExit = $null
+    $workerSignal = $null
+    $workerProcessError = $null
+    $workerTimedOut = $false
+    $unauthorizedMarkerObserved = $false
+
     try {
       $holder = Start-Job -Name "${RaceName}-holder" -ScriptBlock {
         param($Name,$Db,$Race,$Session)
-        & docker exec $Name psql -q -v ON_ERROR_STOP=1 `
-          -v "race_name=$Race" -v "session_id=$Session" `
-          -U postgres -d $Db `
-          -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_holder.sql' 2>&1
-        [pscustomobject]@{ ExitCode = $LASTEXITCODE }
+        $nativeOutput = @()
+        $exitCode = $null
+        $processError = $null
+        try {
+          $nativeOutput = @(& docker exec $Name psql -q -v ON_ERROR_STOP=1 `
+            -v "race_name=$Race" -v "session_id=$Session" `
+            -U postgres -d $Db `
+            -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_holder.sql' 2>&1)
+          $exitCode = $LASTEXITCODE
+        } catch {
+          $processError = 'docker_exec_process_error'
+        }
+        [pscustomobject]@{
+          ExitCode = $exitCode
+          Signal = $null
+          ProcessError = $processError
+          Diagnostic = @($nativeOutput | ForEach-Object { [string]$_ })
+        }
       } -ArgumentList $containerName,$database,$RaceName,$SessionId
 
-      $holderReady = $false
       $readinessAttempts = [Math]::Max(1, $ContentionHardTimeoutSeconds * 10)
       for ($attempt = 0; $attempt -lt $readinessAttempts; $attempt++) {
-        $readyCount = docker exec $containerName psql -q -U postgres -d $database -Atc `
-          "select public.__test_race_ready_count('$RaceName')"
-        if ($LASTEXITCODE -ne 0) { throw "Could not inspect contention holder readiness: $RaceName" }
-        if ($readyCount -eq '1') { $holderReady = $true; break }
+        $readinessResult = Invoke-M40DockerCommand -Arguments @(
+          'exec', $containerName, 'psql', '-qAt', '-v', 'ON_ERROR_STOP=1',
+          '-U', 'postgres', '-d', $database,
+          '-c', "select public.__test_race_ready_count('$RaceName')"
+        )
+        if ($readinessResult.ProcessError -or $readinessResult.Signal -or $readinessResult.ExitCode -ne 0) {
+          throw 'M40_HOLDER_READINESS_INSPECTION_FAILED'
+        }
+        if ($readinessResult.Output.Count -eq 1 -and $readinessResult.Output[0].Trim() -eq '1') {
+          $holderReady = $true
+          break
+        }
         Start-Sleep -Milliseconds 100
       }
-      if (-not $holderReady) {
-        Write-M40SemanticRecord -RaceName $RaceName `
-          -Classification 'readiness_failure' -SqlClassification $null -SqlState $null `
-          -ErrorIdentifier 'holder_readiness_failed' -ElapsedMilliseconds $null `
-          -WorkerState 'NotStarted' -WorkerExitCode $null -WorkerSignal $null `
-          -WorkerProcessError $null -Readiness 'FAIL'
-        throw "Contention holder did not acquire the exact attendance identity lock: $RaceName"
-      }
+      if (-not $holderReady) { throw 'M40_HOLDER_READINESS_FAILED' }
 
       $competitor = Start-Job -Name "${RaceName}-competitor" -ScriptBlock {
         param($Name,$Db,$Race,$Session,$Revision,$Status,$Request)
+        $nativeOutput = @()
         $workerExitCode = $null
         $workerProcessError = $null
         try {
-          & docker exec $Name psql -q -v ON_ERROR_STOP=1 `
+          $nativeOutput = @(& docker exec $Name psql -q -v ON_ERROR_STOP=1 `
             -v "race_name=$Race" -v "session_id=$Session" `
             -v "expected_revision=$Revision" -v "target_status=$Status" `
             -v "request_id=$Request" `
             -U postgres -d $Db `
-            -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_competitor.sql' 2>&1
+            -f '/workspace/supabase/tests/concurrency/teacher_attendance_contention_competitor.sql' 2>&1)
           $workerExitCode = $LASTEXITCODE
         } catch {
           $workerProcessError = 'docker_exec_process_error'
@@ -685,58 +826,47 @@ try {
           ExitCode = $workerExitCode
           Signal = $null
           ProcessError = $workerProcessError
+          Diagnostic = @($nativeOutput | ForEach-Object { [string]$_ })
         }
       } -ArgumentList $containerName,$database,$RaceName,$SessionId,$ExpectedRevision,$TargetStatus,$RequestId
 
-      try {
-        $competitorResults = @(Wait-DatabaseRaceJobs -Jobs @($competitor) -TimeoutSeconds $ContentionHardTimeoutSeconds)
-      } catch {
-        if ($_.Exception.Message -like 'Database race timed out after *') {
-          Write-M40SemanticRecord -RaceName $RaceName `
-            -Classification 'worker_lifecycle_failure' -SqlClassification $null -SqlState $null `
-            -ErrorIdentifier 'worker_timeout' -ElapsedMilliseconds $null `
-            -WorkerState ([string]$competitor.State) -WorkerExitCode $null -WorkerTimedOut $true `
-            -WorkerSignal $null -WorkerProcessError $null -Readiness 'PASS'
-        }
-        throw
+      $competitorObservation = Wait-M40JobTerminal -Job $competitor -TimeoutSeconds $ContentionHardTimeoutSeconds
+      $workerState = $competitorObservation.State
+      if ($competitorObservation.TimedOut) {
+        $workerTimedOut = $true
+        $competitorTerminal = 'FAIL'
+        throw 'M40_COMPETITOR_JOB_TIMEOUT'
       }
-      $competitorOutput = $competitorResults[0].Output
-      $workerResults = @($competitorOutput | Where-Object {
+      if ($competitorObservation.ReceiveError) {
+        $competitorTerminal = 'FAIL'
+        throw 'M40_COMPETITOR_JOB_RECEIVE_FAILED'
+      }
+      $competitorTerminal = if ($competitorObservation.State -eq 'Completed') { 'PASS' } else { 'FAIL' }
+      $workerResults = @($competitorObservation.Output | Where-Object {
         $null -ne $_.PSObject.Properties['ExitCode'] -and
-        $null -ne $_.PSObject.Properties['ProcessError']
+        $null -ne $_.PSObject.Properties['Signal'] -and
+        $null -ne $_.PSObject.Properties['ProcessError'] -and
+        $null -ne $_.PSObject.Properties['Diagnostic']
       })
       $workerResult = if ($workerResults.Count -eq 1) { $workerResults[0] } else { $null }
       $competitorExit = if ($workerResult) { $workerResult.ExitCode } else { $null }
       $workerSignal = if ($workerResult) { $workerResult.Signal } else { $null }
       $workerProcessError = if ($workerResult) { $workerResult.ProcessError } else { 'worker_result_contract_error' }
-      $workerState = [string]$competitorResults[0].State
-      $diagnosticOutput = @($competitorOutput | Where-Object {
-        $null -eq $_.PSObject.Properties['ExitCode'] -or
-        $null -eq $_.PSObject.Properties['ProcessError']
-      })
+      $diagnosticOutput = if ($workerResult) { @($workerResult.Diagnostic) } else { @() }
       $rawCompetitorText = (@($diagnosticOutput | ForEach-Object { [string]$_ }) -join "`n")
       $unauthorizedMarkerObserved = $rawCompetitorText.Contains($m40SemanticPrefix)
-      if ($unauthorizedMarkerObserved -and $diagnosticOutput.Count -gt 0) {
-        $diagnosticOutput | Out-String | Write-Host
-      }
 
-      $previousErrorAction = $ErrorActionPreference
-      $ErrorActionPreference = 'Continue'
-      try {
-        $databaseRecordOutput = @(
-          docker exec $containerName psql -qAt -v ON_ERROR_STOP=1 -U postgres -d $database -c `
-            "select json_build_object('race',race,'classification',classification,'elapsed_milliseconds',elapsed_milliseconds)::text from public.__test_teacher_attendance_contention_result where race='$RaceName'" 2>$null
-        )
-        $databaseRecordExit = $LASTEXITCODE
-      } finally {
-        $ErrorActionPreference = $previousErrorAction
-      }
-
+      $databaseRecordResult = Invoke-M40DockerCommand -Arguments @(
+        'exec', $containerName, 'psql', '-qAt', '-v', 'ON_ERROR_STOP=1',
+        '-U', 'postgres', '-d', $database,
+        '-c', "select json_build_object('race',race,'classification',classification,'elapsed_milliseconds',elapsed_milliseconds)::text from public.__test_teacher_attendance_contention_result where race='$RaceName'"
+      )
       $databaseRecord = $null
       $databaseRecordValid = $false
-      if ($databaseRecordExit -eq 0 -and $databaseRecordOutput.Count -eq 1) {
+      if (-not $databaseRecordResult.ProcessError -and -not $databaseRecordResult.Signal -and
+          $databaseRecordResult.ExitCode -eq 0 -and $databaseRecordResult.Output.Count -eq 1) {
         try {
-          $databaseRecord = $databaseRecordOutput[0] | ConvertFrom-Json
+          $databaseRecord = $databaseRecordResult.Output[0] | ConvertFrom-Json
           $recordProperties = @($databaseRecord.PSObject.Properties.Name | Sort-Object)
           $databaseRecordValid = ($recordProperties -join ',') -eq 'classification,elapsed_milliseconds,race' -and
             $databaseRecord.race -eq $RaceName -and
@@ -746,45 +876,48 @@ try {
           $databaseRecordValid = $false
         }
       }
-
-      $elapsedMilliseconds = if ($databaseRecordValid) {
-        [double]$databaseRecord.elapsed_milliseconds
-      } else {
-        $null
-      }
+      $elapsedMilliseconds = if ($databaseRecordValid) { [double]$databaseRecord.elapsed_milliseconds } else { $null }
       $workerLifecycleValid = $workerResults.Count -eq 1 -and
-        $workerState -eq 'Completed' -and
+        $competitorTerminal -eq 'PASS' -and
         $null -eq $workerSignal -and
         $null -eq $workerProcessError
 
       if ($workerLifecycleValid -and $competitorExit -eq 0 -and $databaseRecordValid -and
           $databaseRecord.classification -eq 'attendance update is already in progress' -and
           $elapsedMilliseconds -ge 0 -and $elapsedMilliseconds -lt 2000) {
-        Write-M40SemanticRecord -RaceName $RaceName `
-          -Classification 'attendance_contention_rejected' `
-          -SqlClassification $databaseRecord.classification -SqlState 'P0001' `
-          -ErrorIdentifier 'attendance_contention_in_progress' -ElapsedMilliseconds $elapsedMilliseconds `
-          -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerSignal $null -WorkerProcessError $null `
-          -Readiness 'PASS' -UnauthorizedMarkerObserved $unauthorizedMarkerObserved
+        $semanticCandidateReady = $true
+        $semanticCandidate = [ordered]@{
+          Classification = 'attendance_contention_rejected'
+          SqlClassification = $databaseRecord.classification
+          SqlState = 'P0001'
+          ErrorIdentifier = 'attendance_contention_in_progress'
+          ElapsedMilliseconds = $elapsedMilliseconds
+          IsExpectedM40 = $false
+        }
       } elseif ($workerLifecycleValid -and $competitorExit -eq 0 -and $databaseRecordValid -and
                 $databaseRecord.classification -eq 'm40_blocking_statement_timeout_v1' -and
                 $elapsedMilliseconds -ge 2500 -and $elapsedMilliseconds -lt 5000) {
-        Write-M40SemanticRecord -RaceName $RaceName `
-          -Classification 'm40_blocking_contention' `
-          -SqlClassification $databaseRecord.classification -SqlState '57014' `
-          -ErrorIdentifier 'statement_timeout' -ElapsedMilliseconds $elapsedMilliseconds `
-          -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerSignal $null -WorkerProcessError $null `
-          -Readiness 'PASS' -UnauthorizedMarkerObserved $unauthorizedMarkerObserved
-        throw "M40 semantic defect detected for $RaceName"
+        $semanticCandidateReady = $true
+        $semanticCandidate = [ordered]@{
+          Classification = 'm40_blocking_contention'
+          SqlClassification = $databaseRecord.classification
+          SqlState = '57014'
+          ErrorIdentifier = 'statement_timeout'
+          ElapsedMilliseconds = $elapsedMilliseconds
+          IsExpectedM40 = $true
+        }
+        Write-Host "$m40LifecyclePrefix SEMANTIC_CANDIDATE_READY"
       } elseif ($workerLifecycleValid -and $competitorExit -ne 0 -and -not $databaseRecordValid) {
         $diagnostic = Get-SanitizedM40SqlDiagnostic -Output $diagnosticOutput
-        Write-M40SemanticRecord -RaceName $RaceName `
-          -Classification 'unrelated_sql_error' `
-          -SqlClassification 'unexpected_sql_failure' -SqlState $diagnostic.SqlState `
-          -ErrorIdentifier $diagnostic.ErrorIdentifier -ElapsedMilliseconds $null `
-          -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerSignal $null -WorkerProcessError $null `
-          -Readiness 'PASS' -UnauthorizedMarkerObserved $unauthorizedMarkerObserved
-        throw "Teacher attendance contention competitor produced an unrelated SQL failure for $RaceName"
+        $semanticCandidate = [ordered]@{
+          Classification = 'unrelated_sql_error'
+          SqlClassification = 'unexpected_sql_failure'
+          SqlState = $diagnostic.SqlState
+          ErrorIdentifier = $diagnostic.ErrorIdentifier
+          ElapsedMilliseconds = $null
+          IsExpectedM40 = $false
+        }
+        $semanticRejectionCodes.Add('M40_UNRELATED_SQL_FAILURE')
       } else {
         $failureClassification = if (-not $workerLifecycleValid) {
           'worker_lifecycle_failure'
@@ -793,50 +926,213 @@ try {
         } else {
           'contradictory_sql_semantic_record'
         }
-        Write-M40SemanticRecord -RaceName $RaceName `
-          -Classification $failureClassification `
-          -SqlClassification $(if ($databaseRecordValid) { $databaseRecord.classification } else { $null }) `
-          -SqlState $null -ErrorIdentifier $failureClassification -ElapsedMilliseconds $elapsedMilliseconds `
-          -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerSignal $workerSignal -WorkerProcessError $workerProcessError `
-          -Readiness 'PASS' -UnauthorizedMarkerObserved $unauthorizedMarkerObserved
-        throw "Teacher attendance contention semantic contract failed for $RaceName"
-      }
-
-      $assertArguments = @(
-        'exec', $containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
-        '-v', "race_name=$RaceName",
-        '-U', 'postgres', '-d', $database,
-        '-f', '/workspace/supabase/tests/concurrency/teacher_attendance_contention_assert.sql'
-      )
-      & docker @assertArguments
-      if ($LASTEXITCODE -ne 0) { throw "Contention no-side-effect assertion failed: $RaceName" }
-
-      docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database -c `
-        "insert into public.__test_race_barrier(race, worker, released_at) values ('$RaceName','first',statement_timestamp()) on conflict (race, worker) do update set released_at=excluded.released_at" | Out-Null
-      if ($LASTEXITCODE -ne 0) { throw "Could not release contention holder: $RaceName" }
-      $released = $true
-
-      $holderResults = @(Wait-DatabaseRaceJobs -Jobs @($holder) -TimeoutSeconds $ContentionHardTimeoutSeconds)
-      $holderOutput = $holderResults[0].Output
-      $holderExit = ($holderOutput | Where-Object { $null -ne $_.ExitCode } | Select-Object -Last 1).ExitCode
-      if ($null -eq $holderExit -or $holderExit -ne 0) {
-        Write-Host "[CONTENTION OUTPUT] holder:`n$($holderOutput | Out-String)"
-        throw "Contention holder did not release cleanly: $RaceName"
-      }
-      Write-Host "[CONTENTION PASS] $RaceName bounded classification and no-side-effect proof"
-    } finally {
-      if (-not $released) {
-        docker exec $containerName psql -q -U postgres -d $database -c `
-          "insert into public.__test_race_barrier(race, worker, released_at) values ('$RaceName','first',statement_timestamp()) on conflict (race, worker) do update set released_at=excluded.released_at" 2>$null | Out-Null
-      }
-      foreach ($job in @($competitor,$holder)) {
-        if ($null -eq $job) { continue }
-        if ($job.State -notin @('Completed', 'Failed', 'Stopped')) {
-          Stop-Job -Job $job -ErrorAction SilentlyContinue
+        $semanticCandidate = [ordered]@{
+          Classification = $failureClassification
+          SqlClassification = $(if ($databaseRecordValid) { $databaseRecord.classification } else { $null })
+          SqlState = $null
+          ErrorIdentifier = $failureClassification
+          ElapsedMilliseconds = $elapsedMilliseconds
+          IsExpectedM40 = $false
         }
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        $semanticRejectionCodes.Add('M40_SEMANTIC_RECORD_UNEXPECTED')
+      }
+      if ($unauthorizedMarkerObserved -and -not $semanticRejectionCodes.Contains('M40_UNAUTHORIZED_MARKER_OBSERVED')) {
+        $semanticRejectionCodes.Add('M40_UNAUTHORIZED_MARKER_OBSERVED')
+      }
+
+      if ($semanticCandidate.IsExpectedM40) {
+        $escapedRaceName = $RaceName.Replace("'", "''")
+        $escapedRequestId = $RequestId.Replace("'", "''")
+        $m40PostCandidateAssertionSql = "select case when exists (select 1 from public.__test_teacher_attendance_contention_context where race='$escapedRaceName') and exists (select 1 from public.__test_teacher_attendance_contention_result where race='$escapedRaceName' and classification='m40_blocking_statement_timeout_v1' and elapsed_milliseconds >= 2500 and elapsed_milliseconds < 5000) and public.__test_teacher_attendance_business_counts() = (select business_counts from public.__test_teacher_attendance_contention_snapshot where label='contention-baseline') and not exists (select 1 from public.__test_teacher_attendance_contention_context c where c.race='$escapedRaceName' and ((c.attendance_id is null and exists (select 1 from public.attendance_records ar where ar.session_id=c.session_id and ar.student_id=c.student_id)) or (c.attendance_id is not null and (not exists (select 1 from public.attendance_records ar where ar.id=c.attendance_id and ar.status=c.initial_status and ar.revision=c.initial_revision) or (select count(*) from public.attendance_records ar where ar.session_id=c.session_id and ar.student_id=c.student_id) <> 1)))) and not exists (select 1 from public.audit_logs where table_name='attendance_records' and new_data->'attendance_history'->>'request_id'='$escapedRequestId') then 'M40_ASSERT_PASS' else 'M40_ASSERT_FAIL' end"
+        $assertResult = Invoke-M40DockerCommand -Arguments @(
+          'exec', $containerName, 'psql', '-qAt', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=verbose',
+          '-U', 'postgres', '-d', $database,
+          '-c', $m40PostCandidateAssertionSql
+        )
+        if (-not $assertResult.ProcessError -and -not $assertResult.Signal -and
+            $assertResult.ExitCode -eq 0 -and $assertResult.Output.Count -eq 1 -and
+            $assertResult.Output[0].Trim() -eq 'M40_ASSERT_PASS') {
+          $postCandidateAssertion = 'PASS'
+        } else {
+          $postCandidateAssertion = 'FAIL'
+          $assertDiagnostic = Get-SanitizedM40SqlDiagnostic -Output $assertResult.Output
+          $failureSqlState = $assertDiagnostic.SqlState
+          $assertionCode = if ($failureSqlState -eq '22023') {
+            'M40_POST_CANDIDATE_SQL_22023'
+          } else {
+            'M40_POST_CANDIDATE_ASSERTION_FAILED'
+          }
+          if (-not $finalizationFailureCodes.Contains($assertionCode)) { $finalizationFailureCodes.Add($assertionCode) }
+        }
+      } elseif ($semanticCandidateReady -and $semanticRejectionCodes.Count -eq 0) {
+        $assertResult = Invoke-M40DockerCommand -Arguments @(
+          'exec', $containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
+          '-v', "race_name=$RaceName",
+          '-U', 'postgres', '-d', $database,
+          '-f', '/workspace/supabase/tests/concurrency/teacher_attendance_contention_assert.sql'
+        )
+        if (-not $assertResult.ProcessError -and -not $assertResult.Signal -and $assertResult.ExitCode -eq 0) {
+          $postCandidateAssertion = 'PASS'
+        } else {
+          $postCandidateAssertion = 'FAIL'
+          $finalizationFailureCodes.Add('M40_POST_CANDIDATE_ASSERTION_FAILED')
+        }
+      }
+    } catch {
+      $operationCode = if ($_.Exception.Message -match '^M40_[A-Z0-9_]+$') {
+        $_.Exception.Message
+      } else {
+        'M40_CONTENTION_OPERATION_FAILED'
+      }
+      if (-not $finalizationFailureCodes.Contains($operationCode)) { $finalizationFailureCodes.Add($operationCode) }
+    }
+
+    $holderReleaseSql = "with released as (insert into public.__test_race_barrier(race,worker,released_at) values ('$RaceName','first',statement_timestamp()) on conflict (race,worker) do update set released_at=excluded.released_at returning 1) select count(*) from released"
+    if ($holderReady) {
+      $releaseResult = Invoke-M40DockerCommand -Arguments @(
+        'exec', $containerName, 'psql', '-qAt', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=verbose',
+        '-U', 'postgres', '-d', $database,
+        '-c', $holderReleaseSql
+      )
+      if (-not $releaseResult.ProcessError -and -not $releaseResult.Signal -and
+          $releaseResult.ExitCode -eq 0 -and $releaseResult.Output.Count -eq 1 -and
+          $releaseResult.Output[0].Trim() -eq '1') {
+        $holderRelease = 'PASS'
+      } else {
+        $holderRelease = 'FAIL'
+        if (-not $finalizationFailureCodes.Contains('M40_HOLDER_RELEASE_FAILED')) {
+          $finalizationFailureCodes.Add('M40_HOLDER_RELEASE_FAILED')
+        }
+        if ($null -eq $failureSqlState) {
+          $releaseDiagnostic = Get-SanitizedM40SqlDiagnostic -Output $releaseResult.Output
+          $failureSqlState = $releaseDiagnostic.SqlState
+        }
       }
     }
+
+    if ($null -ne $holder -and $holderRelease -ne 'PASS') {
+      $emergencyHolderReleaseSql = "insert into public.__test_race_barrier(race,worker,released_at) values ('$RaceName','first',statement_timestamp()) on conflict (race,worker) do update set released_at=excluded.released_at"
+      $emergencyReleaseResult = Invoke-M40DockerCommand -Arguments @(
+        'exec', $containerName, 'psql', '-q', '-v', 'ON_ERROR_STOP=1',
+        '-U', 'postgres', '-d', $database,
+        '-c', $emergencyHolderReleaseSql
+      )
+      if ($emergencyReleaseResult.ProcessError -or $emergencyReleaseResult.Signal -or $emergencyReleaseResult.ExitCode -ne 0) {
+        if (-not $finalizationFailureCodes.Contains('M40_HOLDER_EMERGENCY_RELEASE_FAILED')) {
+          $finalizationFailureCodes.Add('M40_HOLDER_EMERGENCY_RELEASE_FAILED')
+        }
+      }
+    }
+
+    if ($null -ne $holder) {
+      $holderObservation = Wait-M40JobTerminal -Job $holder -TimeoutSeconds $ContentionHardTimeoutSeconds
+      if ($holderObservation.TimedOut) {
+        $holderTerminal = 'FAIL'
+        if (-not $finalizationFailureCodes.Contains('M40_HOLDER_JOB_TIMEOUT')) { $finalizationFailureCodes.Add('M40_HOLDER_JOB_TIMEOUT') }
+      } elseif ($holderObservation.ReceiveError) {
+        $holderTerminal = 'FAIL'
+        if (-not $finalizationFailureCodes.Contains('M40_HOLDER_JOB_RECEIVE_FAILED')) { $finalizationFailureCodes.Add('M40_HOLDER_JOB_RECEIVE_FAILED') }
+      } else {
+        $holderResults = @($holderObservation.Output | Where-Object {
+          $null -ne $_.PSObject.Properties['ExitCode'] -and
+          $null -ne $_.PSObject.Properties['Signal'] -and
+          $null -ne $_.PSObject.Properties['ProcessError'] -and
+          $null -ne $_.PSObject.Properties['Diagnostic']
+        })
+        $holderResult = if ($holderResults.Count -eq 1) { $holderResults[0] } else { $null }
+        $holderTerminal = if ($holderObservation.State -eq 'Completed' -and $holderResult -and
+          $holderResult.ExitCode -eq 0 -and $null -eq $holderResult.Signal -and
+          $null -eq $holderResult.ProcessError) { 'PASS' } else { 'FAIL' }
+        if ($holderTerminal -ne 'PASS' -and -not $finalizationFailureCodes.Contains('M40_HOLDER_JOB_FAILED')) {
+          $finalizationFailureCodes.Add('M40_HOLDER_JOB_FAILED')
+        }
+      }
+    }
+
+    $jobFinalization = Finalize-M40OwnedJobs -Jobs @($competitor,$holder)
+    $jobsStopped = $jobFinalization.JobsStopped
+    $jobsRemoved = $jobFinalization.JobsRemoved
+    if ($jobsStopped -eq 'FAIL' -and -not $finalizationFailureCodes.Contains('M40_JOB_STOP_FAILED')) {
+      $finalizationFailureCodes.Add('M40_JOB_STOP_FAILED')
+    }
+    if ($jobsRemoved -eq 'FAIL' -and -not $finalizationFailureCodes.Contains('M40_JOB_REMOVE_FAILED')) {
+      $finalizationFailureCodes.Add('M40_JOB_REMOVE_FAILED')
+    }
+
+    $barrierCleanupResult = Invoke-M40DockerCommand -Arguments @(
+      'exec', $containerName, 'psql', '-qAt', '-v', 'ON_ERROR_STOP=1',
+      '-U', 'postgres', '-d', $database,
+      '-c', "delete from public.__test_race_barrier where race='$RaceName'; select count(*) from public.__test_race_barrier where race='$RaceName'"
+    )
+    if (-not $barrierCleanupResult.ProcessError -and -not $barrierCleanupResult.Signal -and
+        $barrierCleanupResult.ExitCode -eq 0 -and $barrierCleanupResult.Output.Count -eq 1 -and
+        $barrierCleanupResult.Output[0].Trim() -eq '0') {
+      $barrierCleanup = 'PASS'
+    } else {
+      $barrierCleanup = 'FAIL'
+      if (-not $finalizationFailureCodes.Contains('M40_BARRIER_CLEANUP_FAILED')) {
+        $finalizationFailureCodes.Add('M40_BARRIER_CLEANUP_FAILED')
+      }
+    }
+
+    if ($null -eq $semanticCandidate) {
+      $semanticCandidate = [ordered]@{
+        Classification = 'worker_lifecycle_failure'
+        SqlClassification = $null
+        SqlState = $null
+        ErrorIdentifier = $(if ($finalizationFailureCodes.Count -gt 0) { $finalizationFailureCodes[0] } else { 'M40_CONTENTION_OPERATION_FAILED' })
+        ElapsedMilliseconds = $null
+        IsExpectedM40 = $false
+      }
+    }
+    if ($competitorTerminal -eq 'NOT_STARTED' -and $null -ne $competitor) {
+      $competitorTerminal = if ($competitor.State -in @('Completed','Failed','Stopped')) { 'PASS' } else { 'FAIL' }
+    }
+    $finalization = if ($finalizationFailureCodes.Count -eq 0 -and
+      $postCandidateAssertion -ne 'FAIL' -and
+      $holderRelease -eq 'PASS' -and
+      $holderTerminal -eq 'PASS' -and
+      $competitorTerminal -eq 'PASS' -and
+      $jobsStopped -ne 'FAIL' -and
+      $jobsRemoved -eq 'PASS' -and
+      $barrierCleanup -eq 'PASS') { 'PASS' } else { 'FAIL' }
+    $allRejectionCodes = @($semanticRejectionCodes + $finalizationFailureCodes | Sort-Object -Unique)
+    $lifecycle = [ordered]@{
+      semantic_candidate = if ($semanticCandidateReady) { 'PASS' } elseif ($semanticCandidate.Classification -eq 'unrelated_sql_error') { 'REJECTED' } else { 'FAIL' }
+      post_candidate_assertion = $postCandidateAssertion
+      holder_release = $holderRelease
+      holder_terminal = $holderTerminal
+      competitor_terminal = $competitorTerminal
+      jobs_stopped = $jobsStopped
+      jobs_removed = $jobsRemoved
+      barrier_cleanup = $barrierCleanup
+      finalization = $finalization
+      rejection_codes = $allRejectionCodes
+      failure_sqlstate = $failureSqlState
+    }
+
+    $positiveM40 = $semanticCandidate.IsExpectedM40 -and
+      $allRejectionCodes.Count -eq 0 -and $finalization -eq 'PASS'
+    if ($positiveM40) { Write-Host "$m40LifecyclePrefix FINALIZATION_PASS" }
+    Write-M40SemanticRecord -RaceName $RaceName `
+      -Classification $semanticCandidate.Classification `
+      -SqlClassification $semanticCandidate.SqlClassification -SqlState $semanticCandidate.SqlState `
+      -ErrorIdentifier $semanticCandidate.ErrorIdentifier -ElapsedMilliseconds $semanticCandidate.ElapsedMilliseconds `
+      -WorkerState $workerState -WorkerExitCode $competitorExit -WorkerTimedOut $workerTimedOut `
+      -WorkerSignal $workerSignal -WorkerProcessError $workerProcessError `
+      -Readiness $(if ($holderReady) { 'PASS' } else { 'FAIL' }) `
+      -UnauthorizedMarkerObserved $unauthorizedMarkerObserved -Lifecycle $lifecycle
+
+    if ($positiveM40) {
+      if ($m40SidecarMode) { Write-Host "$m40LifecyclePrefix SIDECAR_COMMITTED" }
+      Write-Host "[M40 EXPECTED TERMINATION] $m40ExpectedTermination"
+      throw $m40ExpectedTermination
+    }
+    if ($allRejectionCodes.Count -gt 0) {
+      foreach ($rejectionCode in $allRejectionCodes) { Write-Host "$m40RejectionPrefix $rejectionCode" }
+      throw $allRejectionCodes[0]
+    }
+    Write-Host "[CONTENTION PASS] $RaceName bounded classification, verified finalization, and no-side-effect proof"
   }
 
   docker exec $containerName psql -q -v ON_ERROR_STOP=1 -U postgres -d $database `
