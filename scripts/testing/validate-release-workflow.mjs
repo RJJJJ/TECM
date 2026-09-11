@@ -149,6 +149,29 @@ function Convert-Condition([System.Management.Automation.Language.Ast]$Condition
     variable_path = if ($expression -is [System.Management.Automation.Language.VariableExpressionAst]) {
       $expression.VariablePath.UserPath
     } else { $null }
+    variable_references = @($Condition.FindAll({
+      param($node) $node -is [System.Management.Automation.Language.VariableExpressionAst]
+    }, $true) | ForEach-Object { $_.VariablePath.UserPath })
+    binary_operators = @($Condition.FindAll({
+      param($node) $node -is [System.Management.Automation.Language.BinaryExpressionAst]
+    }, $true) | ForEach-Object { [string]$_.Operator })
+    unary_operators = @($Condition.FindAll({
+      param($node) $node -is [System.Management.Automation.Language.UnaryExpressionAst]
+    }, $true) | ForEach-Object { [string]$_.TokenKind })
+    literals = @($Condition.FindAll({
+      param($node)
+      $node -is [System.Management.Automation.Language.ConstantExpressionAst] -or
+        $node -is [System.Management.Automation.Language.StringConstantExpressionAst]
+    }, $true) | ForEach-Object {
+      [ordered]@{ type = $_.GetType().Name; value = $_.Value; extent = Convert-Extent $_.Extent }
+    })
+    dynamic_node_types = @($Condition.FindAll({
+      param($node)
+      $node -is [System.Management.Automation.Language.CommandAst] -or
+        $node -is [System.Management.Automation.Language.SubExpressionAst] -or
+        $node -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
+        $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst]
+    }, $true) | ForEach-Object { $_.GetType().Name })
     extent = Convert-Extent $Condition.Extent
   }
 }
@@ -186,11 +209,51 @@ function Convert-Parameter([System.Management.Automation.Language.ParameterAst]$
 }
 
 function Convert-Terminal([System.Management.Automation.Language.Ast]$Node) {
+  $pipeline = $Node.Pipeline
+  $pipelineElements = if ($pipeline -is [System.Management.Automation.Language.PipelineAst]) {
+    @($pipeline.PipelineElements)
+  } else { @() }
+  $expression = if ($pipelineElements.Count -eq 1 -and
+      $pipelineElements[0] -is [System.Management.Automation.Language.CommandExpressionAst]) {
+    $pipelineElements[0].Expression
+  } else { $null }
   [ordered]@{
     type = $Node.GetType().Name
     nearest_function = Get-NearestFunction $Node
     parent_type = if ($null -ne $Node.Parent) { $Node.Parent.GetType().Name } else { $null }
     ancestors = @(Get-Ancestors $Node)
+    exit_argument = if ($Node -is [System.Management.Automation.Language.ExitStatementAst]) {
+      [ordered]@{
+        pipeline_type = if ($null -ne $pipeline) { $pipeline.GetType().Name } else { $null }
+        pipeline_text = if ($null -ne $pipeline) { $pipeline.Extent.Text } else { $null }
+        pipeline_element_count = $pipelineElements.Count
+        pipeline_element_types = @($pipelineElements | ForEach-Object { $_.GetType().Name })
+        expression_type = if ($null -ne $expression) { $expression.GetType().Name } else { $null }
+        expression_text = if ($null -ne $expression) { $expression.Extent.Text } else { $null }
+        literal_value = if ($expression -is [System.Management.Automation.Language.ConstantExpressionAst]) {
+          $expression.Value
+        } else { $null }
+        literal_value_type = if ($expression -is [System.Management.Automation.Language.ConstantExpressionAst] -and
+            $null -ne $expression.Value) { $expression.Value.GetType().FullName } else { $null }
+        expression_static = Test-StaticExpression $expression
+        variable_references = @(if ($null -ne $pipeline) {
+          $pipeline.FindAll({ param($child) $child -is [System.Management.Automation.Language.VariableExpressionAst] }, $true) |
+            ForEach-Object { [ordered]@{ path = $_.VariablePath.UserPath; splatted = $_.Splatted } }
+        })
+        command_count = @(if ($null -ne $pipeline) {
+          $pipeline.FindAll({ param($child) $child -is [System.Management.Automation.Language.CommandAst] }, $true)
+        }).Count
+        subexpression_count = @(if ($null -ne $pipeline) {
+          $pipeline.FindAll({ param($child) $child -is [System.Management.Automation.Language.SubExpressionAst] }, $true)
+        }).Count
+        scriptblock_expression_count = @(if ($null -ne $pipeline) {
+          $pipeline.FindAll({ param($child) $child -is [System.Management.Automation.Language.ScriptBlockExpressionAst] }, $true)
+        }).Count
+        descendant_types = @(if ($null -ne $pipeline) {
+          $pipeline.FindAll({ param($child) $true }, $true) | ForEach-Object { $_.GetType().Name }
+        })
+      }
+    } else { $null }
     extent = Convert-Extent $Node.Extent
   }
 }
@@ -412,7 +475,7 @@ try {
   $exits = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.ExitStatementAst] }, $true) |
     ForEach-Object { Convert-Terminal $_ })
   $payload = [ordered]@{
-    schema_version = 3
+    schema_version = 4
     source_path = [IO.Path]::GetFullPath($TargetPath)
     runtime = [ordered]@{
       edition = $PSVersionTable.PSEdition
@@ -500,7 +563,7 @@ function parseAstProcessResult(result) {
   if (document.runtime?.parser_type !== 'System.Management.Automation.Language.Parser') {
     rejectAstBoundary('ast.parser_identity', 'PowerShell AST parser identity is invalid');
   }
-  if (document.schema_version !== 3 ||
+  if (document.schema_version !== 4 ||
       !Array.isArray(document.parse_errors) || !Array.isArray(document.commands) || !Array.isArray(document.functions) ||
       !Array.isArray(document.ifs) || !Array.isArray(document.throws) || !Array.isArray(document.assignments) ||
       !Array.isArray(document.tries) || !Array.isArray(document.parameters) || !Array.isArray(document.root_parameters) ||
@@ -517,9 +580,14 @@ function parseAstProcessResult(result) {
         !Array.isArray(command?.ancestors) || command?.enclosing_pipeline?.type !== 'PipelineAst' ||
         !command?.enclosing_pipeline?.extent || !command?.extent) || document.ifs.some((entry) =>
         !Array.isArray(entry?.clauses) || !Array.isArray(entry?.else_statements) || entry.clauses.some((clause) =>
-          !clause?.condition_ast || !Array.isArray(clause?.body_statements) || !Array.isArray(clause?.body_traps))) ||
+          !clause?.condition_ast || !Array.isArray(clause.condition_ast.variable_references) ||
+          !Array.isArray(clause.condition_ast.binary_operators) || !Array.isArray(clause.condition_ast.unary_operators) ||
+          !Array.isArray(clause.condition_ast.literals) || !Array.isArray(clause.condition_ast.dynamic_node_types) ||
+          !Array.isArray(clause?.body_statements) || !Array.isArray(clause?.body_traps))) ||
       [...document.returns, ...document.exits, ...document.throws].some((entry) =>
-        !Array.isArray(entry?.ancestors) || !entry?.extent)) {
+        !Array.isArray(entry?.ancestors) || !entry?.extent) || document.exits.some((entry) =>
+        !entry?.exit_argument || !Array.isArray(entry.exit_argument.pipeline_element_types) ||
+          !Array.isArray(entry.exit_argument.variable_references) || !Array.isArray(entry.exit_argument.descendant_types))) {
     rejectAstBoundary('ast.invalid_schema', 'PowerShell AST output schema is invalid');
   }
   return document;
@@ -741,6 +809,224 @@ function exactVariableCondition(clause, variableName) {
     condition.pipeline_element_types?.length === 1 && condition.pipeline_element_types[0] === 'CommandExpressionAst' &&
     condition.expression_type === 'VariableExpressionAst' && condition.variable_path === variableName &&
     normalizeAstText(condition.extent?.text) === `$${variableName}`;
+}
+
+const exactArray = (actual, expected) => Array.isArray(actual) && actual.length === expected.length &&
+  actual.every((value, index) => value === expected[index]);
+
+function inspectAuthorizedM40Exit(ast, mainTry, verificationIf, mainTryRootIndex) {
+  const allExits = ast.exits;
+  const rootScopeExits = allExits.filter((entry) => entry.nearest_function === null);
+  const exitEntry = allExits.length === 1 ? allExits[0] : null;
+  const argument = exitEntry?.exit_argument;
+  const argumentAccepted = Boolean(exitEntry) && argument?.pipeline_type === 'PipelineAst' &&
+    normalizeAstText(argument.pipeline_text) === '1' && argument.pipeline_element_count === 1 &&
+    exactArray(argument.pipeline_element_types, ['CommandExpressionAst']) &&
+    argument.expression_type === 'ConstantExpressionAst' && normalizeAstText(argument.expression_text) === '1' &&
+    argument.literal_value === 1 && argument.literal_value_type === 'System.Int32' &&
+    argument.expression_static === true && argument.variable_references.length === 0 &&
+    argument.command_count === 0 && argument.subexpression_count === 0 &&
+    argument.scriptblock_expression_count === 0;
+
+  const exitIfAncestors = exitEntry?.ancestors?.filter((entry) => entry.type === 'IfStatementAst') ?? [];
+  const terminalIf = ast.ifs.find((entry) => sameExtent(entry.extent, exitIfAncestors[0]));
+  const pendingIf = ast.ifs.find((entry) => sameExtent(entry.extent, exitIfAncestors[1]));
+  const outerIf = ast.ifs.find((entry) => sameExtent(entry.extent, exitIfAncestors[2]));
+  const terminalClause = terminalIf?.clauses?.length === 1 ? terminalIf.clauses[0] : null;
+  const pendingClause = pendingIf?.clauses?.length === 1 ? pendingIf.clauses[0] : null;
+  const outerClause = outerIf?.clauses?.length === 1 ? outerIf.clauses[0] : null;
+  const exitAncestry = exactAncestorChain(exitEntry?.ancestors ?? [], [
+    ancestorStep('StatementBlockAst', terminalClause?.body_extent, 'authorized M40 terminal guard body'),
+    ancestorStep('IfStatementAst', terminalIf?.extent, 'authorized M40 terminal guard'),
+    ancestorStep('StatementBlockAst', pendingClause?.body_extent, 'pending M40 terminal body'),
+    ancestorStep('IfStatementAst', pendingIf?.extent, 'pending M40 terminal guard'),
+    ancestorStep('StatementBlockAst', outerClause?.body_extent, 'verification failure body'),
+    ancestorStep('IfStatementAst', outerIf?.extent, 'verification failure guard'),
+    ancestorStep('NamedBlockAst', ast.root_body_extent, 'root executable body'),
+    ancestorStep('ScriptBlockAst', ast.root_extent, 'root script')
+  ]);
+  const forbiddenExitAncestors = new Set([
+    'FunctionDefinitionAst', 'ScriptBlockExpressionAst', 'ForEachStatementAst', 'ForStatementAst',
+    'WhileStatementAst', 'DoWhileStatementAst', 'DoUntilStatementAst', 'SwitchStatementAst',
+    'TrapStatementAst', 'TryStatementAst', 'CatchClauseAst', 'SubExpressionAst'
+  ]);
+  const forbiddenAncestors = exitEntry?.ancestors?.filter((entry) => forbiddenExitAncestors.has(entry.type)) ?? [];
+
+  const condition = terminalClause?.condition_ast;
+  const expectedConditionText = "$terminalExceptionMessage -eq $m40ExpectedTermination -and -not $cleanupError -and " +
+    "$m40SidecarWriteCount -eq 1 -and $databaseCleanupLabel -eq 'PASS' -and $containerCleanupLabel -eq 'PASS'";
+  const expectedLiterals = [
+    ['ConstantExpressionAst', 1],
+    ['StringConstantExpressionAst', 'PASS'],
+    ['StringConstantExpressionAst', 'PASS']
+  ];
+  const conditionAccepted = condition?.type === 'PipelineAst' && condition.pipeline_element_count === 1 &&
+    exactArray(condition.pipeline_element_types, ['CommandExpressionAst']) &&
+    condition.expression_type === 'BinaryExpressionAst' &&
+    exactArray(condition.variable_references, [
+      'terminalExceptionMessage', 'm40ExpectedTermination', 'cleanupError', 'm40SidecarWriteCount',
+      'databaseCleanupLabel', 'containerCleanupLabel'
+    ]) && exactArray(condition.binary_operators, ['And', 'And', 'And', 'And', 'Ieq', 'Ieq', 'Ieq', 'Ieq']) &&
+    exactArray(condition.unary_operators, ['Not']) && condition.dynamic_node_types.length === 0 &&
+    condition.literals.length === expectedLiterals.length && condition.literals.every((literal, index) =>
+      literal.type === expectedLiterals[index][0] && literal.value === expectedLiterals[index][1]) &&
+    normalizeAstText(condition.extent?.text) === expectedConditionText;
+
+  const terminalCalls = ast.commands.filter((command) => command.command_name === 'Write-M40TerminalOutcome');
+  const terminalCall = terminalCalls.length === 1 ? terminalCalls[0] : null;
+  const directTerminalBody = terminalClause?.body_statements ?? [];
+  const directTerminalCall = terminalCall && directTerminalBody.length === 2 &&
+    directTerminalBody[0].type === 'PipelineAst' && directTerminalBody[1].type === 'ExitStatementAst' &&
+    sameExtent(terminalCall.enclosing_pipeline?.extent, directTerminalBody[0].extent) &&
+    sameExtent(exitEntry?.extent, directTerminalBody[1].extent) && terminalCall.nearest_function === null &&
+    normalizeAstText(terminalCall.extent?.text) === 'Write-M40TerminalOutcome' &&
+    terminalCall.elements.length === 1;
+  const enclosingGuardsAccepted = terminalIf?.nearest_function === null && terminalIf.clauses.length === 1 &&
+    terminalIf.else_extent === null && terminalClause?.body_traps?.length === 0 &&
+    pendingIf?.nearest_function === null && pendingIf.clauses.length === 1 && pendingIf.else_extent === null &&
+    pendingClause?.body_traps?.length === 0 && exactVariableCondition(pendingClause, 'm40TerminalPending') &&
+    outerIf?.nearest_function === null && outerIf.clauses.length === 1 && outerIf.else_extent === null &&
+    outerClause?.body_traps?.length === 0 && exactVariableCondition(outerClause, 'verificationError') &&
+    sameExtent(outerIf?.extent, verificationIf?.extent) && mainTryRootIndex >= 0 &&
+    sameExtent(ast.root_statements[mainTryRootIndex + 1]?.extent, outerIf?.extent);
+
+  const writerFunctions = ast.functions.filter((entry) => entry.name === 'Write-M40TerminalOutcome');
+  const writer = writerFunctions.length === 1 ? writerFunctions[0] : null;
+  const writerStatementTypes = writer?.end_block_statements?.map((entry) => entry.type) ?? [];
+  const writerIfs = ast.ifs.filter((entry) => entry.nearest_function === 'Write-M40TerminalOutcome')
+    .sort((left, right) => left.extent.start_offset - right.extent.start_offset);
+  const writerAssignments = ast.assignments.filter((entry) => entry.nearest_function === 'Write-M40TerminalOutcome');
+  const terminalRecordAssignments = writerAssignments.filter((entry) => normalizeAstText(entry.left) === '$terminalRecord');
+  const terminalCountAssignments = writerAssignments.filter((entry) =>
+    normalizeAstText(entry.left) === '$script:m40TerminalWriteCount' && normalizeAstText(entry.right) === '1');
+  const writerOutputCommands = ast.commands.filter((command) => command.nearest_function === 'Write-M40TerminalOutcome' &&
+    normalizeAstText(command.extent?.text) === 'Write-Host ($m40TerminalPrefix + $terminalJson)');
+  const writerConditions = writerIfs.map((entry) => normalizeAstText(entry.clauses?.[0]?.condition));
+  const writerAccepted = Boolean(writer) && writer.end_block_traps.length === 0 &&
+    exactArray(writerStatementTypes, [
+      'IfStatementAst', 'IfStatementAst', 'IfStatementAst', 'AssignmentStatementAst',
+      'AssignmentStatementAst', 'AssignmentStatementAst', 'IfStatementAst',
+      'AssignmentStatementAst', 'PipelineAst'
+    ]) && exactArray(writerConditions, [
+      '-not $m40SidecarMode -or -not $m40TerminalPending',
+      '$m40SidecarWriteCount -ne 1 -or $m40TerminalWriteCount -ne 0',
+      "$databaseCleanupLabel -ne 'PASS' -or $containerCleanupLabel -ne 'PASS'",
+      '$terminalBytes.Length -eq 0 -or $terminalBytes.Length -gt $m40SidecarMaximumBytes'
+    ]) && writerIfs.every((entry) => entry.clauses.length === 1 && entry.else_extent === null &&
+      entry.clauses[0].body_traps.length === 0) && terminalRecordAssignments.length === 1 &&
+    normalizeAstText(terminalRecordAssignments[0].right) ===
+      '[ordered]@{ schema = $m40TerminalSchema producer = $m40TerminalProducer correlation = $m40SidecarCorrelation outcome = $m40ExpectedTermination database_cleanup = $databaseCleanupLabel container_cleanup = $containerCleanupLabel }' &&
+    terminalCountAssignments.length === 1 && writerOutputCommands.length === 1 &&
+    sameExtent(writerOutputCommands[0].enclosing_pipeline?.extent, writer.end_block_statements[8]?.extent) &&
+    terminalCountAssignments[0].extent.start_offset < writerOutputCommands[0].extent.start_offset;
+
+  const semanticWriterFunctions = ast.functions.filter((entry) => entry.name === 'Write-M40SemanticRecord');
+  const semanticWriter = semanticWriterFunctions.length === 1 ? semanticWriterFunctions[0] : null;
+  const semanticWriterInvocations = ast.invoke_members.filter((entry) => entry.nearest_function === 'Write-M40SemanticRecord');
+  const atomicMoves = semanticWriterInvocations.filter((entry) => normalizeAstText(entry.expression) === '[IO.File]' &&
+    normalizeAstText(entry.member) === 'Move');
+  const committedReads = semanticWriterInvocations.filter((entry) => normalizeAstText(entry.expression) === '[IO.File]' &&
+    normalizeAstText(entry.member) === 'ReadAllBytes');
+  const utf8Reads = semanticWriterInvocations.filter((entry) => normalizeAstText(entry.member) === 'GetString');
+  const semanticWriteCounts = ast.assignments.filter((entry) => entry.nearest_function === 'Write-M40SemanticRecord' &&
+    normalizeAstText(entry.left) === '$script:m40SidecarWriteCount' && normalizeAstText(entry.right) === '1');
+  const sidecarAtomicCommitAccepted = Boolean(semanticWriter) && atomicMoves.length === 1 && committedReads.length === 1 &&
+    utf8Reads.length === 1 && semanticWriteCounts.length === 1 &&
+    atomicMoves[0].extent.start_offset < committedReads[0].extent.start_offset &&
+    committedReads[0].extent.start_offset < utf8Reads[0].extent.start_offset &&
+    utf8Reads[0].extent.start_offset < semanticWriteCounts[0].extent.start_offset;
+
+  const m40Functions = ast.functions.filter((entry) => entry.name === 'Invoke-TeacherAttendanceContention');
+  const m40Function = m40Functions.length === 1 ? m40Functions[0] : null;
+  const m40Commands = ast.commands.filter((entry) => entry.nearest_function === 'Invoke-TeacherAttendanceContention');
+  const m40Assignments = ast.assignments.filter((entry) => entry.nearest_function === 'Invoke-TeacherAttendanceContention');
+  const oneAssignment = (left, right = null) => {
+    const matches = m40Assignments.filter((entry) => normalizeAstText(entry.left) === left &&
+      (right === null || normalizeAstText(entry.right) === right));
+    return matches.length === 1 ? matches[0] : null;
+  };
+  const oneCommand = (text) => {
+    const matches = m40Commands.filter((entry) => normalizeAstText(entry.extent?.text) === text);
+    return matches.length === 1 ? matches[0] : null;
+  };
+  const candidateReady = oneCommand('Write-Host "$m40LifecyclePrefix SEMANTIC_CANDIDATE_READY"');
+  const postCandidate = oneAssignment('$m40PostCandidateAssertionSql');
+  const holderRelease = oneAssignment('$holderReleaseSql');
+  const holderTerminal = oneAssignment('$holderObservation');
+  const jobFinalization = oneAssignment('$jobFinalization');
+  const jobsStopped = oneAssignment('$jobsStopped', '$jobFinalization.JobsStopped');
+  const jobsRemoved = oneAssignment('$jobsRemoved', '$jobFinalization.JobsRemoved');
+  const barrierCleanup = oneAssignment('$barrierCleanupResult');
+  const finalization = oneAssignment('$finalization');
+  const lifecycle = oneAssignment('$lifecycle');
+  const positiveM40 = oneAssignment('$positiveM40');
+  const finalizationLine = oneCommand('Write-Host "$m40LifecyclePrefix FINALIZATION_PASS"');
+  const semanticCalls = m40Commands.filter((entry) => entry.command_name === 'Write-M40SemanticRecord');
+  const semanticCall = semanticCalls.length === 1 ? semanticCalls[0] : null;
+  const sidecarCommitted = oneCommand('Write-Host "$m40LifecyclePrefix SIDECAR_COMMITTED"');
+  const terminalPending = oneAssignment('$script:m40TerminalPending', '$true');
+  const expectedTermination = oneCommand('Write-Host "[M40 EXPECTED TERMINATION] $m40ExpectedTermination"');
+  const expectedThrows = ast.throws.filter((entry) => entry.nearest_function === 'Invoke-TeacherAttendanceContention' &&
+    normalizeAstText(entry.extent?.text) === 'throw $m40ExpectedTermination');
+  const expectedThrow = expectedThrows.length === 1 ? expectedThrows[0] : null;
+  const positiveIf = ast.ifs.find((entry) => entry.nearest_function === 'Invoke-TeacherAttendanceContention' &&
+    entry.clauses.length === 1 && exactVariableCondition(entry.clauses[0], 'positiveM40') &&
+    inside(expectedThrow?.extent, entry.extent));
+  const sidecarIf = ast.ifs.find((entry) => entry.nearest_function === 'Invoke-TeacherAttendanceContention' &&
+    entry.clauses.length === 1 && exactVariableCondition(entry.clauses[0], 'm40SidecarMode') &&
+    inside(sidecarCommitted?.extent, entry.extent));
+  const positiveBodyAccepted = positiveIf?.else_extent === null && positiveIf.clauses[0].body_traps.length === 0 &&
+    exactArray(positiveIf.clauses[0].body_statements.map((entry) => entry.type),
+      ['IfStatementAst', 'PipelineAst', 'ThrowStatementAst']) &&
+    sidecarIf?.else_extent === null && sidecarIf.clauses[0].body_traps.length === 0 &&
+    exactArray(sidecarIf.clauses[0].body_statements.map((entry) => entry.type),
+      ['PipelineAst', 'AssignmentStatementAst']) &&
+    sameExtent(sidecarIf.extent, positiveIf.clauses[0].body_statements[0]?.extent) &&
+    sameExtent(expectedTermination?.enclosing_pipeline?.extent, positiveIf.clauses[0].body_statements[1]?.extent) &&
+    sameExtent(expectedThrow?.extent, positiveIf.clauses[0].body_statements[2]?.extent) &&
+    sameExtent(sidecarCommitted?.enclosing_pipeline?.extent, sidecarIf.clauses[0].body_statements[0]?.extent) &&
+    sameExtent(terminalPending?.extent, sidecarIf.clauses[0].body_statements[1]?.extent);
+  const finalizationContract = normalizeAstText(finalization?.right) ===
+    "if ($finalizationFailureCodes.Count -eq 0 -and $postCandidateAssertion -ne 'FAIL' -and $holderRelease -eq 'PASS' -and $holderTerminal -eq 'PASS' -and $competitorTerminal -eq 'PASS' -and $jobsStopped -ne 'FAIL' -and $jobsRemoved -eq 'PASS' -and $barrierCleanup -eq 'PASS') { 'PASS' } else { 'FAIL' }";
+  const positiveContract = normalizeAstText(positiveM40?.right) ===
+    "$semanticCandidate.IsExpectedM40 -and $allRejectionCodes.Count -eq 0 -and $finalization -eq 'PASS'";
+  const orderedStages = [candidateReady, postCandidate, holderRelease, holderTerminal, jobFinalization, jobsStopped,
+    jobsRemoved, barrierCleanup, finalization, lifecycle, positiveM40, finalizationLine, semanticCall,
+    sidecarCommitted, terminalPending, expectedTermination, expectedThrow];
+  const m40OrderAccepted = Boolean(m40Function) && orderedStages.every(Boolean) &&
+    orderedStages.every((entry, index) => index === 0 || orderedStages[index - 1].extent.start_offset < entry.extent.start_offset) &&
+    finalizationContract && positiveContract && positiveBodyAccepted &&
+    inside(expectedThrow?.extent, mainTry.body_extent) && expectedThrow.extent.end_offset < mainTry.finally_extent.start_offset;
+
+  const outerCleanupBeforeTermination = mainTry.finally_extent.end_offset < (terminalCall?.extent.start_offset ?? -1) &&
+    (terminalCall?.extent.end_offset ?? Number.MAX_SAFE_INTEGER) < (exitEntry?.extent.start_offset ?? -1);
+  const accepted = allExits.length === 1 && rootScopeExits.length === 1 && exitEntry?.nearest_function === null &&
+    argumentAccepted && exitAncestry.accepted && forbiddenAncestors.length === 0 && conditionAccepted &&
+    directTerminalCall && enclosingGuardsAccepted && writerAccepted && sidecarAtomicCommitAccepted &&
+    m40OrderAccepted && outerCleanupBeforeTermination;
+  return {
+    accepted,
+    total_exit_count: allExits.length,
+    root_scope_exit_count: rootScopeExits.length,
+    literal_exit_one: argumentAccepted,
+    exit_argument: argument ?? null,
+    ancestry: exitAncestry,
+    forbidden_ancestors: [...new Set(forbiddenAncestors.map((entry) => entry.type))],
+    exact_guard_condition: conditionAccepted,
+    direct_terminal_body: Boolean(directTerminalCall),
+    enclosing_guards: enclosingGuardsAccepted,
+    terminal_writer: { accepted: writerAccepted, function_count: writerFunctions.length,
+      statement_types: writerStatementTypes, output_count: writerOutputCommands.length },
+    sidecar_atomic_commit: { accepted: sidecarAtomicCommitAccepted, function_count: semanticWriterFunctions.length,
+      atomic_move_count: atomicMoves.length, committed_read_count: committedReads.length,
+      utf8_read_count: utf8Reads.length, committed_count_assignment_count: semanticWriteCounts.length },
+    m40_finalization_order: { accepted: m40OrderAccepted, function_count: m40Functions.length,
+      ordered_stage_offsets: orderedStages.map((entry) => entry?.extent?.start_offset ?? null),
+      finalization_contract: finalizationContract, positive_contract: positiveContract,
+      positive_body: Boolean(positiveBodyAccepted) },
+    outer_cleanup_before_terminal: outerCleanupBeforeTermination,
+    terminal_call_count: terminalCalls.length
+  };
 }
 
 function extractWorkflowJob(text, jobName) {
@@ -1143,28 +1429,40 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
 
   const rootReturns = ast.returns.filter((entry) => entry.nearest_function === null);
   const rootExits = ast.exits.filter((entry) => entry.nearest_function === null);
+  const alternativeTerminations = ast.invoke_members.filter((entry) =>
+    /^(?:exit|failfast|setshouldexit)$/i.test(normalizeAstText(entry.member).replace(/^(['"])(.*)\1$/, '$2'))
+  );
+  const authorizedM40Exit = inspectAuthorizedM40Exit(ast, mainTry, verificationIf, mainTryRootIndex);
   const targetParameterName = 'TeacherAttendanceContentionOnly';
   const targetRootParameters = ast.root_parameters.filter((parameter) =>
     parameter.name.toLowerCase() === targetParameterName.toLowerCase());
   const targetParameters = ast.parameters.filter((parameter) =>
     parameter.name.toLowerCase() === targetParameterName.toLowerCase());
   const targetNameTextMentions = databaseText.match(/TeacherAttendanceContentionOnly/gi) ?? [];
-  if (rootExits.length > 0) issues.push({ code: 'terminal.unauthorized_exit', message: 'Root execution must not contain ExitStatementAst' });
+  if (!authorizedM40Exit.accepted) {
+    issues.push({ code: 'terminal.unauthorized_exit', message: 'Only the single AST-proven literal M40 failure exit is authorized' });
+  }
   if (rootReturns.length > 0) issues.push({ code: 'terminal.unauthorized_return', message: 'Root execution must not contain ReturnStatementAst' });
+  if (alternativeTerminations.length > 0) {
+    issues.push({ code: 'terminal.alternative_termination', message: 'Process and host termination methods cannot bypass the literal M40 exit contract' });
+  }
   if (targetNameTextMentions.length > 0) {
     issues.push({ code: 'terminal.contention_mode_present', message: 'Database verifier must not contain a contention-only mode, alias, activation, or reference' });
   }
 
   const controlFlowEvidence = {
     complete_verifier: {
-      accepted: rootReturns.length === 0 && rootExits.length === 0 && targetNameTextMentions.length === 0,
+      accepted: rootReturns.length === 0 && authorizedM40Exit.accepted && targetNameTextMentions.length === 0
+        && alternativeTerminations.length === 0,
       root_count: targetRootParameters.length,
       all_parameter_count: targetParameters.length,
       reference_count: ast.target_variable_references.length,
       text_mention_count: targetNameTextMentions.length
     },
     root_exit_count: rootExits.length,
-    root_return_count: rootReturns.length
+    total_exit_count: ast.exits.length,
+    root_return_count: rootReturns.length,
+    authorized_m40_exit: authorizedM40Exit
   };
 
   const databaseJob = extractWorkflowJob(workflowText, 'database');
@@ -1246,7 +1544,13 @@ function replaceExactly(text, search, replacement) {
   const matches = text.split(search).length - 1;
   recordMutationProof('literal', search, matches);
   if (matches !== 1) throw new Error(`negative control target matched ${matches} times: ${search}`);
-  return text.replace(search, replacement);
+  const candidate = text.replace(search, () => replacement);
+  const offset = text.indexOf(search);
+  if (candidate === text || candidate !== text.slice(0, offset) + replacement + text.slice(offset + search.length)
+      || (replacement.length > 0 && candidate.split(replacement).length !== text.split(replacement).length + 1)) {
+    throw new Error('negative control exact splice failed');
+  }
+  return candidate;
 }
 
 function matchPatternExactly(text, pattern) {
@@ -1259,7 +1563,12 @@ function matchPatternExactly(text, pattern) {
 
 function replacePatternExactly(text, pattern, replacement) {
   const match = matchPatternExactly(text, pattern);
-  return text.slice(0, match.index) + replacement + text.slice(match.index + match[0].length);
+  const candidate = text.slice(0, match.index) + replacement + text.slice(match.index + match[0].length);
+  if (candidate === text || (replacement.length > 0
+      && candidate.split(replacement).length !== text.split(replacement).length + 1)) {
+    throw new Error('negative control pattern splice failed');
+  }
+  return candidate;
 }
 
 function insertBeforeBatch1Setup(text, insertion) {
@@ -1389,6 +1698,19 @@ function mutateAssertionCommand(segment, mutator) {
 const indentPowerShell = (text, spaces = 2) => text.split(/\r?\n/)
   .map((line) => `${' '.repeat(spaces)}${line}`)
   .join('\n');
+
+function replaceAuthorizedM40Exit(text, replacement) {
+  return replacePatternExactly(text, /      exit 1(?=\r?\n)/, replacement);
+}
+
+function moveAuthorizedM40ExitBefore(text, target, indentation = '    ') {
+  const withoutAuthorizedExit = replaceAuthorizedM40Exit(text, '');
+  return replaceExactly(withoutAuthorizedExit, target, `${indentation}exit 1\n${target}`);
+}
+
+function insertBeforeMainTry(text, insertion) {
+  return replacePatternExactly(text, /try \{\r?\n  Initialize-M40SemanticSidecar/, `${insertion}try {\n  Initialize-M40SemanticSidecar`);
+}
 
 const staffExistingSpec = staffRaceSpecs[0];
 const staffExistingRaceTokens = [
@@ -1677,6 +1999,134 @@ const terminalControlSpecs = [
   }
 ];
 
+const authorizedExitControlSpecs = [
+  ...[
+    ['ENVIRONMENT-EXIT', '[Environment]::Exit(0)'],
+    ['ENVIRONMENT-FAILFAST', "[Environment]::FailFast('CONTROL_ONLY')"],
+    ['HOST-SETSHOULDEXIT', '$host.SetShouldExit(0)']
+  ].map(([id, statement]) => ({
+    id: `CONTROL-ALTERNATIVE-TERMINATION-${id}`,
+    expectedCodes: ['terminal.alternative_termination'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: insertBeforeBatch1Setup(fixture.database, `  ${statement}\n`) })
+  })),
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-ZERO', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceAuthorizedM40Exit(fixture.database, '      exit 0') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-VARIABLE', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceAuthorizedM40Exit(fixture.database,
+      '      $authorizedM40ExitCode = 1\n      exit $authorizedM40ExitCode') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-EXPRESSION', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceAuthorizedM40Exit(fixture.database, '      exit (1 + 0)') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-DYNAMIC-ARGUMENT', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceAuthorizedM40Exit(fixture.database,
+      '      exit $(Write-Output 1)') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-SECOND-ROOT-EXIT', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceExactly(fixture.database,
+      'if ($cleanupError) { throw $cleanupError }',
+      'if ($cleanupError) { throw $cleanupError }\nexit 1') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-BEFORE-FINALIZATION', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: moveAuthorizedM40ExitBefore(fixture.database,
+      '    $finalization = if (') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-BEFORE-SIDECAR-COMMIT', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: moveAuthorizedM40ExitBefore(fixture.database,
+      '    Write-M40SemanticRecord -RaceName $RaceName `') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-BEFORE-SENTINEL', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: moveAuthorizedM40ExitBefore(fixture.database,
+      '      Write-Host "[M40 EXPECTED TERMINATION] $m40ExpectedTermination"', '      ') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-BEFORE-HOLDER-JOB-BARRIER-CLEANUP', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: moveAuthorizedM40ExitBefore(fixture.database,
+      '    $holderReleaseSql = ') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-IN-FALSE-BRANCH', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceAuthorizedM40Exit(fixture.database,
+      '      if ($false) {\n        exit 1\n      }') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-IN-UNINVOKED-SCRIPTBLOCK', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceAuthorizedM40Exit(fixture.database,
+      '      $unusedM40Exit = { exit 1 }') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-IN-FUNCTION', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceAuthorizedM40Exit(fixture.database,
+      '      function Invoke-UnauthorizedM40Exit { exit 1 }') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-IN-LOOP', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceAuthorizedM40Exit(fixture.database,
+      '      foreach ($m40ExitControl in @(1)) { exit 1 }') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EXIT-IN-SWALLOWING-TRY-CATCH', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceAuthorizedM40Exit(fixture.database,
+      "      try { exit 1 } catch { Write-Host 'swallowed M40 exit control' }") })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-NORMAL-PATH-REACHABLE-EXIT',
+    expectedCodes: ['database.verification_rethrow', 'terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceExactly(fixture.database,
+      'if ($verificationError) {', 'if ($true) {') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-RETURN-INSTEAD-OF-EXIT',
+    expectedCodes: ['terminal.unauthorized_exit', 'terminal.unauthorized_return'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceAuthorizedM40Exit(fixture.database, '      return') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-EARLY-ROOT-EXIT', expectedCodes: ['terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: insertBeforeMainTry(fixture.database, 'exit 1\n\n') })
+  },
+  {
+    id: 'CONTROL-AUTHORIZED-M40-HIDDEN-DYNAMIC-SECOND-EXIT',
+    expectedCodes: ['command.dynamic_invocation', 'terminal.unauthorized_exit'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: insertBeforeBatch1Setup(fixture.database, '  & { exit 1 }\n') })
+  },
+  {
+    id: 'CONTROL-CONTENTION-SWITCH-DEFAULTS-TO-SHORTENED-MODE',
+    expectedCodes: ['terminal.contention_mode_present'],
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: (fixture) => ({ ...fixture, database: replaceExactly(fixture.database,
+      '  [int]$ContentionHardTimeoutSeconds = 10,',
+      '  [int]$ContentionHardTimeoutSeconds = 10,\n  [switch]$TeacherAttendanceContentionOnly = $true,') })
+  }
+];
+
 const directThrowControlSpecs = [
   {
     id: 'CONTROL-SETUP-THROW-UNINVOKED-SCRIPTBLOCK', expectedCode: 'setup.reachable_failure', exactFailure: true,
@@ -1745,13 +2195,13 @@ function wrapSafetyBoundary(fixture, boundary, family) {
 const safetyWrapperControlSpecs = [...safetyBoundaryCodes].flatMap(([boundary, code]) => [
   {
     id: `CONTROL-${boundary.toUpperCase().replaceAll('_', '-')}-FALSE-WRAPPER`,
-    expectedCodes: [code],
+    expectedCodes: boundary === 'verification_error' ? [code, 'terminal.unauthorized_exit'] : [code],
     requiredTokens: mandatoryBatch1Tokens,
     mutate: (fixture) => wrapSafetyBoundary(fixture, boundary, 'false-wrapper')
   },
   {
     id: `CONTROL-${boundary.toUpperCase().replaceAll('_', '-')}-SWALLOWING-TRY-CATCH`,
-    expectedCodes: [code],
+    expectedCodes: boundary === 'verification_error' ? [code, 'terminal.unauthorized_exit'] : [code],
     requiredTokens: mandatoryBatch1Tokens,
     mutate: (fixture) => wrapSafetyBoundary(fixture, boundary, 'swallowing-try-catch')
   }
@@ -1851,7 +2301,7 @@ for (const spec of [...legacyTopologyControlSpecs, ...terminalControlSpecs, ...d
 
 function runAstBoundaryControls() {
   const validObject = {
-    schema_version: 3,
+    schema_version: 4,
     source_path: databaseVerifyPath,
     runtime: { parser_type: 'System.Management.Automation.Language.Parser' },
     parse_errors: [], commands: [], functions: [], ifs: [], throws: [], assignments: [], tries: [],
@@ -1937,14 +2387,35 @@ function buildCompleteVerifierPositiveControl(validation) {
   const workflowInvocation = validation.evidence?.workflow_invocation;
   return {
     id: 'CONTROL-COMPLETE-DATABASE-VERIFIER-ONLY',
-    intended_result: 'no contention-only mode and no root terminal statement while Release remains exact and unconditional',
+    intended_result: 'no contention-only mode or root return, one authorized M40 failure exit, and exact unconditional no-argument Release invocation',
     control_passed: validation.issues.length === 0 && flow?.complete_verifier?.accepted === true &&
-      flow.root_exit_count === 0 && flow.root_return_count === 0 &&
+      flow.root_exit_count === 1 && flow.total_exit_count === 1 && flow.root_return_count === 0 &&
+      flow.authorized_m40_exit?.accepted === true &&
       workflowInvocation?.exact_run_count === 1 && workflowInvocation?.contention_mode_mention_count === 0 &&
       workflowInvocation?.run_contract_accepted === true && workflowInvocation?.has_job_condition === false &&
       workflowInvocation?.has_continue_on_error === false && workflowInvocation?.has_step_condition_or_continue === false,
     complete_verifier: flow?.complete_verifier,
     workflow_invocation: workflowInvocation
+  };
+}
+
+function buildAuthorizedM40ExitPositiveControl(validation) {
+  const flow = validation.evidence?.control_flow;
+  const authorized = flow?.authorized_m40_exit;
+  return {
+    id: 'CONTROL-AUTHORIZED-M40-LITERAL-EXIT-ONE',
+    intended_result: 'exactly one literal exit 1 follows authoritative M40 finalization, atomic sidecar commit, sentinel, and outer cleanup',
+    expected_exit_count: 1,
+    observed_exit_count: flow?.total_exit_count ?? null,
+    expected_literal_exit: 1,
+    observed_literal_exit: authorized?.exit_argument?.literal_value ?? null,
+    control_passed: validation.issues.length === 0 && flow?.root_exit_count === 1 &&
+      flow?.total_exit_count === 1 && flow?.root_return_count === 0 && authorized?.accepted === true &&
+      authorized?.literal_exit_one === true && authorized?.exact_guard_condition === true &&
+      authorized?.direct_terminal_body === true && authorized?.enclosing_guards === true &&
+      authorized?.terminal_writer?.accepted === true && authorized?.sidecar_atomic_commit?.accepted === true &&
+      authorized?.m40_finalization_order?.accepted === true && authorized?.outer_cleanup_before_terminal === true,
+    authorized_exit: authorized
   };
 }
 
@@ -2079,16 +2550,21 @@ const completeVerifierPositiveControl = buildCompleteVerifierPositiveControl(top
 if (!completeVerifierPositiveControl.control_passed) failures.push(
   `[${completeVerifierPositiveControl.id}] complete database verifier contract was not proven`
 );
+const authorizedM40ExitPositiveControl = buildAuthorizedM40ExitPositiveControl(topologyValidation);
+if (!authorizedM40ExitPositiveControl.control_passed) failures.push(
+  `[${authorizedM40ExitPositiveControl.id}] unique literal M40 failure exit contract was not proven`
+);
 const directThrowPositiveControl = buildDirectThrowPositiveControl(topologyValidation);
 if (!directThrowPositiveControl.control_passed) failures.push(
   `[${directThrowPositiveControl.id}] safety-critical throws lack direct executable clause ownership`
 );
 const legacyTopologyControls = legacyTopologyControlSpecs.map(runTopologyControl);
 const terminalControls = terminalControlSpecs.map(runTopologyControl);
+const authorizedExitControls = authorizedExitControlSpecs.map(runTopologyControl);
 const directThrowControls = directThrowControlSpecs.map(runTopologyControl);
 const safetyWrapperControls = safetyWrapperControlSpecs.map(runTopologyControl);
 const commandResolutionControls = commandResolutionControlSpecs.map(runTopologyControl);
-const allMutationControls = [...legacyTopologyControls, ...terminalControls, ...directThrowControls,
+const allMutationControls = [...legacyTopologyControls, ...terminalControls, ...authorizedExitControls, ...directThrowControls,
   ...safetyWrapperControls, ...commandResolutionControls];
 for (const control of allMutationControls) {
   if (!control.control_passed) failures.push(
@@ -2106,7 +2582,8 @@ for (const control of exactCodeSetComparatorControls) {
   if (!control.control_passed) failures.push(`[${control.id}] exact code-set comparator self-test failed`);
 }
 const allControlsPassed = positiveTopologyControl.control_passed && completeVerifierPositiveControl.control_passed &&
-  directThrowPositiveControl.control_passed && allMutationControls.every((control) => control.control_passed) &&
+  authorizedM40ExitPositiveControl.control_passed && directThrowPositiveControl.control_passed &&
+  allMutationControls.every((control) => control.control_passed) &&
   astBoundaryControls.every((control) => control.control_passed) && sourceOverrideControl.control_passed &&
   exactCodeSetComparatorControls.every((control) => control.control_passed);
 const restorationPassed = repositoryTopologyRestored();
@@ -2132,9 +2609,11 @@ if (failures.length > 0) {
     })),
     positive_control: positiveTopologyControl,
     complete_verifier_positive_control: completeVerifierPositiveControl,
+    authorized_m40_exit_positive_control: authorizedM40ExitPositiveControl,
     direct_throw_positive_control: directThrowPositiveControl,
     negative_controls: legacyTopologyControls,
     terminal_controls: terminalControls,
+    authorized_exit_controls: authorizedExitControls,
     direct_throw_controls: directThrowControls,
     safety_wrapper_controls: safetyWrapperControls,
     command_resolution_controls: commandResolutionControls,
@@ -2142,16 +2621,17 @@ if (failures.length > 0) {
     control_totals: {
       legacy_negative: legacyTopologyControls.length,
       terminal_negative: terminalControls.length,
+      authorized_exit_negative: authorizedExitControls.length,
       direct_throw_negative: directThrowControls.length,
       safety_wrapper_negative: safetyWrapperControls.length,
       command_resolution_negative: commandResolutionControls.length,
       ast_boundary: astBoundaryControls.length,
       exact_code_set_comparator: exactCodeSetComparatorControls.length,
       source_override: 1,
-      positive: 3,
-      total: legacyTopologyControls.length + terminalControls.length + directThrowControls.length +
+      positive: 4,
+      total: legacyTopologyControls.length + terminalControls.length + authorizedExitControls.length + directThrowControls.length +
         safetyWrapperControls.length + commandResolutionControls.length + astBoundaryControls.length +
-        exactCodeSetComparatorControls.length + 1 + 3
+        exactCodeSetComparatorControls.length + 1 + 4
     },
     ast_extraction: topologyValidation.evidence,
     ast_boundary_controls: astBoundaryControls,

@@ -139,6 +139,17 @@ function materializeCanonicalEol(canonicalText, style) {
   return style === 'CRLF' ? canonicalText.replaceAll('\n', '\r\n') : canonicalText;
 }
 
+function replaceBatch1SourceExactly(source, target, replacement) {
+  if (count(source, target) !== 1) throw new Error('source construction requires exactly one target');
+  const offset = source.indexOf(target);
+  const candidate = source.replace(target, () => replacement);
+  if (candidate === source || candidate !== source.slice(0, offset) + replacement + source.slice(offset + target.length)
+      || (replacement.length > 0 && count(candidate, replacement) !== count(source, replacement) + 1)) {
+    throw new Error('source construction exact splice failed');
+  }
+  return candidate;
+}
+
 function prepareMutationBytes(sourceBytes, spec, { targetMode = 'one', neutral = false } = {}) {
   const source = inspectSourceBytes(sourceBytes);
   if (!source.accepted) {
@@ -163,7 +174,7 @@ function prepareMutationBytes(sourceBytes, spec, { targetMode = 'one', neutral =
   const canonicalReplacement = neutral ? `${spec.search} ` : spec.replacement;
   const replacement = materializeCanonicalEol(canonicalReplacement, source.style);
   const replacementCountBefore = count(candidateSource, replacement);
-  const candidateText = candidateSource.replace(search, replacement);
+  const candidateText = replaceBatch1SourceExactly(candidateSource, search, replacement);
   const replacementCountAfter = count(candidateText, replacement);
   const targetCountAfter = count(candidateText, search);
   const candidateBytes = encodeUtf8(candidateText, source.has_bom);
@@ -457,6 +468,13 @@ function sameSourceShape(left, right) {
     left.bare_lf_count === right.bare_lf_count && left.bare_cr_count === right.bare_cr_count;
 }
 
+function isConsistentAcceptedSource(source) {
+  if (!source.accepted || !['LF', 'CRLF'].includes(source.style) || source.bare_cr_count !== 0) return false;
+  return source.style === 'LF'
+    ? source.crlf_count === 0 && source.bare_lf_count > 0
+    : source.crlf_count > 0 && source.bare_lf_count === 0;
+}
+
 function compactEolMutation(result) {
   return {
     accepted: result.accepted, classification: result.classification, matches: result.matches,
@@ -542,23 +560,47 @@ function runMixedEolControl() {
   });
 }
 
-function runProtectedMigrationRegressionControl(productionB1M1, poisonedBaselineControl) {
-  const expected = snapshots.get(migrationPath);
-  const current = readFileSync(resolve(repoRoot, migrationPath));
+function evaluateProtectedMigrationRegression({
+  id,
+  expected,
+  current,
+  productionB1M1,
+  poisonedBaselineControl,
+  gitDiff
+}) {
   const before = withoutSourceText(inspectSourceBytes(expected));
   const after = withoutSourceText(inspectSourceBytes(current));
   const targetProbe = prepareMutationBytes(current, cases[0]);
-  const gitDiff = spawnSync('git', ['diff', '--quiet', '--', migrationPath], {
-    cwd: repoRoot, encoding: 'utf8', windowsHide: true
-  });
-  const unchanged = current.equals(expected) && sameSourceShape(before, after);
+  const checks = {
+    source_consistent_and_supported: isConsistentAcceptedSource(before),
+    target_exactly_once: targetProbe.accepted && targetProbe.matches === 1,
+    target_materialized_for_source: targetProbe.materialized_target_eol === before.style,
+    candidate_changed: targetProbe.candidate_changed === true,
+    replacement_delta_exactly_one: targetProbe.replacement_delta === 1,
+    production_semantic_assertion: productionB1M1?.accepted === true &&
+      productionB1M1?.classification === 'SEMANTIC_ASSERTION' && productionB1M1?.matches === 1 &&
+      productionB1M1?.mutation_body_executed === true &&
+      productionB1M1?.mutation?.materialized_target_eol === before.style &&
+      productionB1M1?.mutation?.candidate_changed === true &&
+      productionB1M1?.mutation?.replacement_delta === 1,
+    production_restoration: productionB1M1?.restoration === 'PASS' && productionB1M1?.cleanup === 'PASS',
+    poisoned_baseline_fail_closed: poisonedBaselineControl?.control_passed === true,
+    restoration_original_bytes: current.equals(expected),
+    restoration_hash: after.sha256 === before.sha256,
+    restoration_byte_length: after.byte_length === before.byte_length,
+    restoration_eol_statistics: after.style === before.style &&
+      after.crlf_count === before.crlf_count && after.bare_lf_count === before.bare_lf_count &&
+      after.bare_cr_count === before.bare_cr_count,
+    git_diff_empty: gitDiff.status === 0 && !gitDiff.error && !gitDiff.signal &&
+      !(gitDiff.stdout ?? '') && !(gitDiff.stderr ?? '')
+  };
+  const unchanged = checks.restoration_original_bytes && checks.restoration_hash &&
+    checks.restoration_byte_length && checks.restoration_eol_statistics;
   return {
-    id: 'EOL-CONTROL-F-PROTECTED-MIGRATION-REGRESSION',
-    control_passed: before.style === 'CRLF' && before.bare_lf_count === 0 && before.bare_cr_count === 0 &&
-      targetProbe.accepted && targetProbe.matches === 1 && targetProbe.materialized_target_eol === 'CRLF' &&
-      productionB1M1?.accepted && productionB1M1?.classification === 'SEMANTIC_ASSERTION' &&
-      poisonedBaselineControl?.control_passed && unchanged && gitDiff.status === 0 &&
-      !gitDiff.error && !gitDiff.signal && !(gitDiff.stdout ?? '') && !(gitDiff.stderr ?? ''),
+    id,
+    control_passed: Object.values(checks).every(Boolean),
+    source_eol: before.style,
+    checks,
     before, after,
     canonical_target_probe: {
       accepted: targetProbe.accepted, classification: targetProbe.classification,
@@ -573,6 +615,93 @@ function runProtectedMigrationRegressionControl(productionB1M1, poisonedBaseline
     },
     git_diff: compactProcess(gitDiff),
     restoration: unchanged ? 'PASS' : 'FAIL', cleanup: 'PASS'
+  };
+}
+
+function runProtectedMigrationRegressionControl(productionB1M1, poisonedBaselineControl) {
+  const expected = snapshots.get(migrationPath);
+  const current = readFileSync(resolve(repoRoot, migrationPath));
+  const gitDiff = spawnSync('git', ['-c', 'core.safecrlf=false', 'diff', '--quiet', '--', migrationPath], {
+    cwd: repoRoot, encoding: 'utf8', windowsHide: true
+  });
+  return evaluateProtectedMigrationRegression({
+    id: 'EOL-CONTROL-H-ACTUAL-PROTECTED-MIGRATION',
+    expected,
+    current,
+    productionB1M1,
+    poisonedBaselineControl,
+    gitDiff
+  });
+}
+
+function runProtectedSourceStyleControl(style, poisonedBaselineControl) {
+  return withWorkspace(`protected-source-${style}`, (root) => {
+    writeConsistentEolVariant(root, style);
+    const expectedSnapshots = captureWorkspaceSnapshots(root);
+    const expected = expectedSnapshots.get(migrationPath);
+    const productionB1M1 = runMutationCase(root, cases[0], { expectedSnapshots });
+    const current = readFileSync(resolve(root, migrationPath));
+    const comparisonPath = resolve(root, '.tecm-protected-source-expected.sql');
+    writeFileSync(comparisonPath, expected);
+    const gitDiff = spawnSync('git', [
+      '-c', 'core.safecrlf=false', 'diff', '--no-index', '--quiet', '--', comparisonPath, resolve(root, migrationPath)
+    ], { cwd: root, encoding: 'utf8', windowsHide: true });
+    rmSync(comparisonPath, { force: true });
+    return evaluateProtectedMigrationRegression({
+      id: `EOL-CONTROL-F-PROTECTED-SOURCE-${style}`,
+      expected,
+      current,
+      productionB1M1,
+      poisonedBaselineControl,
+      gitDiff
+    });
+  });
+}
+
+function runProtectedRestorationFailureControls(productionB1M1, poisonedBaselineControl) {
+  const expected = snapshots.get(migrationPath);
+  const normalGitDiff = spawnSync('git', ['-c', 'core.safecrlf=false', 'diff', '--quiet', '--', migrationPath], {
+    cwd: repoRoot, encoding: 'utf8', windowsHide: true
+  });
+  const changedHash = Buffer.from(expected);
+  const asciiIndex = changedHash.findIndex((byte) => byte >= 0x41 && byte <= 0x7a);
+  if (asciiIndex < 0) throw new Error('protected restoration control requires one ASCII source byte');
+  changedHash[asciiIndex] = changedHash[asciiIndex] === 0x61 ? 0x62 : 0x61;
+  const source = inspectSourceBytes(expected);
+  const changedEolText = source.style === 'CRLF'
+    ? source.text.replace('\r\n', '\n')
+    : source.text.replace('\n', '\r\n');
+  if (changedEolText === source.text) throw new Error('protected restoration EOL control requires a newline');
+  const variants = [
+    { id: 'HASH', current: changedHash, failedCheck: 'restoration_hash', gitDiff: normalGitDiff },
+    { id: 'SIZE', current: Buffer.concat([expected, Buffer.from('x')]), failedCheck: 'restoration_byte_length', gitDiff: normalGitDiff },
+    { id: 'EOL', current: encodeUtf8(changedEolText, source.has_bom), failedCheck: 'restoration_eol_statistics', gitDiff: normalGitDiff },
+    { id: 'GIT-DIFF', current: expected, failedCheck: 'git_diff_empty', gitDiff: { status: 1, signal: null, error: null, stdout: '', stderr: '' } }
+  ];
+  const controls = variants.map((variant) => {
+    const evaluation = evaluateProtectedMigrationRegression({
+      id: `EOL-CONTROL-G-RESTORATION-${variant.id}-FAIL-CLOSED`,
+      expected,
+      current: variant.current,
+      productionB1M1,
+      poisonedBaselineControl,
+      gitDiff: variant.gitDiff
+    });
+    return {
+      id: evaluation.id,
+      control_passed: evaluation.control_passed === false && evaluation.checks[variant.failedCheck] === false,
+      expected_failed_check: variant.failedCheck,
+      evaluation,
+      restoration: 'PASS',
+      cleanup: 'PASS'
+    };
+  });
+  return {
+    id: 'EOL-CONTROL-G-RESTORATION-HASH-SIZE-EOL-GIT-DIFF-FAIL-CLOSED',
+    control_passed: controls.every((control) => control.control_passed),
+    controls,
+    restoration: 'PASS',
+    cleanup: 'PASS'
   };
 }
 
@@ -619,6 +748,8 @@ function runEolControls(productionB1M1, poisonedBaselineControl) {
   const zeroVariants = ['LF', 'CRLF'].map((style) => runEolTargetBoundaryVariant('EOL-CONTROL-C-ZERO', style, 'zero'));
   const multipleVariants = ['LF', 'CRLF'].map((style) => runEolTargetBoundaryVariant('EOL-CONTROL-D-MULTIPLE', style, 'multiple'));
   const mixed = runMixedEolControl();
+  const protectedSourceStyles = ['LF', 'CRLF'].map((style) => runProtectedSourceStyleControl(style, poisonedBaselineControl));
+  const restorationFailures = runProtectedRestorationFailureControls(productionB1M1, poisonedBaselineControl);
   const protectedRegression = runProtectedMigrationRegressionControl(productionB1M1, poisonedBaselineControl);
   const sourceShapeBoundaries = runSourceShapeBoundaryControls();
   return [
@@ -639,6 +770,8 @@ function runEolControls(productionB1M1, poisonedBaselineControl) {
       cleanup: multipleVariants.every((control) => control.cleanup === 'PASS') ? 'PASS' : 'FAIL'
     },
     mixed,
+    ...protectedSourceStyles,
+    restorationFailures,
     protectedRegression,
     sourceShapeBoundaries
   ];
@@ -657,7 +790,7 @@ function runPoisonedLaterBaselineControl() {
       beforeBaseline: () => {
         const text = readFileSync(unitPath, 'utf8');
         if (count(text, search) !== 1) throw new Error('poisoned later-baseline target must match exactly once');
-        writeFileSync(unitPath, text.replace(search, replacement));
+        writeFileSync(unitPath, replaceBatch1SourceExactly(text, search, replacement));
       },
       onMutationBody: () => writeFileSync(markerPath, 'executed')
     });
@@ -695,7 +828,7 @@ function runMountedFormBaselineControl() {
     const replacement = '  assert.match(actions, /__BATCH1_MOUNTED_FORM_BASELINE_CONTROL__/);';
     const text = original.toString('utf8');
     if (count(text, search) !== 1) throw new Error('mounted-form baseline control target must match exactly once');
-    writeFileSync(controlTestPath, text.replace(search, replacement));
+    writeFileSync(controlTestPath, replaceBatch1SourceExactly(text, search, replacement));
     const brokenBaseline = runCompleteBaseline(root);
     writeFileSync(controlTestPath, original);
     const restored = readFileSync(controlTestPath);

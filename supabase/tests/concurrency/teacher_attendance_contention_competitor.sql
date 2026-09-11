@@ -1,5 +1,6 @@
 \set ON_ERROR_STOP on
 \set VERBOSITY verbose
+select set_config('application_name', 'm40-competitor:' || :'race_name', false);
 
 \echo @@TECM_M40_PHASE@@session_setup
 set role authenticated;
