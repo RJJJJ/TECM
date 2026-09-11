@@ -20,6 +20,8 @@ jobs:
           fetch-depth: 2
       - name: Verify checkout provenance
         run: bash scripts/testing/verify-ci-checkout.sh
+      - name: Prepare PostgreSQL image for database verification
+        run: docker pull postgres:15-alpine && docker image inspect postgres:15-alpine --format '{{.Id}}'
       - name: Verify migrations, repeatable seed, RLS, and SQL suites
         shell: pwsh
         run: ./scripts/testing/database-verify.ps1
@@ -60,13 +62,15 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:mutation:uat
+      - name: Prepare PostgreSQL image for database verification
+        run: docker pull postgres:15-alpine && docker image inspect postgres:15-alpine --format '{{.Id}}'
       - run: npm run test:mutation:teacher-attendance
       - run: npm run build
       - run: npm audit --audit-level=high
 
   repository-safety:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:

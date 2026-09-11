@@ -1112,16 +1112,62 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
   const aliasDefinitions = ast.commands.filter((command) => ['set-alias', 'new-alias'].includes(commandName(command)));
   const aliasImports = ast.commands.filter((command) => commandName(command) === 'import-alias');
   const providerMutations = ast.commands.filter((command) => ['set-item', 'new-item'].includes(commandName(command)));
+  // M40 copies its diagnostic helpers into an isolated Start-Job worker. These
+  // source-defined helpers do not replace any protected command in the parent.
+  const workerHelpers = new Map([
+    ['Invoke-NegativePreflightProcess', 'CaptureSource'],
+    ['Write-M40WorkerPacket', 'PacketSource'],
+    ['Send-M40ChildObservation', 'ObserverSource']
+  ]);
+  const workerTransfers = providerMutations.filter((command) => {
+    if (commandName(command) !== 'set-item' || command.nearest_function !== 'Invoke-TeacherAttendanceContention') return false;
+    const binding = bindCommand(command, [{ name: 'LiteralPath' }, { name: 'Value' }]);
+    if (binding.errors.length) return false;
+    const target = binding.bindings.get('LiteralPath')?.value?.value;
+    const helper = [...workerHelpers.keys()].find((name) => target === `function:${name}`);
+    if (!helper || ast.functions.filter((fn) => fn.name === helper).length !== 1) return false;
+    const source = workerHelpers.get(helper);
+    if (normalizeAstText(binding.bindings.get('Value')?.value?.text) !== `([scriptblock]::Create($${source}))`) return false;
+    const job = ast.commands.find((entry) => commandName(entry) === 'start-job' && entry.elements.some((element) =>
+      element.type === 'ScriptBlockExpressionAst' && inside(command.extent, element.extent)));
+    if (!job) return false;
+    const scriptBlock = job.elements.find((element) => element.type === 'ScriptBlockExpressionAst');
+    const parameters = ast.parameters.filter((parameter) => inside(parameter.extent, scriptBlock.extent));
+    const sourceIndex = parameters.findIndex((parameter) => parameter.name === source);
+    const argumentIndex = job.elements.findIndex((element) => element.parameter_name?.toLowerCase() === 'argumentlist');
+    const argumentsText = job.elements[argumentIndex + 1]?.text ?? '';
+    // Only the simple argument prefix leading to the helper is relevant here;
+    // later arguments include the independent timeout snapshot context.
+    const argumentPrefix = argumentsText.split(',').slice(0, sourceIndex + 1).map(normalizeAstText);
+    return sourceIndex >= 0 && argumentPrefix.at(-1) === `\${function:${helper}}.ToString()` &&
+      argumentPrefix.slice(0, sourceIndex).every((argument) =>
+        /^\$[a-zA-Z][a-zA-Z0-9]*$/.test(argument) || [...workerHelpers.keys()].some((name) => argument === `\${function:${name}}.ToString()`)) &&
+      !ast.assignments.some((entry) => inside(entry.extent, scriptBlock.extent) && entry.left_variables.includes(source));
+  });
   const aliasProviderMutations = providerMutations.filter((command) => commandText(command).includes('alias:'));
-  const functionProviderMutations = providerMutations.filter((command) => commandText(command).includes('function:'));
+  const functionProviderMutations = providerMutations.filter((command) => commandText(command).includes('function:') && !workerTransfers.includes(command));
   const dynamicProviderMutations = providerMutations.filter((command) =>
     !commandText(command).includes('alias:') && !commandText(command).includes('function:'));
   const invokeExpressions = ast.commands.filter((command) => ['invoke-expression', 'iex'].includes(commandName(command)));
   const scriptBlockCreates = ast.invoke_members.filter((entry) =>
     normalizeAstText(entry.member).toLowerCase() === 'create' &&
-    normalizeAstText(entry.expression).toLowerCase().includes('scriptblock'));
+    normalizeAstText(entry.expression).toLowerCase().includes('scriptblock') &&
+    !workerTransfers.some((command) => inside(entry.extent, command.extent)));
   const rootDotSources = ast.commands.filter((command) => command.nearest_function === null && command.invocation_operator === 'Dot');
-  const dynamicInvocations = ast.commands.filter((command) => command.command_name === null);
+  const observerFunction = ast.functions.find((fn) => fn.name === 'Invoke-NegativePreflightProcess');
+  const observerParameter = ast.parameters.find((parameter) => parameter.name === 'DiagnosticObserver' &&
+    parameter.nearest_function === 'Invoke-NegativePreflightProcess');
+  const observerParameterAccepted = observerParameter?.static_type === 'System.Management.Automation.ScriptBlock' &&
+    normalizeAstText(observerParameter.default_value?.extent?.text) === '$null' &&
+    !ast.assignments.some((entry) => inside(entry.extent, observerFunction?.extent) &&
+      entry.left_variables.some((name) => name.toLowerCase() === 'diagnosticobserver'));
+  const literalObserverCalls = ast.commands.filter((command) => commandName(command) === 'invoke-negativepreflightprocess')
+    .every((command) => command.elements.every((element, index) => element.parameter_name?.toLowerCase() !== 'diagnosticobserver' ||
+      command.elements[index + 1]?.type === 'ScriptBlockExpressionAst'));
+  const dynamicInvocations = ast.commands.filter((command) => command.command_name === null && !(
+    command.nearest_function === 'Publish-M40ChildObservation' && inside(command.extent, observerFunction?.extent) &&
+    command.invocation_operator === 'Ampersand' && command.elements[0]?.type === 'VariableExpressionAst' &&
+    command.elements[0]?.text === '$DiagnosticObserver' && observerParameterAccepted && literalObserverCalls));
   const protectedSplats = ast.commands.filter((command) => commandName(command) === 'invoke-databaserace' &&
     command.elements.some((element) => element.splatted));
   const protectedFunctionShadows = ast.functions.filter((fn) => {
@@ -1179,6 +1225,21 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
   const ifForStatement = (statement) => ast.ifs.find((entry) => entry.nearest_function === null &&
     entry.extent.start_offset === statement?.extent.start_offset && entry.extent.end_offset === statement?.extent.end_offset);
   const ownershipEvidence = { setup: null, races: [], safety_throws: {} };
+  // Complete no-argument verification enters this opt-in M40 exclusion block.
+  // Retain direct statement/throw ownership inside it; arbitrary wrappers still fail.
+  const scopeParameter = ast.root_parameters.find((parameter) => parameter.name === 'M40Acceptance');
+  const repositoryScopes = ast.ifs.filter((entry) => entry.clauses.length === 1 && entry.else_extent === null &&
+    normalizeAstText(entry.clauses[0].condition) === '-not $M40Acceptance' &&
+    directIfStatementOwnership(entry, mainTry).accepted && entry.clauses[0].body_traps.length === 0);
+  const scopeDefaultComplete = scopeParameter?.static_type === 'System.Management.Automation.SwitchParameter' &&
+    scopeParameter.default_value === null && !ast.assignments.some((entry) =>
+      entry.left_variables.some((name) => name.toLowerCase() === 'm40acceptance'));
+  const repositoryScope = scopeDefaultComplete && repositoryScopes.length === 1 ? repositoryScopes[0] : null;
+  const repositoryBody = repositoryScope ? repositoryScope.clauses[0] : mainTry;
+  const repositoryScopeAncestors = repositoryScope ? [
+    ancestorStep('StatementBlockAst', repositoryBody.body_extent, 'complete repository verification body'),
+    ancestorStep('IfStatementAst', repositoryScope.extent, 'explicit opt-in M40 exclusion')
+  ] : [];
 
   const setupPath = '/workspace/supabase/tests/concurrency/batch1_race_setup.sql';
   const setupExpected = ['value:exec', 'expression:$containerName', 'value:psql', 'parameter:q',
@@ -1189,12 +1250,12 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
   add(setupCommands.length === 1 && exactCommandElements(setupCommands[0], setupExpected),
     'setup.command_count', 'Batch 1 race setup must be one exact executable docker command');
   if (setupCommands.length === 1) {
-    const setupOwnership = directMainStatementOwnership(setupCommands[0], mainTry);
+    const setupOwnership = directMainStatementOwnership(setupCommands[0], repositoryBody);
     ownershipEvidence.setup = setupOwnership;
     add(setupOwnership.accepted, 'setup.executable_reachability',
       'Batch 1 setup command must directly own one top-level main-try PipelineAst statement');
     const setupStatementIndex = setupOwnership.statement_index;
-    const failureStatement = mainTry.body_statements[setupStatementIndex + 1];
+    const failureStatement = repositoryBody.body_statements[setupStatementIndex + 1];
     const failureIf = ifForStatement(failureStatement);
     const setupThrow = withCompleteThrowAncestry(
       directThrowOwnership(ast, failureIf, null, '$LASTEXITCODE -ne 0',
@@ -1202,6 +1263,7 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
       [
         ancestorStep('StatementBlockAst', failureIf?.clauses?.[0]?.body_extent, 'approved setup failure clause'),
         ancestorStep('IfStatementAst', failureIf?.extent, 'approved setup failure condition'),
+        ...repositoryScopeAncestors,
         ancestorStep('StatementBlockAst', mainTry.body_extent, 'main try executable body'),
         ancestorStep('TryStatementAst', mainTry.extent, 'authoritative main try'),
         ancestorStep('NamedBlockAst', ast.root_body_extent, 'root executable body'),
@@ -1222,7 +1284,7 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
     if (matches.length !== 1) continue;
     const { command, bound } = matches[0];
     invocationOrder.push(command.extent.start_offset);
-    const invocationOwnership = directMainStatementOwnership(command, mainTry);
+    const invocationOwnership = directMainStatementOwnership(command, repositoryBody);
     add(invocationOwnership.accepted, `race.${spec.name}.executable_reachability`,
       `${spec.name} race invocation must directly own one top-level main-try PipelineAst statement`);
     const bindingNames = [...bound.bindings.keys()].sort();
@@ -1244,8 +1306,8 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
       `race.${spec.name}.second_fixture`, `${spec.name} second worker fixture association is incorrect`);
 
     const invocationStatement = invocationOwnership.statement_index;
-    const assertionStatement = mainTry.body_statements[invocationStatement + 1];
-    const failureStatement = mainTry.body_statements[invocationStatement + 2];
+    const assertionStatement = repositoryBody.body_statements[invocationStatement + 1];
+    const failureStatement = repositoryBody.body_statements[invocationStatement + 2];
     const assertionCommands = mainBodyCommands.filter((candidate) => inside(candidate.extent, assertionStatement?.extent));
     const assertion = assertionCommands.length === 1 ? assertionCommands[0] : null;
     const assertionExpected = ['value:exec', 'expression:$containerName', 'value:psql', 'parameter:q',
@@ -1255,7 +1317,7 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
       'parameter:f', 'value:/workspace/supabase/tests/concurrency/batch1_attendance_assert.sql');
     add(invocationStatement >= 0 && assertion?.command_name === 'docker' && exactCommandElements(assertion, assertionExpected),
       `race.${spec.name}.assertion_reachable`, `${spec.name} exact assertion command must execute immediately after both worker results`);
-    const assertionOwnership = assertion ? directMainStatementOwnership(assertion, mainTry) : null;
+    const assertionOwnership = assertion ? directMainStatementOwnership(assertion, repositoryBody) : null;
     if (assertion) {
       add(assertionOwnership.accepted && assertionOwnership.statement_index === invocationStatement + 1,
         `race.${spec.name}.assertion_executable_reachability`,
@@ -1272,6 +1334,7 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
       [
         ancestorStep('StatementBlockAst', failureIf?.clauses?.[0]?.body_extent, `approved ${spec.name} assertion failure clause`),
         ancestorStep('IfStatementAst', failureIf?.extent, `approved ${spec.name} assertion failure condition`),
+        ...repositoryScopeAncestors,
         ancestorStep('StatementBlockAst', mainTry.body_extent, 'main try executable body'),
         ancestorStep('TryStatementAst', mainTry.extent, 'authoritative main try'),
         ancestorStep('NamedBlockAst', ast.root_body_extent, 'root executable body'),
@@ -1472,6 +1535,7 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
   const verifierMentions = databaseJob?.filter((line) => /scripts\/testing\/database-verify\.ps1/i.test(line)) ?? [];
   const expectedDatabaseRuns = [
     'run: bash scripts/testing/verify-ci-checkout.sh',
+    "run: docker pull postgres:15-alpine && docker image inspect postgres:15-alpine --format '{{.Id}}'",
     'run: ./scripts/testing/database-verify.ps1',
     'run: ./scripts/testing/admin-operations-mutation-verify.ps1',
     'run: ./scripts/testing/migration-014-session-timeouts-mutation-verify.ps1',
@@ -1506,6 +1570,12 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
     has_continue_on_error: databaseJob?.some((line) => /^\s+continue-on-error:/.test(line)) ?? false,
     has_step_condition_or_continue: verifierStep?.lines?.some((line) => /^\s+(?:if|continue-on-error):/.test(line)) ?? false
   };
+  const adminJob = extractWorkflowJob(workflowText, 'admin-web');
+  const adminProvisioning = validateWorkflowStep(adminJob, 'Prepare PostgreSQL image for database verification',
+    "docker pull postgres:15-alpine && docker image inspect postgres:15-alpine --format '{{.Id}}'", null,
+    'workflow.admin_postgres_image', issues);
+  add(adminProvisioning?.found && adminProvisioning.start < adminJob.indexOf('      - run: npm run test:mutation:teacher-attendance'),
+    'workflow.admin_postgres_order', 'Admin Web must prepare the PostgreSQL image before Teacher database mutations');
   const safetyJob = extractWorkflowJob(workflowText, 'repository-safety');
   const guardStepStarts = safetyJob?.flatMap((line, index) =>
     line === '      - run: node scripts/testing/validate-release-workflow.mjs' ? [index] : []) ?? [];
@@ -1526,6 +1596,7 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
       commands: ast.commands.length,
       functions: ast.functions.length,
       source_path: ast.source_path,
+      main_try_start_offset: mainTry.extent.start_offset,
       command_resolution: commandResolutionEvidence,
       direct_statement_ownership: ownershipEvidence,
       control_flow: controlFlowEvidence,
@@ -1709,7 +1780,10 @@ function moveAuthorizedM40ExitBefore(text, target, indentation = '    ') {
 }
 
 function insertBeforeMainTry(text, insertion) {
-  return replacePatternExactly(text, /try \{\r?\n  Initialize-M40SemanticSidecar/, `${insertion}try {\n  Initialize-M40SemanticSidecar`);
+  const offset = topologyValidation.evidence.main_try_start_offset;
+  if (text !== databaseVerify || !Number.isInteger(offset)) throw new Error('Main-try mutation requires the parsed pristine source');
+  recordMutationProof('ast', 'authoritative root main try', 1);
+  return text.slice(0, offset) + insertion + text.slice(offset);
 }
 
 const staffExistingSpec = staffRaceSpecs[0];

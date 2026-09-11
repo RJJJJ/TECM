@@ -1161,7 +1161,13 @@ $escapeExits=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.In
   const s2 = ast.root_parameter_hash === '6ec13bee63f4a3ae7028bbe82d3f50aa394544c5e4daccbff2ddd7975bc8abbc'
     && ast.environment_access_hash === '2d7e2f0f48e82f5d56d0740ab8d0fd41f4a6b7f5bae3219f870895f8eb2ec1dc'
     && ast.alternative_exit_count === 0 && terminal.accepted && terminal.process.stderr_empty;
-  const repositoryWorkflow = sha256(Buffer.from(databaseJob)) === '7575f197f671d706c135fffee8b9bb1103a54e2111d89ff7fb31d9a038ba3300'
+  // C-class release integration checks the invocation, independently of image provisioning.
+  const verifierSteps = databaseJob.split(/^      - /m).filter((step) => step.includes('scripts/testing/database-verify.ps1'));
+  const verifierLines = verifierSteps[0]?.split('\n') ?? [];
+  const repositoryWorkflow = verifierSteps.length === 1
+    && verifierLines.filter((line) => line.includes('scripts/testing/database-verify.ps1'))
+      .every((line) => line === '        run: ./scripts/testing/database-verify.ps1')
+    && verifierLines.includes('        shell: pwsh')
     && countOccurrences(databaseJob, '        run: ./scripts/testing/database-verify.ps1\n') === 1
     && !/^\s*(?:if|continue-on-error):/m.test(databaseJob);
   if (!s2 || (requireRepositoryWorkflow && !repositoryWorkflow)) throw new VerifierError('S2_RELEASE_ESCAPE_HATCH', 'Verifier supervision contract or required release invocation changed', {
