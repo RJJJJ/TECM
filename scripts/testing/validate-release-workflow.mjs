@@ -96,6 +96,11 @@ function Convert-Extent([System.Management.Automation.Language.IScriptExtent]$Ex
   }
 }
 
+function Convert-CompactExtent([System.Management.Automation.Language.IScriptExtent]$Extent) {
+  if ($null -eq $Extent) { return $null }
+  [ordered]@{ start_offset = $Extent.StartOffset; end_offset = $Extent.EndOffset }
+}
+
 function Get-Ancestors([System.Management.Automation.Language.Ast]$Node) {
   $items = @()
   $current = $Node.Parent
@@ -179,6 +184,9 @@ function Convert-Condition([System.Management.Automation.Language.Ast]$Condition
 function Convert-Parameter([System.Management.Automation.Language.ParameterAst]$Parameter) {
   [ordered]@{
     name = $Parameter.Name.VariablePath.UserPath
+    owner_scriptblock_extent = if ($Parameter.Parent -is [System.Management.Automation.Language.ParamBlockAst]) {
+      Convert-CompactExtent $Parameter.Parent.Parent.Extent
+    } else { $null }
     static_type = if ($null -ne $Parameter.StaticType) { $Parameter.StaticType.FullName } else { $null }
     attributes = @($Parameter.Attributes | ForEach-Object {
       [ordered]@{
@@ -276,6 +284,65 @@ function Test-StaticExpression([System.Management.Automation.Language.Ast]$Node)
   return $dynamic.Count -eq 0
 }
 
+function Convert-Expression([System.Management.Automation.Language.Ast]$Node) {
+  if ($null -eq $Node) { return $null }
+  $result = [ordered]@{ type = $Node.GetType().Name; extent = Convert-CompactExtent $Node.Extent }
+  if ($Node -is [System.Management.Automation.Language.VariableExpressionAst]) {
+    $result.variable_path = $Node.VariablePath.UserPath
+    $result.splatted = $Node.Splatted
+  } elseif ($Node -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+    $result.value = $Node.Value
+  } elseif ($Node -is [System.Management.Automation.Language.ConstantExpressionAst]) {
+    $result.value = $Node.Value
+  } elseif ($Node -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+    $result.value = $Node.Value
+    $result.nested_extents = @($Node.NestedExpressions | ForEach-Object { Convert-CompactExtent $_.Extent })
+  } elseif ($Node -is [System.Management.Automation.Language.BinaryExpressionAst]) {
+    $result.operator = [string]$Node.Operator
+    $result.left = Convert-Expression $Node.Left
+    $result.right = Convert-Expression $Node.Right
+  } elseif ($Node -is [System.Management.Automation.Language.TypeExpressionAst]) {
+    $result.type_name = $Node.TypeName.FullName
+  } elseif ($Node -is [System.Management.Automation.Language.ArrayLiteralAst]) {
+    $result.items = @($Node.Elements | ForEach-Object { Convert-Expression $_ })
+  } elseif ($Node -is [System.Management.Automation.Language.ParenExpressionAst]) {
+    $result.inner = Convert-Expression $Node.Pipeline
+  } elseif ($Node -is [System.Management.Automation.Language.PipelineAst]) {
+    if ($Node.PipelineElements.Count -eq 1) { $result.inner = Convert-Expression $Node.PipelineElements[0] }
+  } elseif ($Node -is [System.Management.Automation.Language.CommandExpressionAst]) {
+    if ($Node.Redirections.Count -eq 0) { $result.inner = Convert-Expression $Node.Expression }
+  } elseif ($Node -is [System.Management.Automation.Language.MemberExpressionAst]) {
+    $result.expression = Convert-Expression $Node.Expression
+    $result.member = if ($Node.Member -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $Node.Member.Value } else { $null }
+    $result.is_static = $Node.Static
+    if ($Node -is [System.Management.Automation.Language.InvokeMemberExpressionAst]) {
+      $result.arguments = @()
+      if ($null -ne $Node.Arguments) {
+        $result.arguments = @(
+          $Node.Arguments |
+            ForEach-Object { Convert-Expression $_ }
+        )
+      }
+    }
+  } elseif ($Node -is [System.Management.Automation.Language.ScriptBlockExpressionAst]) {
+    $result.script_block_extent = Convert-CompactExtent $Node.ScriptBlock.Extent
+  }
+  $result
+}
+
+function Get-WrittenVariables([System.Management.Automation.Language.Ast]$Node) {
+  if ($Node -is [System.Management.Automation.Language.VariableExpressionAst]) { $Node.VariablePath.UserPath }
+  elseif ($Node -is [System.Management.Automation.Language.ArrayLiteralAst]) {
+    $Node.Elements | ForEach-Object { Get-WrittenVariables $_ }
+  } elseif ($Node -is [System.Management.Automation.Language.AttributedExpressionAst]) { Get-WrittenVariables $Node.Child }
+  elseif ($Node -is [System.Management.Automation.Language.IndexExpressionAst]) { Get-WrittenVariables $Node.Target }
+  elseif ($Node -is [System.Management.Automation.Language.MemberExpressionAst]) { Get-WrittenVariables $Node.Expression }
+  elseif ($Node -is [System.Management.Automation.Language.ParenExpressionAst]) { Get-WrittenVariables $Node.Pipeline }
+  elseif ($Node -is [System.Management.Automation.Language.PipelineAst] -and $Node.PipelineElements.Count -eq 1) {
+    Get-WrittenVariables $Node.PipelineElements[0]
+  } elseif ($Node -is [System.Management.Automation.Language.CommandExpressionAst]) { Get-WrittenVariables $Node.Expression }
+}
+
 function Convert-Element([System.Management.Automation.Language.CommandElementAst]$Element) {
   $value = $null
   if ($Element -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $value = $Element.Value }
@@ -287,6 +354,7 @@ function Convert-Element([System.Management.Automation.Language.CommandElementAs
       text = $Element.Argument.Extent.Text
       value = if ($Element.Argument -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $Element.Argument.Value } else { $null }
       static = Test-StaticExpression $Element.Argument
+      expression_ast = Convert-Expression $Element.Argument
       extent = Convert-Extent $Element.Argument.Extent
     }
   }
@@ -295,6 +363,7 @@ function Convert-Element([System.Management.Automation.Language.CommandElementAs
     text = $Element.Extent.Text
     value = $value
     static = Test-StaticExpression $Element
+    expression_ast = Convert-Expression $Element
     parameter_name = if ($Element -is [System.Management.Automation.Language.CommandParameterAst]) { $Element.ParameterName } else { $null }
     splatted = $Element -is [System.Management.Automation.Language.VariableExpressionAst] -and $Element.Splatted
     argument = $argument
@@ -393,6 +462,28 @@ try {
         extent = Convert-Extent $_.Extent
       }
     })
+  # Parameters are declarations, not writes. Export executable binding/mutation
+  # targets generically; the consumer chooses the protected variable names.
+  $variableWrites = @($ast.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.AssignmentStatementAst] -or
+    $node -is [System.Management.Automation.Language.ForEachStatementAst] -or
+    ($node -is [System.Management.Automation.Language.UnaryExpressionAst] -and
+      [string]$node.TokenKind -in @('PlusPlus','MinusMinus','PostfixPlusPlus','PostfixMinusMinus'))
+  }, $true) | ForEach-Object {
+    $node = $_
+    $target = if ($node -is [System.Management.Automation.Language.AssignmentStatementAst]) { $node.Left }
+      elseif ($node -is [System.Management.Automation.Language.ForEachStatementAst]) { $node.Variable }
+      else { $node.Child }
+    [ordered]@{
+      kind = $node.GetType().Name
+      target = Convert-Expression $target
+      operator = if ($node -is [System.Management.Automation.Language.AssignmentStatementAst]) { [string]$node.Operator } else { $null }
+      value = if ($node -is [System.Management.Automation.Language.AssignmentStatementAst]) { Convert-Expression $node.Right } else { $null }
+      variables = @(Get-WrittenVariables $target)
+      nearest_function = Get-NearestFunction $node
+      extent = Convert-CompactExtent $node.Extent
+    }
+  })
   $tries = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.TryStatementAst] }, $true) |
     ForEach-Object {
       [ordered]@{
@@ -426,6 +517,14 @@ try {
   })
   $parameters = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.ParameterAst] }, $true) |
     ForEach-Object { Convert-Parameter $_ })
+  $variableApiAccesses = @($ast.FindAll({ param($node)
+    if ($node -isnot [System.Management.Automation.Language.MemberExpressionAst]) { return $false }
+    if ($node.Member -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+      return $node.Member.Value -in @('PSVariable', 'SessionState')
+    }
+    return $node.Expression -is [System.Management.Automation.Language.VariableExpressionAst] -and
+      $node.Expression.VariablePath.UserPath -in @('ExecutionContext', 'PSCmdlet')
+  }, $true) | ForEach-Object { [ordered]@{ extent = Convert-CompactExtent $_.Extent } })
   $rootParameters = if ($null -ne $ast.ParamBlock) {
     @($ast.ParamBlock.Parameters | ForEach-Object { Convert-Parameter $_ })
   } else { @() }
@@ -475,7 +574,7 @@ try {
   $exits = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.ExitStatementAst] }, $true) |
     ForEach-Object { Convert-Terminal $_ })
   $payload = [ordered]@{
-    schema_version = 4
+    schema_version = 5
     source_path = [IO.Path]::GetFullPath($TargetPath)
     runtime = [ordered]@{
       edition = $PSVersionTable.PSEdition
@@ -490,6 +589,8 @@ try {
     ifs = $ifs
     throws = $throws
     assignments = $assignments
+    variable_writes = $variableWrites
+    variable_api_accesses = $variableApiAccesses
     tries = $tries
     parameters = $parameters
     root_parameters = $rootParameters
@@ -512,7 +613,7 @@ try {
     })
     root_extent = Convert-Extent $ast.Extent
   }
-  [Console]::Out.Write(($payload | ConvertTo-Json -Depth 24 -Compress))
+  [Console]::Out.Write(($payload | ConvertTo-Json -Depth 64 -Compress))
 } catch {
   [Console]::Error.Write('PowerShell AST extraction failed')
   exit 1
@@ -557,13 +658,13 @@ function parseAstProcessResult(result) {
   for (const key of ['source_path', 'runtime', 'parse_errors', 'commands', 'functions', 'ifs', 'throws', 'assignments',
     'tries', 'parameters', 'root_parameters', 'target_variable_references', 'target_unary_expressions',
     'target_foreach_variables', 'returns', 'exits', 'invoke_members', 'root_body_extent', 'root_statements',
-    'root_traps', 'root_extent']) {
+    'root_traps', 'root_extent', 'variable_writes', 'variable_api_accesses']) {
     if (!(key in document)) rejectAstBoundary('ast.incomplete_schema', `PowerShell AST output is incomplete: ${key}`);
   }
   if (document.runtime?.parser_type !== 'System.Management.Automation.Language.Parser') {
     rejectAstBoundary('ast.parser_identity', 'PowerShell AST parser identity is invalid');
   }
-  if (document.schema_version !== 4 ||
+  if (document.schema_version !== 5 ||
       !Array.isArray(document.parse_errors) || !Array.isArray(document.commands) || !Array.isArray(document.functions) ||
       !Array.isArray(document.ifs) || !Array.isArray(document.throws) || !Array.isArray(document.assignments) ||
       !Array.isArray(document.tries) || !Array.isArray(document.parameters) || !Array.isArray(document.root_parameters) ||
@@ -571,13 +672,18 @@ function parseAstProcessResult(result) {
       !Array.isArray(document.target_foreach_variables) || !Array.isArray(document.returns) || !Array.isArray(document.exits) ||
       !Array.isArray(document.invoke_members) || !Array.isArray(document.root_statements) ||
       !Array.isArray(document.root_traps) || !document.root_body_extent ||
+      !Array.isArray(document.variable_writes) || document.variable_writes.some(entry =>
+        !Array.isArray(entry?.variables) || !entry?.target?.extent || !entry?.extent) ||
+      !Array.isArray(document.variable_api_accesses) || document.variable_api_accesses.some(entry => !entry?.extent) ||
       document.functions.some((fn) => !Array.isArray(fn?.ancestors) || !Array.isArray(fn?.end_block_statements) ||
         !Array.isArray(fn?.end_block_traps) || !fn?.body_extent || !fn?.end_block_extent || !fn?.extent) ||
       document.tries.some((entry) => !Array.isArray(entry?.ancestors) || !Array.isArray(entry?.body_statements) || !entry?.extent) ||
       document.parameters.some((parameter) => !Array.isArray(parameter?.attributes) || parameter.attributes.some((attribute) =>
         !Array.isArray(attribute?.positional_arguments))) ||
       document.commands.some((command) =>
-        !Array.isArray(command?.ancestors) || command?.enclosing_pipeline?.type !== 'PipelineAst' ||
+        !Array.isArray(command?.ancestors) || !Array.isArray(command?.elements) ||
+        command.elements.some(element => !element?.expression_ast || (element.argument && !element.argument.expression_ast)) ||
+        command?.enclosing_pipeline?.type !== 'PipelineAst' ||
         !command?.enclosing_pipeline?.extent || !command?.extent) || document.ifs.some((entry) =>
         !Array.isArray(entry?.clauses) || !Array.isArray(entry?.else_statements) || entry.clauses.some((clause) =>
           !clause?.condition_ast || !Array.isArray(clause.condition_ast.variable_references) ||
@@ -1081,6 +1187,279 @@ const protectedCommandNames = [
 ];
 const protectedCommandNameSet = new Set(protectedCommandNames.map((name) => name.toLowerCase()));
 
+// These names come from AST VariablePath/UserPath or literal command arguments,
+// never from searching source text. Unknown qualifiers are not silently stripped.
+function canonicalVariable(value) {
+  if (typeof value !== 'string') return null;
+  let name = value.toLowerCase();
+  const qualifiedProvider = 'microsoft.powershell.core\\variable::';
+  if (name.startsWith(qualifiedProvider)) name = 'variable:' + name.slice(qualifiedProvider.length);
+  if (name.startsWith('variable::')) name = 'variable:' + name.slice('variable::'.length);
+  let provider = null;
+  if (name.startsWith('variable:')) {
+    provider = 'variable';
+    name = name.slice('variable:'.length);
+    if (name.startsWith('\\') || name.startsWith('/')) name = name.slice(1);
+  }
+  let scope = null;
+  const colon = name.indexOf(':');
+  if (colon >= 0) {
+    scope = name.slice(0, colon);
+    if (!new Set(['script', 'global', 'local', 'private']).has(scope)) return null;
+    name = name.slice(colon + 1);
+  }
+  if (!name || /[:*?\[\]]/.test(name)) return null;
+  return { name, scope, provider };
+}
+
+const variableCommandAliases = new Map([
+  ['sv', 'set-variable'], ['set', 'set-variable'], ['nv', 'new-variable'],
+  ['rv', 'remove-variable'], ['clv', 'clear-variable'], ['gv', 'get-variable'],
+  ['si', 'set-item'], ['ni', 'new-item'], ['ri', 'remove-item'], ['rm', 'remove-item'],
+  ['del', 'remove-item'], ['erase', 'remove-item'], ['rd', 'remove-item'], ['rmdir', 'remove-item'],
+  ['cli', 'clear-item'], ['copy', 'copy-item'], ['cp', 'copy-item'], ['cpi', 'copy-item'],
+  ['move', 'move-item'], ['mv', 'move-item'], ['mi', 'move-item'], ['ren', 'rename-item'], ['rni', 'rename-item'],
+  ['sc', 'set-content'], ['ac', 'add-content'], ['clc', 'clear-content'],
+  ['sp', 'set-itemproperty'], ['clp', 'clear-itemproperty'], ['rp', 'remove-itemproperty'],
+  ['gi', 'get-item'], ['sal', 'set-alias'], ['nal', 'new-alias'], ['ipal', 'import-alias']
+]);
+
+function canonicalCommand(command) {
+  const raw = String(command.command_name ?? '').toLowerCase();
+  const parts = raw.split('\\');
+  if (parts.length === 2) {
+    if (parts[0] !== 'microsoft.powershell.utility' && parts[0] !== 'microsoft.powershell.management') return raw;
+    return variableCommandAliases.get(parts[1]) ?? parts[1];
+  }
+  return variableCommandAliases.get(raw) ?? raw;
+}
+
+function unwrapExpression(node) {
+  const wrappers = new Set(['ParenExpressionAst', 'PipelineAst', 'CommandExpressionAst']);
+  while (node && wrappers.has(node.type) && node.inner) node = node.inner;
+  return node;
+}
+
+// Separate from bindCommand: its existing exact-spelling contracts are unchanged.
+function bindVariableArguments(command, parameters, switches = []) {
+  const bindings = new Map();
+  let positional = 0;
+  for (let i = 1; i < command.elements.length; i += 1) {
+    const element = command.elements[i];
+    if (element.splatted) return null;
+    let name;
+    let value = element.expression_ast;
+    if (element.type === 'CommandParameterAst') {
+      const key = String(element.parameter_name).toLowerCase();
+      const exact = parameters.find(name => name === key);
+      const choices = exact ? [exact] : parameters.filter(name => name.startsWith(key));
+      if (choices.length !== 1) return null;
+      name = choices[0];
+      if (switches.indexOf(name) >= 0) {
+        value = element.argument?.expression_ast ?? { type: 'ConstantExpressionAst', value: true };
+      } else {
+        value = element.argument?.expression_ast;
+        if (!value) {
+          const next = command.elements[++i];
+          if (!next || next.type === 'CommandParameterAst' || next.splatted) return null;
+          value = next.expression_ast;
+        }
+      }
+    } else {
+      while (bindings.has(parameters[positional])) positional += 1;
+      name = parameters[positional++];
+      if (!name) return null;
+    }
+    if (bindings.has(name)) return null;
+    bindings.set(name, unwrapExpression(value));
+  }
+  return bindings;
+}
+
+function literalTargets(node) {
+  node = unwrapExpression(node);
+  if (node?.type === 'ArrayLiteralAst') {
+    const values = node.items.map(literalTargets);
+    return values.some(value => value === null) ? null : values.flat();
+  }
+  return node?.type === 'StringConstantExpressionAst' ? [node.value] : null;
+}
+
+function isTemporaryFileTarget(ast, command, target) {
+  // LiteralPath does not expand wildcards. A proven suffix cannot name any of
+  // the protected variables. This preserves existing temporary-file cleanup.
+  if (target?.type !== 'VariableExpressionAst' || target.splatted) return false;
+  const name = canonicalVariable(target.variable_path)?.name;
+  const writes = ast.variable_writes.filter(write => write.nearest_function === command.nearest_function &&
+    write.variables.some(value => canonicalVariable(value)?.name === name));
+  if (writes.length !== 1 || writes[0].operator !== 'Equals' ||
+      writes[0].target.type !== 'VariableExpressionAst' || writes[0].extent.end_offset >= command.extent.start_offset) return false;
+  // A command-based rebinding would invalidate the single-assignment proof.
+  if (ast.commands.some(other => other !== command && other.nearest_function === command.nearest_function &&
+    (['set-variable','new-variable','clear-variable','remove-variable','get-variable','get-item',
+      'set-item','new-item','clear-item','remove-item','copy-item','move-item','rename-item',
+      'set-content','add-content','clear-content','set-itemproperty','new-itemproperty',
+      'clear-itemproperty','remove-itemproperty'].indexOf(canonicalCommand(other)) >= 0 ||
+      other.elements.some(element => ['outvariable','ov','errorvariable','ev','warningvariable','wv',
+        'informationvariable','iv','pipelinevariable','pv'].indexOf(String(element.parameter_name).toLowerCase()) >= 0)))) return false;
+  const value = unwrapExpression(writes[0].value);
+  if (value?.type === 'BinaryExpressionAst' && value.operator === 'Plus' &&
+      value.right?.type === 'StringConstantExpressionAst') return ['.tmp', '.pending'].indexOf(value.right.value) >= 0;
+  return value?.type === 'ExpandableStringExpressionAst' && ['.tmp', '.pending'].some(suffix =>
+    value.value.endsWith(suffix) && value.nested_extents.every(extent => extent.end_offset <= value.extent.end_offset - suffix.length - 1));
+}
+
+function inspectProtectedWrites(ast, provenance) {
+  const sourceNames = new Set(['capturesource', 'packetsource', 'observersource']);
+  const result = { m40: [], sources: [], unresolved: [...ast.variable_api_accesses] };
+  const record = (value, entry, providerOnly = false) => {
+    if (providerOnly && typeof value === 'string') {
+      const lower = value.toLowerCase();
+      // Keep relative names in the check: the current provider can be Variable.
+      if (['function:', 'alias:', 'env:', 'filesystem::'].some(prefix => lower.startsWith(prefix))) return;
+    }
+    const variable = canonicalVariable(value);
+    if (!variable) { result.unresolved.push(entry); return; }
+    if (variable.name === 'm40acceptance') result.m40.push(entry);
+    if (sourceNames.has(variable.name)) result.sources.push(entry);
+  };
+  for (const write of ast.variable_writes) {
+    for (const variable of write.variables) {
+      // Function/Environment-provider references are not variable bindings.
+      if (canonicalVariable(variable)) record(variable, write);
+    }
+  }
+  for (const parameter of ast.parameters) {
+    if (sourceNames.has(canonicalVariable(parameter.name)?.name) &&
+        !provenance.chains.some(chain => chain.accepted && sameExtent(chain.parameter, parameter.extent))) result.sources.push(parameter);
+  }
+  const variableMutators = new Set(['set-variable', 'new-variable', 'clear-variable', 'remove-variable']);
+  const providerMutators = new Set(['set-item', 'new-item', 'clear-item', 'remove-item', 'copy-item',
+    'move-item', 'rename-item', 'set-content', 'add-content', 'clear-content',
+    'set-itemproperty', 'new-itemproperty', 'clear-itemproperty', 'remove-itemproperty']);
+  const common = ['scope', 'description', 'option', 'visibility', 'passthru', 'force', 'whatif', 'confirm',
+    'include', 'exclude', 'filter', 'recurse', 'credential', 'type', 'encoding', 'nonewline',
+    'erroraction', 'warningaction', 'informationaction', 'progressaction', 'verbose', 'debug',
+    'errorvariable', 'warningvariable', 'informationvariable', 'outvariable', 'outbuffer', 'pipelinevariable'];
+  const switches = ['passthru', 'force', 'whatif', 'confirm', 'recurse', 'nonewline', 'verbose', 'debug'];
+  for (const command of ast.commands) {
+    const name = canonicalCommand(command);
+    const leaf = name.split('\\').at(-1);
+    const variable = variableMutators.has(leaf);
+    const provider = providerMutators.has(leaf);
+    const assignedGetter = ast.variable_writes.some(write => inside(command.extent, write.target.extent)) &&
+      (name === 'get-variable' || name === 'get-item');
+    if (variable || provider || assignedGetter) {
+      if (name !== leaf) { result.unresolved.push(command); continue; }
+      const names = variable || name === 'get-variable' ? ['name', 'value', ...common] :
+        ['path', 'value', 'literalpath', 'destination', 'newname', 'name', ...common];
+      const bound = bindVariableArguments(command, names, switches);
+      const target = bound?.get(variable || name === 'get-variable' ? 'name' : 'literalpath') ?? bound?.get('path');
+      const targets = literalTargets(target);
+      if (!targets) {
+        if (!(provider && name === 'remove-item' && bound?.has('literalpath') && isTemporaryFileTarget(ast, command, target)))
+          result.unresolved.push(command);
+        continue;
+      }
+      for (const target of targets) record(target, command, !variable && name !== 'get-variable');
+      if (bound.has('destination') || bound.has('newname')) {
+        const destinations = literalTargets(bound.get('destination') ?? bound.get('newname'));
+        if (!destinations) result.unresolved.push(command);
+        else for (const target of destinations) record(target, command, true);
+      }
+    }
+    // These common parameters bind output into variables without an assignment AST.
+    for (let i = 1; i < command.elements.length; i += 1) {
+      const element = command.elements[i];
+      const key = String(element.parameter_name ?? '').toLowerCase();
+      if (!new Set(['outvariable','ov','errorvariable','ev','warningvariable','wv',
+        'informationvariable','iv','pipelinevariable','pv']).has(key)) continue;
+      const targets = literalTargets(element.argument?.expression_ast ?? command.elements[i + 1]?.expression_ast);
+      if (!targets) result.unresolved.push(command);
+      else for (const target of targets) record(target.startsWith('+') ? target.slice(1) : target, command);
+    }
+  }
+  return result;
+}
+
+const approvedWorkerSources = new Map([
+  ['invoke-negativepreflightprocess', { source: 'capturesource', body: 'ff0ee094a24687c9509e7992ef9fede2144cfcf41ae0eb4b4f71fe884107f700' }],
+  ['write-m40workerpacket', { source: 'packetsource', body: '3d47e40217bbc29d5bc54621bb8666b35c27dcdbecee739e18de2c645ea711e2' }],
+  ['send-m40childobservation', { source: 'observersource', body: '2bf070b6906394260b9a63da0dcc008354e5bbaf7e67f938ccb1eeb9eb4c5df2' }]
+]);
+
+const compactExtent = extent => extent ? { start_offset: extent.start_offset, end_offset: extent.end_offset } : null;
+
+function inspectWorkerProvenance(ast) {
+  const transfers = [];
+  const chains = [];
+  for (const [helper, contract] of approvedWorkerSources) {
+    const definitions = ast.functions.filter(fn => canonicalVariable(fn.name)?.name === helper);
+    const definition = definitions[0];
+    const definitionAccepted = definitions.length === 1 && ast.root_statements.some(statement =>
+      statement.type === 'FunctionDefinitionAst' && sameExtent(statement.extent, definition.extent)) &&
+      sha256(Buffer.from(definition.body_extent.text.replaceAll('\r\n', '\n'))) === contract.body;
+    const installs = ast.commands.filter(command => {
+      if (canonicalCommand(command) !== 'set-item') return false;
+      const binding = bindVariableArguments(command, ['literalpath', 'value']);
+      const targets = literalTargets(binding?.get('literalpath'));
+      return targets?.length === 1 && targets[0].toLowerCase() === `function:${helper}`;
+    });
+    const install = installs[0];
+    const jobs = ast.commands.filter(command => canonicalCommand(command) === 'start-job' &&
+      command.elements.some(element => element.type === 'ScriptBlockExpressionAst' && inside(install?.extent, element.extent)));
+    const job = jobs[0];
+    const jobBinding = job && bindVariableArguments(job, ['name', 'scriptblock', 'argumentlist']);
+    const block = jobBinding?.get('scriptblock');
+    const args = jobBinding?.get('argumentlist');
+    const parameters = block?.script_block_extent ? ast.parameters.filter(parameter =>
+      sameExtent(parameter.owner_scriptblock_extent, block.script_block_extent))
+      .sort((a, b) => a.extent.start_offset - b.extent.start_offset) : [];
+    const positions = parameters.flatMap((parameter, index) =>
+      canonicalVariable(parameter.name)?.name === contract.source ? [index] : []);
+    const parameter = parameters[positions[0]];
+    const argument = unwrapExpression(args?.items?.[positions[0]]);
+    const supplied = argument?.type === 'InvokeMemberExpressionAst' && !argument.is_static &&
+      argument.member?.toLowerCase() === 'tostring' && argument.arguments?.length === 0 &&
+      argument.expression?.type === 'VariableExpressionAst' && !argument.expression.splatted &&
+      argument.expression.variable_path.toLowerCase() === `function:${helper}`;
+    const installBinding = install && bindVariableArguments(install, ['literalpath', 'value']);
+    const create = unwrapExpression(installBinding?.get('value'));
+    const reference = create?.arguments?.[0];
+    const sourceReference = canonicalVariable(reference?.variable_path);
+    const created = create?.type === 'InvokeMemberExpressionAst' && create.is_static &&
+      create.member?.toLowerCase() === 'create' && create.expression?.type === 'TypeExpressionAst' &&
+      ['scriptblock', 'system.management.automation.scriptblock'].indexOf(create.expression.type_name.toLowerCase()) >= 0 &&
+      create.arguments.length === 1 && reference.type === 'VariableExpressionAst' && !reference.splatted &&
+      sourceReference?.name === contract.source && [null, 'local', 'private'].indexOf(sourceReference.scope) >= 0;
+    const accepted = definitionAccepted && installs.length === 1 && jobs.length === 1 &&
+      canonicalVariable(job.nearest_function)?.name === 'invoke-teacherattendancecontention' &&
+      args?.type === 'ArrayLiteralAst' && args.items.length === parameters.length && positions.length === 1 &&
+      parameter.default_value === null && parameter.attributes.length === 0 && supplied && created &&
+      definition.extent.end_offset < job.extent.start_offset && parameter.extent.end_offset < create.extent.start_offset;
+    if (accepted) transfers.push(install);
+    chains.push({ helper, source: contract.source, accepted: Boolean(accepted),
+      definition: compactExtent(definition?.extent), parameter: compactExtent(parameter?.extent),
+      argument: compactExtent(argument?.extent), installation: compactExtent(install?.extent) });
+  }
+  const shadows = ast.functions.filter(fn => ['start-job', 'set-item'].indexOf(canonicalVariable(fn.name)?.name) >= 0);
+  const functionWrites = ast.variable_writes.filter(write => write.variables.some(value => {
+    const path = value.toLowerCase();
+    const name = path.startsWith('function:') ? canonicalVariable(path.slice('function:'.length))?.name : null;
+    return approvedWorkerSources.has(name) || ['start-job', 'set-item'].indexOf(name) >= 0;
+  }));
+  const otherInstallers = ast.commands.filter(command => {
+    if (transfers.indexOf(command) >= 0 ||
+        ['set-item','new-item','clear-item','remove-item','copy-item','move-item','rename-item',
+          'set-content','add-content','clear-content','set-itemproperty','new-itemproperty',
+          'clear-itemproperty','remove-itemproperty'].indexOf(canonicalCommand(command)) < 0) return false;
+    return command.elements.some(element => literalTargets(element.argument?.expression_ast ?? element.expression_ast)?.some(value =>
+      value.toLowerCase().startsWith('function:') && approvedWorkerSources.has(canonicalVariable(value.slice('function:'.length))?.name)));
+  });
+  return { transfers, chains, accepted: chains.every(chain => chain.accepted) &&
+    shadows.length === 0 && functionWrites.length === 0 && otherInstallers.length === 0 };
+}
+
 function validateBatch1RaceTopology(databasePath, workflowText) {
   const issues = [];
   const add = (condition, code, message) => { if (!condition) issues.push({ code, message }); };
@@ -1107,43 +1486,18 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
   add(waitFunctions.length === 1 && ['Jobs', 'TimeoutSeconds'].every((name, index) => waitFunctions[0]?.parameters[index] === name) &&
     waitFunctions[0]?.parameters.length === 2, 'helper.wait_contract', 'Wait-DatabaseRaceJobs must retain its exact contract');
 
-  const commandName = (command) => String(command.command_name ?? '').toLowerCase();
+  const commandName = canonicalCommand;
   const commandText = (command) => normalizeAstText(command.extent?.text).toLowerCase();
   const aliasDefinitions = ast.commands.filter((command) => ['set-alias', 'new-alias'].includes(commandName(command)));
   const aliasImports = ast.commands.filter((command) => commandName(command) === 'import-alias');
   const providerMutations = ast.commands.filter((command) => ['set-item', 'new-item'].includes(commandName(command)));
-  // M40 copies its diagnostic helpers into an isolated Start-Job worker. These
-  // source-defined helpers do not replace any protected command in the parent.
-  const workerHelpers = new Map([
-    ['Invoke-NegativePreflightProcess', 'CaptureSource'],
-    ['Write-M40WorkerPacket', 'PacketSource'],
-    ['Send-M40ChildObservation', 'ObserverSource']
-  ]);
-  const workerTransfers = providerMutations.filter((command) => {
-    if (commandName(command) !== 'set-item' || command.nearest_function !== 'Invoke-TeacherAttendanceContention') return false;
-    const binding = bindCommand(command, [{ name: 'LiteralPath' }, { name: 'Value' }]);
-    if (binding.errors.length) return false;
-    const target = binding.bindings.get('LiteralPath')?.value?.value;
-    const helper = [...workerHelpers.keys()].find((name) => target === `function:${name}`);
-    if (!helper || ast.functions.filter((fn) => fn.name === helper).length !== 1) return false;
-    const source = workerHelpers.get(helper);
-    if (normalizeAstText(binding.bindings.get('Value')?.value?.text) !== `([scriptblock]::Create($${source}))`) return false;
-    const job = ast.commands.find((entry) => commandName(entry) === 'start-job' && entry.elements.some((element) =>
-      element.type === 'ScriptBlockExpressionAst' && inside(command.extent, element.extent)));
-    if (!job) return false;
-    const scriptBlock = job.elements.find((element) => element.type === 'ScriptBlockExpressionAst');
-    const parameters = ast.parameters.filter((parameter) => inside(parameter.extent, scriptBlock.extent));
-    const sourceIndex = parameters.findIndex((parameter) => parameter.name === source);
-    const argumentIndex = job.elements.findIndex((element) => element.parameter_name?.toLowerCase() === 'argumentlist');
-    const argumentsText = job.elements[argumentIndex + 1]?.text ?? '';
-    // Only the simple argument prefix leading to the helper is relevant here;
-    // later arguments include the independent timeout snapshot context.
-    const argumentPrefix = argumentsText.split(',').slice(0, sourceIndex + 1).map(normalizeAstText);
-    return sourceIndex >= 0 && argumentPrefix.at(-1) === `\${function:${helper}}.ToString()` &&
-      argumentPrefix.slice(0, sourceIndex).every((argument) =>
-        /^\$[a-zA-Z][a-zA-Z0-9]*$/.test(argument) || [...workerHelpers.keys()].some((name) => argument === `\${function:${name}}.ToString()`)) &&
-      !ast.assignments.some((entry) => inside(entry.extent, scriptBlock.extent) && entry.left_variables.includes(source));
-  });
+  const workerProvenance = inspectWorkerProvenance(ast);
+  const workerTransfers = workerProvenance.transfers;
+  const protectedWrites = inspectProtectedWrites(ast, workerProvenance);
+  add(protectedWrites.m40.length === 0, 'scope.m40_acceptance_write', 'M40Acceptance must not be rewritten after parameter binding');
+  add(protectedWrites.sources.length === 0, 'helper.source_write', 'Worker helper source parameters must not be rewritten');
+  add(protectedWrites.unresolved.length === 0, 'variable.target_unknown', 'Variable-mutator targets must be statically provable');
+  add(workerProvenance.accepted, 'helper.source_provenance', 'Worker helper sources must retain their unique approved AST provenance');
   const aliasProviderMutations = providerMutations.filter((command) => commandText(command).includes('alias:'));
   const functionProviderMutations = providerMutations.filter((command) => commandText(command).includes('function:') && !workerTransfers.includes(command));
   const dynamicProviderMutations = providerMutations.filter((command) =>
@@ -1227,13 +1581,20 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
   const ownershipEvidence = { setup: null, races: [], safety_throws: {} };
   // Complete no-argument verification enters this opt-in M40 exclusion block.
   // Retain direct statement/throw ownership inside it; arbitrary wrappers still fail.
-  const scopeParameter = ast.root_parameters.find((parameter) => parameter.name === 'M40Acceptance');
-  const repositoryScopes = ast.ifs.filter((entry) => entry.clauses.length === 1 && entry.else_extent === null &&
-    normalizeAstText(entry.clauses[0].condition) === '-not $M40Acceptance' &&
-    directIfStatementOwnership(entry, mainTry).accepted && entry.clauses[0].body_traps.length === 0);
-  const scopeDefaultComplete = scopeParameter?.static_type === 'System.Management.Automation.SwitchParameter' &&
-    scopeParameter.default_value === null && !ast.assignments.some((entry) =>
-      entry.left_variables.some((name) => name.toLowerCase() === 'm40acceptance'));
+  const scopeParameters = ast.root_parameters.filter(parameter => canonicalVariable(parameter.name)?.name === 'm40acceptance');
+  const scopeParameter = scopeParameters[0];
+  const repositoryScopes = ast.ifs.filter(entry => {
+    const condition = entry.clauses[0]?.condition_ast;
+    return entry.clauses.length === 1 && entry.else_extent === null &&
+      condition?.expression_type === 'UnaryExpressionAst' &&
+      exactArray(condition.unary_operators, ['Not']) && condition.binary_operators.length === 0 &&
+      condition.dynamic_node_types.length === 0 && condition.literals.length === 0 &&
+      condition.variable_references.length === 1 && canonicalVariable(condition.variable_references[0])?.name === 'm40acceptance' &&
+      directIfStatementOwnership(entry, mainTry).accepted && entry.clauses[0].body_traps.length === 0;
+  });
+  // Structural ownership remains available for diagnostics even when a write is rejected.
+  const scopeDefaultComplete = scopeParameters.length === 1 &&
+    scopeParameter.static_type === 'System.Management.Automation.SwitchParameter' && scopeParameter.default_value === null;
   const repositoryScope = scopeDefaultComplete && repositoryScopes.length === 1 ? repositoryScopes[0] : null;
   const repositoryBody = repositoryScope ? repositoryScope.clauses[0] : mainTry;
   const repositoryScopeAncestors = repositoryScope ? [
@@ -1598,6 +1959,8 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
       source_path: ast.source_path,
       main_try_start_offset: mainTry.extent.start_offset,
       command_resolution: commandResolutionEvidence,
+      protected_variable_writes: protectedWrites,
+      worker_source_provenance: workerProvenance.chains,
       direct_statement_ownership: ownershipEvidence,
       control_flow: controlFlowEvidence,
       workflow_invocation: workflowEvidence
@@ -2296,7 +2659,7 @@ const commandResolutionControlSpecs = [
   ['CONTROL-COMMAND-ROOT-DOT-SOURCE', 'command.root_dot_source', "  . './shadow.ps1'\n"],
   ['CONTROL-COMMAND-DOCKER-FUNCTION-SHADOW', 'command.protected_function_shadow', "  function docker { Write-Host 'shadow' }\n"]
 ].map(([id, code, insertion]) => ({
-  id, expectedCodes: [code], requiredTokens: mandatoryBatch1Tokens,
+  id, expectedCodes: id === 'CONTROL-COMMAND-DYNAMIC-PROVIDER' ? [code, 'variable.target_unknown'] : [code], requiredTokens: mandatoryBatch1Tokens,
   mutate: (fixture) => ({ ...fixture, database: insertBeforeBatch1Setup(fixture.database, insertion) })
 }));
 
@@ -2317,6 +2680,25 @@ commandResolutionControlSpecs.push({
     replaceExactly(segment, '  Invoke-DatabaseRace `', "  $raceCommand = 'Invoke-' + 'DatabaseRace'\n  & $raceCommand `"),
   { includeAssertion: false }) })
 });
+
+// These six fixtures use the existing disposable production-validator runner.
+const protectedVariableControlSpecs = [
+  ['CONTROL-M40-SCOPED-WRITE', 'scope.m40_acceptance_write', '$script:M40Acceptance = $true', 'main'],
+  ['CONTROL-M40-SET-VARIABLE', 'scope.m40_acceptance_write', 'Set-Variable -Name M40Acceptance -Value $true', 'main'],
+  ['CONTROL-M40-SET-VARIABLE-CASE', 'scope.m40_acceptance_write', 'Set-Variable -Name m40acceptance -Value $true', 'main'],
+  ['CONTROL-CAPTURE-CASE-WRITE', 'helper.source_write', "$capturesource = 'Write-Host REVIEW_INJECTED'", 'worker'],
+  ['CONTROL-CAPTURE-SCOPED-WRITE', 'helper.source_write', "$script:CaptureSource = 'Write-Host REVIEW_INJECTED'", 'worker'],
+  ['CONTROL-CAPTURE-SET-VARIABLE', 'helper.source_write', "Set-Variable -Name CaptureSource -Value 'Write-Host REVIEW_INJECTED'", 'worker']
+].map(([id, code, insertion, scope]) => ({
+  id, expectedCodes: [code], requiredTokens: mandatoryBatch1Tokens,
+  mutate: fixture => {
+    const anchor = scope === 'main' ? '  if (-not $M40Acceptance) {' :
+      "            Set-Item -LiteralPath 'function:Invoke-NegativePreflightProcess' -Value ([scriptblock]::Create($CaptureSource))";
+    const indent = scope === 'main' ? '  ' : '            ';
+    return { ...fixture, database: replaceExactly(fixture.database, anchor, indent + insertion + '\n' + anchor) };
+  }
+}));
+commandResolutionControlSpecs.push(...protectedVariableControlSpecs);
 
 const exactControlCodeSets = new Map([
   ['CONTROL-MISSING-STAFF-EXISTING', ['race.order', 'race.staff-existing.invocation_count']],
@@ -2375,10 +2757,10 @@ for (const spec of [...legacyTopologyControlSpecs, ...terminalControlSpecs, ...d
 
 function runAstBoundaryControls() {
   const validObject = {
-    schema_version: 4,
+    schema_version: 5,
     source_path: databaseVerifyPath,
     runtime: { parser_type: 'System.Management.Automation.Language.Parser' },
-    parse_errors: [], commands: [], functions: [], ifs: [], throws: [], assignments: [], tries: [],
+    parse_errors: [], commands: [], functions: [], ifs: [], throws: [], assignments: [], variable_writes: [], variable_api_accesses: [], tries: [],
     parameters: [], root_parameters: [], target_variable_references: [], target_unary_expressions: [],
     target_foreach_variables: [], returns: [], exits: [], invoke_members: [],
     root_body_extent: { start_offset: 0, end_offset: 0 }, root_statements: [], root_traps: [],

@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
+import { repositoryWorkflowIsValid } from './repository-workflow-contract.mjs';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
 const m40AcceptanceMode = process.argv.includes('--m40-acceptance');
@@ -1156,20 +1157,18 @@ $escapeExits=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.In
   let workflow = '', workflowReadError = null;
   try { workflow = readFileSync(resolve(repoRoot,'.github/workflows/release-validation.yml'),'utf8').replace(/\r\n/g,'\n'); }
   catch (error) { workflowReadError = error.code ?? 'WORKFLOW_READ_FAILED'; }
-  const databaseJob = workflow.match(/^  database:\n[\s\S]*?(?=^  [a-z][a-z-]*:\n)/m)?.[0] ?? '';
   // Pin the explicit opt-in M40 scope; all existing timeout parameters remain unchanged.
   const s2 = ast.root_parameter_hash === '6ec13bee63f4a3ae7028bbe82d3f50aa394544c5e4daccbff2ddd7975bc8abbc'
     && ast.environment_access_hash === '2d7e2f0f48e82f5d56d0740ab8d0fd41f4a6b7f5bae3219f870895f8eb2ec1dc'
     && ast.alternative_exit_count === 0 && terminal.accepted && terminal.process.stderr_empty;
   // C-class release integration checks the invocation, independently of image provisioning.
-  const verifierSteps = databaseJob.split(/^      - /m).filter((step) => step.includes('scripts/testing/database-verify.ps1'));
-  const verifierLines = verifierSteps[0]?.split('\n') ?? [];
-  const repositoryWorkflow = verifierSteps.length === 1
-    && verifierLines.filter((line) => line.includes('scripts/testing/database-verify.ps1'))
-      .every((line) => line === '        run: ./scripts/testing/database-verify.ps1')
-    && verifierLines.includes('        shell: pwsh')
-    && countOccurrences(databaseJob, '        run: ./scripts/testing/database-verify.ps1\n') === 1
-    && !/^\s*(?:if|continue-on-error):/m.test(databaseJob);
+  let repositoryWorkflow;
+  try {
+    repositoryWorkflow = repositoryWorkflowIsValid(workflow);
+  } catch (error) {
+    if (error.code !== 'S2_YAML_PARSER_UNAVAILABLE') throw error;
+    throw new VerifierError('S2_YAML_PARSER_UNAVAILABLE', 'Run npm --prefix admin-web ci');
+  }
   if (!s2 || (requireRepositoryWorkflow && !repositoryWorkflow)) throw new VerifierError('S2_RELEASE_ESCAPE_HATCH', 'Verifier supervision contract or required release invocation changed', {
     ast, terminal_accepted: terminal.accepted });
   const controls = [{ id: 'S1', passed: true, supervisory_seconds: 30, holder_seconds: 10,

@@ -1,10 +1,18 @@
 # M40 reliability and acceptance
 
+Before root-level commands that execute S2, install the pinned admin-web
+development dependencies with `npm --prefix admin-web ci`. CI already runs
+`npm ci` in the admin-web job before the Teacher command. The verifier never
+installs dependencies or accesses the network. S2 loads YAML lazily; a missing
+or incorrect parser fails with `S2_YAML_PARSER_UNAVAILABLE` and the installation
+instruction. Entries that do not execute S2 do not load this parser.
+
 Run the complete M40 acceptance entry from the repository root in the existing
 local disposable Docker environment. The evidence root must be an existing
 private directory outside the repository:
 
 ```powershell
+npm --prefix admin-web ci
 $env:TECM_M40_EVIDENCE_ROOT = 'C:\private\m40-validation'
 node scripts/testing/teacher-attendance-history-mutation-verify.mjs --m40-acceptance
 ```
@@ -179,6 +187,7 @@ No callable entry depended on the removed parser.
 Useful development commands:
 
 ```powershell
+npm --prefix admin-web ci
 pwsh -NoProfile -File scripts/testing/m40-packet-controls.ps1
 node scripts/testing/teacher-attendance-history-mutation-verify.mjs --r4-controls
 node scripts/testing/teacher-attendance-history-mutation-verify.mjs --m40-safety-controls
