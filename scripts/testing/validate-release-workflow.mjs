@@ -9,6 +9,14 @@ if (process.argv.slice(2).length > 0) {
   process.exit(2);
 }
 
+class AstBoundaryError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'AstBoundaryError';
+    this.code = code;
+  }
+}
+
 const repositoryRoot = resolve(import.meta.dirname, '../..');
 const workflowPath = resolve(repositoryRoot, '.github/workflows/release-validation.yml');
 const boundaryPath = resolve(repositoryRoot, 'scripts/testing/verify-local-supabase.sh');
@@ -17,11 +25,9 @@ const fixtureEnvironmentPath = resolve(repositoryRoot, 'scripts/testing/prepare-
 const databaseVerifyPath = resolve(repositoryRoot, 'scripts/testing/database-verify.ps1');
 const batch1MutationPath = resolve(repositoryRoot, 'scripts/testing/batch1-release-blockers-mutation-verify.mjs');
 const batch1SqlPath = resolve(repositoryRoot, 'supabase/tests/020_batch1_release_blockers.sql');
-const workflow = readFileSync(workflowPath, 'utf8');
 const boundary = readFileSync(boundaryPath, 'utf8');
 const identity = readFileSync(identityPath, 'utf8');
 const fixtureEnvironment = readFileSync(fixtureEnvironmentPath, 'utf8');
-const databaseVerify = readFileSync(databaseVerifyPath, 'utf8');
 const batch1Mutation = readFileSync(batch1MutationPath, 'utf8');
 const batch1Sql = readFileSync(batch1SqlPath, 'utf8');
 const failures = [];
@@ -40,6 +46,9 @@ const protectedTopologyPaths = [
 ];
 const protectedTopologySnapshots = new Map(protectedTopologyPaths.map((path) => [path, readFileSync(path)]));
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const databaseSourceSnapshot = createSourceSnapshot(databaseVerifyPath, protectedTopologySnapshots.get(databaseVerifyPath));
+const databaseVerify = databaseSourceSnapshot.text;
+const workflow = createSourceSnapshot(workflowPath, protectedTopologySnapshots.get(workflowPath)).text;
 
 const staffRaceSpecs = [
   {
@@ -369,8 +378,17 @@ function Convert-Element([System.Management.Automation.Language.CommandElementAs
 try {
   $tokens = $null
   $parseErrors = $null
-  $ast = [System.Management.Automation.Language.Parser]::ParseFile(
-    [IO.Path]::GetFullPath($TargetPath), [ref]$tokens, [ref]$parseErrors
+  $inputBytes = [IO.MemoryStream]::new()
+  try {
+    [Console]::OpenStandardInput().CopyTo($inputBytes)
+    $sourceBytes = $inputBytes.ToArray()
+  } finally { $inputBytes.Dispose() }
+  $bomLength = if ($sourceBytes.Length -ge 3 -and $sourceBytes[0] -eq 239 -and
+    $sourceBytes[1] -eq 187 -and $sourceBytes[2] -eq 191) { 3 } else { 0 }
+  $sourceText = [Text.UTF8Encoding]::new($false, $true).GetString(
+    $sourceBytes, $bomLength, $sourceBytes.Length - $bomLength)
+  $ast = [System.Management.Automation.Language.Parser]::ParseInput(
+    $sourceText, [IO.Path]::GetFullPath($TargetPath), [ref]$tokens, [ref]$parseErrors
   )
   # A subtree contains a dynamic node exactly when its root is that node or an
   # ancestor. Build this set once from the identical predicate, in this process
@@ -548,9 +566,10 @@ try {
   }, $true) | ForEach-Object {
     [ordered]@{ target = Convert-Expression $_.Child; extent = Convert-CompactExtent $_.Extent }
   })
-  $rootParameters = if ($null -ne $ast.ParamBlock) {
-    @($ast.ParamBlock.Parameters | ForEach-Object { Convert-Parameter $_ })
-  } else { @() }
+  # Keep zero/one/many root parameters as a JSON array; assignment otherwise unwraps a singleton.
+  $rootParameters = @(if ($null -ne $ast.ParamBlock) {
+    $ast.ParamBlock.Parameters | ForEach-Object { Convert-Parameter $_ }
+  })
   $targetVariableReferences = @($ast.FindAll({
     param($node)
     $node -is [System.Management.Automation.Language.VariableExpressionAst] -and
@@ -597,10 +616,11 @@ try {
   $exits = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.ExitStatementAst] }, $true) |
     ForEach-Object { Convert-Terminal $_ })
   $payload = [ordered]@{
-    schema_version = 7
+    schema_version = 8
     source_path = [IO.Path]::GetFullPath($TargetPath)
-    # Bind to the exact text the parser actually parsed, not a later file read.
-    source_sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+    # Raw identity includes a BOM; parser text identity does not. Neither reopens the path.
+    source_bytes_sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($sourceBytes)).ToLowerInvariant()
+    source_text_sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
       [Text.UTF8Encoding]::new($false, $true).GetBytes($ast.Extent.Text))).ToLowerInvariant()
     runtime = [ordered]@{
       edition = $PSVersionTable.PSEdition
@@ -655,16 +675,34 @@ function compactProcess(result) {
   };
 }
 
-class AstBoundaryError extends Error {
-  constructor(code, message) {
-    super(message);
-    this.name = 'AstBoundaryError';
-    this.code = code;
-  }
-}
-
 function rejectAstBoundary(code, message) {
   throw new AstBoundaryError(code, message);
+}
+
+function createSourceSnapshot(targetPath, inputBytes) {
+  // Keep the authoritative bytes private. Callers receive copies only for stdin.
+  const bytes = Buffer.from(inputBytes);
+  const bomLength = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(bomLength));
+  } catch {
+    rejectAstBoundary('ast.source_identity', 'PowerShell AST source is not strict UTF-8');
+  }
+  return Object.freeze({ path: resolve(targetPath), text, byte_length: bytes.length,
+    raw_sha256: sha256(bytes), text_sha256: sha256(Buffer.from(text, 'utf8')),
+    copyBytes: () => Buffer.from(bytes), matchesBytes: current => bytes.equals(current) });
+}
+
+function captureSourceSnapshot(targetPath) {
+  return createSourceSnapshot(targetPath, readFileSync(targetPath));
+}
+
+function assertSourceSnapshotCurrent(snapshot) {
+  // A reread only checks the existing snapshot; it can never replace its source.
+  if (!snapshot.matchesBytes(readFileSync(snapshot.path))) {
+    rejectAstBoundary('ast.source_identity', 'PowerShell AST source changed after snapshot capture');
+  }
 }
 
 function parseAstProcessResult(result) {
@@ -692,7 +730,8 @@ function parseAstProcessResult(result) {
   if (document.runtime?.parser_type !== 'System.Management.Automation.Language.Parser') {
     rejectAstBoundary('ast.parser_identity', 'PowerShell AST parser identity is invalid');
   }
-  if (document.schema_version !== 7 || !/^[a-f0-9]{64}$/.test(document.source_sha256 ?? '') ||
+  if (document.schema_version !== 8 || !/^[a-f0-9]{64}$/.test(document.source_bytes_sha256 ?? '') ||
+      !/^[a-f0-9]{64}$/.test(document.source_text_sha256 ?? '') ||
       !Array.isArray(document.parse_errors) || !Array.isArray(document.commands) || !Array.isArray(document.functions) ||
       !Array.isArray(document.ifs) || !Array.isArray(document.throws) || !Array.isArray(document.assignments) ||
       !Array.isArray(document.tries) || !Array.isArray(document.parameters) || !Array.isArray(document.root_parameters) ||
@@ -734,19 +773,20 @@ function assertAstSourceIdentity(document, targetPath) {
   }
 }
 
-function restoreAstExtents(document, sourceBytes) {
-  if (document.source_sha256 !== sha256(sourceBytes)) {
-    rejectAstBoundary('ast.source_identity', 'PowerShell AST parsed source hash mismatch');
+function restoreAstExtents(document, snapshot) {
+  if (document.source_bytes_sha256 !== snapshot.raw_sha256) {
+    rejectAstBoundary('ast.source_identity', 'PowerShell AST raw source hash mismatch');
   }
-  let source;
-  try {
-    source = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(sourceBytes);
-  } catch {
-    rejectAstBoundary('ast.source_identity', 'PowerShell AST source is not strict UTF-8');
+  if (document.source_text_sha256 !== snapshot.text_sha256) {
+    rejectAstBoundary('ast.source_identity', 'PowerShell AST parser text hash mismatch');
   }
+  const source = snapshot.text;
   const lineStarts = [0];
   for (let offset = 0; offset < source.length; offset += 1) {
-    if (source[offset] === '\n') lineStarts.push(offset + 1);
+    if (source[offset] === '\r') {
+      if (source[offset + 1] === '\n') offset += 1;
+      lineStarts.push(offset + 1);
+    } else if (source[offset] === '\n') lineStarts.push(offset + 1);
   }
   const validRange = (start, end) => Number.isSafeInteger(start) && Number.isSafeInteger(end) &&
     start >= 0 && start <= end && end <= source.length;
@@ -796,33 +836,43 @@ function restoreAstExtents(document, sourceBytes) {
   return document;
 }
 
-function extractPowerShellAst(targetPath) {
+function runAstParserProcess(snapshot, extractorPath) {
+  assertSourceSnapshotCurrent(snapshot);
+  const started = performance.now();
+  let result;
+  try {
+    result = spawnSync('pwsh', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-File', extractorPath, '-TargetPath', snapshot.path
+    ], { input: snapshot.copyBytes(), encoding: 'utf8', timeout: 15_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+  } finally {
+    const elapsed = performance.now() - started;
+    astProcessMetrics.count += 1;
+    astProcessMetrics.total_ms += elapsed;
+    astProcessMetrics.max_stdout_bytes = Math.max(astProcessMetrics.max_stdout_bytes, Buffer.byteLength(result?.stdout ?? ''));
+    if (elapsed > astProcessMetrics.slowest_ms) {
+      astProcessMetrics.slowest_ms = elapsed;
+      astProcessMetrics.slowest_source = snapshot.path;
+    }
+    assertSourceSnapshotCurrent(snapshot);
+  }
+  return result;
+}
+
+function extractPowerShellAst(snapshot) {
   const root = mkdtempSync(resolve(tmpdir(), 'tecm-powershell-ast-'));
   const extractorPath = resolve(root, 'extract.ps1');
   let result;
   let elapsed = 0;
   try {
-    const sourceBytes = readFileSync(targetPath);
     writeFileSync(extractorPath, powershellAstExtractor);
     const started = performance.now();
-    result = spawnSync('pwsh', [
-      '-NoLogo', '-NoProfile', '-NonInteractive', '-File', extractorPath, '-TargetPath', resolve(targetPath)
-    ], { encoding: 'utf8', timeout: 15_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
-    elapsed = performance.now() - started;
-    astProcessMetrics.count += 1;
-    astProcessMetrics.total_ms += elapsed;
-    astProcessMetrics.max_stdout_bytes = Math.max(astProcessMetrics.max_stdout_bytes, Buffer.byteLength(result.stdout ?? ''));
-    if (elapsed > astProcessMetrics.slowest_ms) {
-      astProcessMetrics.slowest_ms = elapsed;
-      astProcessMetrics.slowest_source = resolve(targetPath);
-    }
+    try { result = runAstParserProcess(snapshot, extractorPath); }
+    finally { elapsed = performance.now() - started; }
     const document = parseAstProcessResult(result);
-    assertAstSourceIdentity(document, targetPath);
-    restoreAstExtents(document, sourceBytes);
-    if (!readFileSync(targetPath).equals(sourceBytes)) {
-      rejectAstBoundary('ast.source_identity', 'PowerShell AST source changed during extraction');
-    }
-    return { document, process: compactProcess(result) };
+    assertAstSourceIdentity(document, snapshot.path);
+    restoreAstExtents(document, snapshot);
+    document.source_text = snapshot.text;
+    return { document, snapshot, process: compactProcess(result) };
   } catch (error) {
     // Preserve bounded subprocess facts before the validator maps the failure
     // to its existing issue code. Never include source, huge stdout or paths.
@@ -1760,19 +1810,20 @@ function inspectWorkerProvenance(ast) {
     shadows.length === 0 && functionWrites.length === 0 && otherInstallers.length === 0 };
 }
 
-function validateBatch1RaceTopology(databasePath, workflowText) {
+function validateBatch1RaceTopology(databasePath, workflowText, sourceSnapshot = null) {
   const issues = [];
   const add = (condition, code, message) => { if (!condition) issues.push({ code, message }); };
-  const databaseText = readFileSync(databasePath, 'utf8');
   let extraction;
   try {
-    extraction = extractPowerShellAst(databasePath);
+    const snapshot = sourceSnapshot ?? captureSourceSnapshot(databasePath);
+    assertAstSourceIdentity({ source_path: snapshot.path }, databasePath);
+    extraction = extractPowerShellAst(snapshot);
   } catch (error) {
     issues.push({ code: 'powershell.runtime_or_output', message: error instanceof Error ? error.message : String(error) });
     return { issues, evidence: { extraction: 'FAIL', extraction_failure: error.extraction ?? null } };
   }
   const ast = extraction.document;
-  ast.source_text = databaseText;
+  const databaseText = extraction.snapshot.text;
   if (ast.parse_errors.length > 0) {
     issues.push({ code: 'powershell.parse', message: `PowerShell parser reported ${ast.parse_errors.length} error(s)` });
     return { issues, evidence: { runtime: ast.runtime, process: extraction.process, parse_errors: ast.parse_errors } };
@@ -2258,6 +2309,9 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
       commands: ast.commands.length,
       functions: ast.functions.length,
       source_path: ast.source_path,
+      source_identity: { raw_sha256: extraction.snapshot.raw_sha256, parser_text_sha256: extraction.snapshot.text_sha256,
+        ast_bytes_sha256: ast.source_bytes_sha256, ast_text_sha256: ast.source_text_sha256,
+        text_contract_sha256: sha256(databaseText), ast_source_text_sha256: sha256(ast.source_text) },
       main_try_start_offset: mainTry.extent.start_offset,
       command_resolution: commandResolutionEvidence,
       protected_variable_writes: protectedWrites,
@@ -3167,9 +3221,10 @@ for (const spec of [...legacyTopologyControlSpecs, ...terminalControlSpecs, ...d
 
 function runAstBoundaryControls() {
   const validObject = {
-    schema_version: 7,
+    schema_version: 8,
     source_path: databaseVerifyPath,
-    source_sha256: sha256(databaseVerify),
+    source_bytes_sha256: databaseSourceSnapshot.raw_sha256,
+    source_text_sha256: databaseSourceSnapshot.text_sha256,
     runtime: { parser_type: 'System.Management.Automation.Language.Parser' },
     parse_errors: [], commands: [], functions: [], ifs: [], throws: [], assignments: [], variable_writes: [], variable_api_accesses: [], writable_references: [], tries: [],
     parameters: [], root_parameters: [], target_variable_references: [], target_unary_expressions: [],
@@ -3218,11 +3273,12 @@ function runAstBoundaryControls() {
     exact_match: sourceIdentityClassification === 'ast.source_identity',
     control_passed: sourceIdentityClassification === 'ast.source_identity' });
   const sourceBytes = Buffer.from('a\r\n😀b\n');
-  const compactDocument = () => ({ source_sha256: sha256(sourceBytes),
+  const snapshot = createSourceSnapshot(databaseVerifyPath, sourceBytes);
+  const compactDocument = () => ({ source_bytes_sha256: snapshot.raw_sha256, source_text_sha256: snapshot.text_sha256,
     root_extent: { source_extent: [0, sourceBytes.toString('utf8').length] },
     extent: { source_extent: [3, 6] }, nested_extents: [{ source_extent: [0, 0] }] });
   const compactCases = [
-    { id: 'CONTROL-AST-COMPACT-SOURCE-HASH', code: 'ast.source_identity', mutate: doc => { doc.source_sha256 = sha256('different candidate'); } },
+    { id: 'CONTROL-AST-COMPACT-SOURCE-HASH', code: 'ast.source_identity', mutate: doc => { doc.source_bytes_sha256 = sha256('different candidate'); } },
     { id: 'CONTROL-AST-COMPACT-NEGATIVE-OFFSET', code: 'ast.invalid_extent', mutate: doc => { doc.extent.source_extent[0] = -1; } },
     { id: 'CONTROL-AST-COMPACT-REVERSED-OFFSETS', code: 'ast.invalid_extent', mutate: doc => { doc.extent.source_extent = [6, 3]; } },
     { id: 'CONTROL-AST-COMPACT-OUTSIDE-SOURCE', code: 'ast.invalid_extent', mutate: doc => { doc.extent.source_extent[1] = 100; } },
@@ -3235,11 +3291,11 @@ function runAstBoundaryControls() {
     const document = compactDocument();
     spec.mutate(document);
     let observed = null;
-    try { restoreAstExtents(document, sourceBytes); } catch (error) { observed = error.code; }
+    try { restoreAstExtents(document, snapshot); } catch (error) { observed = error.code; }
     controls.push({ id: spec.id, expected_classification: spec.code, observed_classification: observed,
       exact_match: observed === spec.code, control_passed: observed === spec.code });
   }
-  const roundTrip = restoreAstExtents(compactDocument(), sourceBytes);
+  const roundTrip = restoreAstExtents(compactDocument(), snapshot);
   controls.push({ id: 'CONTROL-AST-COMPACT-UNICODE-CRLF-ROUNDTRIP', control_passed:
     roundTrip.extent.text === '😀b' && roundTrip.extent.start_line === 2 && roundTrip.extent.start_column === 1 &&
     roundTrip.extent.end_line === 2 && roundTrip.extent.end_column === 4 &&
@@ -3262,6 +3318,152 @@ function runSourceOverrideControl() {
       /does not accept source-path or test-only overrides/.test(result.stderr ?? ''),
     process: compactProcess(result)
   };
+}
+
+function runSnapshotEncodingControls({ stopOnFailure = false } = {}) {
+  const root = mkdtempSync(resolve(tmpdir(), 'tecm-ast-snapshot-controls-'));
+  const targetPath = resolve(root, 'source.ps1');
+  const oraclePath = resolve(root, 'coordinates.ps1');
+  const controls = [];
+  const fixtureLines = ["param([switch]$M40Acceptance)", '# snapshot fixture',
+    'function Test-Snapshot {', "  Write-Output 'teacher'", '}', 'Test-Snapshot', ''];
+  const fixtureBytes = Buffer.from(fixtureLines.join('\n'));
+  // Independent coordinate oracle: real IScriptExtent fields, without the compact codec.
+  const oracle = String.raw`
+param([string]$TargetPath)
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$reader = [IO.StreamReader]::new([Console]::OpenStandardInput(), [Text.UTF8Encoding]::new($false, $true), $true)
+try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseInput($text, $TargetPath, [ref]$tokens, [ref]$errors)
+function Position($extent) {
+  [ordered]@{ text = $extent.Text; start_offset = $extent.StartOffset; end_offset = $extent.EndOffset
+    start_line = $extent.StartLineNumber; start_column = $extent.StartColumnNumber
+    end_line = $extent.EndLineNumber; end_column = $extent.EndColumnNumber }
+}
+$result = [ordered]@{ parse_errors = @($errors).Count; root = Position $ast.Extent
+  commands = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true) |
+    ForEach-Object { Position $_.Extent }) }
+[Console]::Out.Write(($result | ConvertTo-Json -Depth 8 -Compress))
+`;
+  const run = (id, expected, action) => {
+    let observed = [];
+    let facts = null;
+    let error = null;
+    try { facts = action(); }
+    catch (caught) { observed = [caught.code ?? 'unexpected.error']; error = caught.message; }
+    const exact = expected.length === 0 ? observed.length === 0 : exactCodeSetMatch(expected, observed);
+    controls.push({ id, expected_failures: expected, observed_failures: observed,
+      exact_code_set_match: exact, control_passed: exact, facts, ...(error ? { error } : {}) });
+    return exact || !stopOnFailure;
+  };
+  const requireFact = (condition, message) => {
+    if (!condition) rejectAstBoundary('control.snapshot_mismatch', message);
+  };
+  const sameCoordinates = (actual, expected) => ['text', 'start_offset', 'end_offset',
+    'start_line', 'start_column', 'end_line', 'end_column'].every(key => actual?.[key] === expected?.[key]);
+  const verifyCoordinates = bytes => {
+    writeFileSync(targetPath, bytes);
+    const snapshot = captureSourceSnapshot(targetPath);
+    const extraction = extractPowerShellAst(snapshot);
+    const reference = runAstParserProcess(snapshot, oraclePath);
+    requireFact(reference.status === 0 && !reference.signal && !reference.error && !String(reference.stderr ?? '').trim(),
+      'Actual-parser coordinate oracle failed');
+    const expected = JSON.parse(reference.stdout);
+    const ast = extraction.document;
+    requireFact(ast.parse_errors.length === 0 && expected.parse_errors === 0, 'Encoding fixture did not parse');
+    requireFact(sameCoordinates(ast.root_extent, expected.root) && ast.commands.length === expected.commands.length &&
+      ast.commands.every((command, index) => sameCoordinates(command.extent, expected.commands[index])),
+    'Compact coordinates differ from actual PowerShell extents');
+    requireFact(ast.source_text === snapshot.text && ast.source_bytes_sha256 === snapshot.raw_sha256 &&
+      ast.source_text_sha256 === snapshot.text_sha256, 'Extractor identities do not share the snapshot');
+    return { actual_parser: true, compared_extents: 1 + ast.commands.length,
+      raw_sha256: snapshot.raw_sha256, parser_text_sha256: snapshot.text_sha256 };
+  };
+  try {
+    writeFileSync(oraclePath, oracle);
+    const encodings = [
+      ['UTF8', Buffer.from(fixtureLines.join('\n').replace('teacher', '教師出席'))],
+      ['UTF8-BOM', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), fixtureBytes])],
+      ['BARE-CR', Buffer.from(fixtureLines.join('\r'))],
+      ['LF', fixtureBytes],
+      ['CRLF', Buffer.from(fixtureLines.join('\r\n'))],
+      ['MIXED-NEWLINE', Buffer.from(fixtureLines.map((line, index) => line + (index === fixtureLines.length - 1 ? '' :
+        ['\r', '\n', '\r\n'][index % 3])).join(''))],
+      ['NON-BMP', Buffer.from(fixtureLines.join('\n').replace('teacher', '😀𝄞𐐷'))]
+    ];
+    for (const [name, bytes] of encodings) {
+      if (!run(`CONTROL-AST-SNAPSHOT-${name}`, [], () => verifyCoordinates(bytes))) return controls;
+    }
+    if (!run('CONTROL-AST-SNAPSHOT-INVALID-UTF8', ['ast.source_identity'], () => {
+      writeFileSync(targetPath, Buffer.from([0x23, 0xc3, 0x28]));
+      captureSourceSnapshot(targetPath);
+    })) return controls;
+    if (!run('CONTROL-AST-SNAPSHOT-PATH-CHANGED', ['ast.source_identity'], () => {
+      writeFileSync(targetPath, fixtureBytes);
+      const snapshot = captureSourceSnapshot(targetPath);
+      writeFileSync(targetPath, '# replaced after capture');
+      const before = astProcessMetrics.count;
+      try { extractPowerShellAst(snapshot); }
+      finally { requireFact(astProcessMetrics.count === before, 'Changed source reached the parser'); }
+    })) return controls;
+    if (!run('CONTROL-AST-SNAPSHOT-POST-PARSE-CHANGE', ['ast.source_identity'], () => {
+      writeFileSync(targetPath, fixtureBytes);
+      const snapshot = captureSourceSnapshot(targetPath);
+      // Exercise the same post-spawn byte barrier with a disposable writer child.
+      const writerPath = resolve(root, 'change-source.ps1');
+      writeFileSync(writerPath, "param([string]$TargetPath)\n$tokens = $null; $errors = $null\n" +
+        "[void][System.Management.Automation.Language.Parser]::ParseInput([Console]::In.ReadToEnd(), [ref]$tokens, [ref]$errors)\n" +
+        "[IO.File]::WriteAllText($TargetPath, '# changed during child')");
+      runAstParserProcess(snapshot, writerPath);
+    })) return controls;
+    for (const [name, field] of [['RAW-HASH', 'source_bytes_sha256'], ['PARSER-TEXT-HASH', 'source_text_sha256']]) {
+      if (!run(`CONTROL-AST-SNAPSHOT-${name}`, ['ast.source_identity'], () => {
+        const snapshot = createSourceSnapshot(targetPath, fixtureBytes);
+        const document = { source_bytes_sha256: snapshot.raw_sha256, source_text_sha256: snapshot.text_sha256,
+          root_extent: { source_extent: [0, snapshot.text.length] } };
+        document[field] = sha256('different source');
+        restoreAstExtents(document, snapshot);
+      })) return controls;
+    }
+    for (const [name, stdout, expected] of [['MALFORMED', '{malformed}', 'ast.malformed_json'],
+      ['PARTIAL', '{"schema_version":8', 'ast.output_shape']]) {
+      if (!run(`CONTROL-AST-SNAPSHOT-${name}-RESPONSE`, [expected], () => {
+        parseAstProcessResult({ status: 0, signal: null, stdout, stderr: '' });
+      })) return controls;
+    }
+    for (const [name, prefix, expected] of [['BOM-BASELINE', '', []],
+      ['AST-TEXT-SAME-SNAPSHOT', '# TeacherAttendanceContentionOnly\n', ['terminal.contention_mode_present']]]) {
+      if (!run(`CONTROL-AST-SNAPSHOT-${name}`, [], () => {
+        writeFileSync(targetPath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(prefix + databaseVerify)]));
+        const snapshot = captureSourceSnapshot(targetPath);
+        const validation = validateBatch1RaceTopology(targetPath, workflow, snapshot);
+        const observed = validation.issues.map(issue => issue.code);
+        requireFact(expected.length === 0 ? observed.length === 0 : exactCodeSetMatch(expected, observed),
+          'Production topology or text contract did not match the captured candidate');
+        const identity = validation.evidence.source_identity;
+        requireFact(identity?.raw_sha256 === snapshot.raw_sha256 && identity.ast_bytes_sha256 === snapshot.raw_sha256 &&
+          identity.parser_text_sha256 === snapshot.text_sha256 && identity.ast_text_sha256 === snapshot.text_sha256 &&
+          identity.text_contract_sha256 === snapshot.text_sha256 && identity.ast_source_text_sha256 === snapshot.text_sha256 &&
+          snapshot.raw_sha256 !== snapshot.text_sha256, 'AST and text contracts used different source snapshots');
+        return { source_identity: identity, expected_topology_issues: expected, observed_topology_issues: observed };
+      })) return controls;
+    }
+  } finally {
+    writeFileSync(targetPath, fixtureBytes);
+    const restoration = readFileSync(targetPath).equals(fixtureBytes);
+    rmSync(root, { recursive: true, force: true });
+    const cleanup = !existsSync(root);
+    const repositoryRestoration = repositoryTopologyRestored();
+    for (const control of controls) {
+      control.restoration = restoration ? 'PASS' : 'FAIL';
+      control.cleanup = cleanup ? 'PASS' : 'FAIL';
+      control.repository_restoration = repositoryRestoration ? 'PASS' : 'FAIL';
+      control.control_passed = control.control_passed && restoration && cleanup && repositoryRestoration;
+    }
+  }
+  return controls;
 }
 
 function buildDirectTopologyPositiveControl(validation) {
@@ -3439,7 +3641,7 @@ requireMatch(batch1Mutation, /CONTROL-POISONED-LATER-BASELINE-NO-MUTATION[\s\S]+
 requireMatch(batch1Mutation, /CONTROL-TIMEOUT[\s\S]+?CONTROL-SIGNAL[\s\S]+?CONTROL-UNRELATED-EXIT[\s\S]+?CONTROL-SPAWN-FAILURE[\s\S]+?CONTROL-UNCAUGHT-STATUS-0[\s\S]+?CONTROL-RESTORATION-NOT-COMPENSATING[\s\S]+?CONTROL-UNCAUGHT-COMPLETE-VERIFIER/, 'Batch 1 mutation verifier must execute all lifecycle negative controls');
 requireMatch(batch1Mutation, /if \(failed\) process\.exitCode = 1;/, 'Batch 1 mutation verifier must return nonzero when any gate fails');
 
-const topologyValidation = validateBatch1RaceTopology(databaseVerifyPath, workflow);
+const topologyValidation = validateBatch1RaceTopology(databaseVerifyPath, workflow, databaseSourceSnapshot);
 for (const issue of topologyValidation.issues) failures.push(`[${issue.code}] ${issue.message}`);
 const positiveTopologyControl = buildDirectTopologyPositiveControl(topologyValidation);
 if (!positiveTopologyControl.control_passed) failures.push(
@@ -3478,6 +3680,10 @@ const astBoundaryControls = runAstBoundaryControls();
 for (const control of astBoundaryControls) {
   if (!control.control_passed) failures.push(`[${control.id}] AST output boundary did not fail closed`);
 }
+const snapshotEncodingControls = runSnapshotEncodingControls();
+for (const control of snapshotEncodingControls) {
+  if (!control.control_passed) failures.push(`[${control.id}] snapshot/encoding control failed: ${JSON.stringify(control.observed_failures)}`);
+}
 const sourceOverrideControl = runSourceOverrideControl();
 if (!sourceOverrideControl.control_passed) failures.push('[CONTROL-NO-SOURCE-PATH-OVERRIDE] normal invocation accepted an override');
 const exactCodeSetComparatorControls = runExactCodeSetComparatorControls();
@@ -3488,13 +3694,14 @@ const allControlsPassed = positiveTopologyControl.control_passed && completeVeri
   authorizedM40ExitPositiveControl.control_passed && directThrowPositiveControl.control_passed &&
   allMutationControls.every((control) => control.control_passed) &&
   astBoundaryControls.every((control) => control.control_passed) && sourceOverrideControl.control_passed &&
+  snapshotEncodingControls.length === 16 && snapshotEncodingControls.every((control) => control.control_passed) &&
   exactCodeSetComparatorControls.every((control) => control.control_passed) &&
   new Set([positiveTopologyControl, completeVerifierPositiveControl, authorizedM40ExitPositiveControl, directThrowPositiveControl,
-    ...allMutationControls, ...astBoundaryControls, sourceOverrideControl, ...exactCodeSetComparatorControls].map(control => control.id)).size ===
-      4 + allMutationControls.length + astBoundaryControls.length + 1 + exactCodeSetComparatorControls.length;
+    ...allMutationControls, ...astBoundaryControls, ...snapshotEncodingControls, sourceOverrideControl, ...exactCodeSetComparatorControls].map(control => control.id)).size ===
+      4 + allMutationControls.length + astBoundaryControls.length + snapshotEncodingControls.length + 1 + exactCodeSetComparatorControls.length;
 if (!allControlsPassed && failures.length === 0) failures.push('Control aggregation or unique IDs failed');
 const restorationPassed = repositoryTopologyRestored();
-const cleanupPassed = allMutationControls.every((control) => control.cleanup === 'PASS');
+const cleanupPassed = [...allMutationControls, ...snapshotEncodingControls].every((control) => control.cleanup === 'PASS');
 if (!restorationPassed) failures.push('Protected topology files were not restored');
 if (!cleanupPassed) failures.push('Topology control cleanup failed');
 
@@ -3528,6 +3735,7 @@ if (failures.length > 0) {
     indirect_mutation_controls: indirectMutationControls,
     parameter_binding_controls: parameterBindingControls,
     original_bypass_controls: originalBypassControls,
+    snapshot_encoding_controls: snapshotEncodingControls,
     performance: { elapsed_ms: performance.now() - guardStarted, ast_subprocesses: {
       ...astProcessMetrics, average_ms: astProcessMetrics.count ? astProcessMetrics.total_ms / astProcessMetrics.count : 0 },
       CI_TIMEOUT_WATCH: 'Retained: compare complete guard duration against the unchanged CI job timeout.' },
@@ -3545,12 +3753,13 @@ if (failures.length > 0) {
       parameter_binding_positive: parameterBindingControls.filter(control => control.expected_failures.length === 0).length,
       original_bypass_negative: originalBypassControls.length,
       ast_boundary: astBoundaryControls.length,
+      snapshot_encoding: snapshotEncodingControls.length,
       exact_code_set_comparator: exactCodeSetComparatorControls.length,
       source_override: 1,
       positive: 4,
       total: legacyTopologyControls.length + terminalControls.length + authorizedExitControls.length + directThrowControls.length +
         safetyWrapperControls.length + commandResolutionControls.length + indirectMutationControls.length + parameterBindingControls.length +
-        originalBypassControls.length + astBoundaryControls.length +
+        originalBypassControls.length + astBoundaryControls.length + snapshotEncodingControls.length +
         exactCodeSetComparatorControls.length + 1 + 4
     },
     ast_extraction: topologyValidation.evidence,

@@ -66,6 +66,52 @@ Not covered by an M40 PASS: the full Teacher mutation suite, SQL business suites
 verifier, the full release workflow validator, or merge/release approval. Previous
 APNS/workflow failures remain historical failures, not newly passing results.
 
+## Release Guard threat model
+
+For the current PR #46 work, Release Guard uses **Threat Model A**: preventing
+accidental regressions during normal development. It does not claim to resist a
+repository author who deliberately rewrites the database verifier, Guard or
+workflow. This threat-model label is separate from acceptance category A above.
+
+The latest source-integrity review findings F1–F4 describe deliberate PowerShell
+rewrites using writable variable objects, dynamic variable API access, scoped
+parameter binding and Function-provider helper replacement. They are real
+limitations of the Guard's PowerShell semantic coverage and are outside this
+round's Threat Model A. They have **not been fixed in code** by this scope decision;
+passing existing structural controls does not prove that all equivalent
+PowerShell rewrites are rejected. These findings are separate from the historical
+F1–F3 JSON/sidecar review corrections described under Evidence and replay.
+
+A Guard supplied by the same candidate cannot be an independent trust source
+against deliberate changes to itself or its workflow. Sensitive validation files,
+including the database verifier, Release Guard, runtime result consumers and
+release workflow, still require human review. The Guard provides regression
+checks within that review process, not a proof of arbitrary PowerShell integrity.
+
+The M40 runtime contract remains mandatory: normal nonblocking execution requires
+exact `P0001` semantics, and only the precise blocking `57014 statement_timeout`
+semantics with the required timing and same-lock witness may be caught. Semantic
+sidecar, correlation, complete lifecycle, process, terminal, cleanup and source
+restoration evidence remain required. Unrelated SQL errors, forged output,
+incomplete lifecycle, process errors, cleanup failures and restoration failures
+must reject; a stdout marker alone cannot establish M40 or release success.
+
+The no-argument database verifier must still execute the complete repository
+scope. The scoped M40 entry cannot substitute for complete release validation,
+and the normal success path must not exit or return early. This threat-model
+decision does not change runtime files or waive these product and safety contracts.
+
+### Independent follow-up: baseline evidence naming
+
+The consumer's `completeNoArgumentVerifierRan` evidence field has a naming
+limitation: it is set to `true` at a call site even though formal
+`--m40-acceptance` launches the database verifier with `-M40Acceptance`. That
+boolean alone cannot prove a complete no-argument repository run. Determine the
+executed scope from the actual launch arguments, declared scope and matching
+complete baseline evidence; retain full repository verification as a separate
+requirement. Correcting this evidence name or its producer is a separate follow-up
+issue, with no runtime change in this round.
+
 ## Failure mechanism
 
 PostgreSQL phase timestamps originate inside Docker; the PowerShell observer
