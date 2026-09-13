@@ -25,6 +25,8 @@ const databaseVerify = readFileSync(databaseVerifyPath, 'utf8');
 const batch1Mutation = readFileSync(batch1MutationPath, 'utf8');
 const batch1Sql = readFileSync(batch1SqlPath, 'utf8');
 const failures = [];
+const guardStarted = performance.now();
+const astProcessMetrics = { count: 0, total_ms: 0, max_stdout_bytes: 0, slowest_ms: 0, slowest_source: null };
 
 const protectedTopologyPaths = [
   databaseVerifyPath,
@@ -85,20 +87,12 @@ $ErrorActionPreference = 'Stop'
 
 function Convert-Extent([System.Management.Automation.Language.IScriptExtent]$Extent) {
   if ($null -eq $Extent) { return $null }
-  [ordered]@{
-    text = $Extent.Text
-    start_offset = $Extent.StartOffset
-    end_offset = $Extent.EndOffset
-    start_line = $Extent.StartLineNumber
-    start_column = $Extent.StartColumnNumber
-    end_line = $Extent.EndLineNumber
-    end_column = $Extent.EndColumnNumber
-  }
+  [ordered]@{ source_extent = @($Extent.StartOffset, $Extent.EndOffset) }
 }
 
 function Convert-CompactExtent([System.Management.Automation.Language.IScriptExtent]$Extent) {
   if ($null -eq $Extent) { return $null }
-  [ordered]@{ start_offset = $Extent.StartOffset; end_offset = $Extent.EndOffset }
+  [ordered]@{ source_extent = @($Extent.StartOffset, $Extent.EndOffset) }
 }
 
 function Get-Ancestors([System.Management.Automation.Language.Ast]$Node) {
@@ -146,6 +140,30 @@ function Convert-Condition([System.Management.Automation.Language.Ast]$Condition
       $pipelineElements[0] -is [System.Management.Automation.Language.CommandExpressionAst]) {
     $pipelineElements[0].Expression
   } else { $null }
+  # One traversal collects the same disjoint facts previously found by five
+  # separate predicate traversals. Preserve parser order and every occurrence.
+  $variables = [Collections.Generic.List[object]]::new()
+  $binaryOperators = [Collections.Generic.List[object]]::new()
+  $unaryOperators = [Collections.Generic.List[object]]::new()
+  $literals = [Collections.Generic.List[object]]::new()
+  $dynamicTypes = [Collections.Generic.List[object]]::new()
+  foreach ($node in $Condition.FindAll({ param($child) $true }, $true)) {
+    if ($node -is [System.Management.Automation.Language.VariableExpressionAst]) {
+      $variables.Add($node.VariablePath.UserPath)
+    } elseif ($node -is [System.Management.Automation.Language.BinaryExpressionAst]) {
+      $binaryOperators.Add([string]$node.Operator)
+    } elseif ($node -is [System.Management.Automation.Language.UnaryExpressionAst]) {
+      $unaryOperators.Add([string]$node.TokenKind)
+    } elseif ($node -is [System.Management.Automation.Language.ConstantExpressionAst] -or
+        $node -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+      $literals.Add([ordered]@{ type = $node.GetType().Name; value = $node.Value; extent = Convert-Extent $node.Extent })
+    } elseif ($node -is [System.Management.Automation.Language.CommandAst] -or
+        $node -is [System.Management.Automation.Language.SubExpressionAst] -or
+        $node -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
+        $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst]) {
+      $dynamicTypes.Add($node.GetType().Name)
+    }
+  }
   [ordered]@{
     type = $Condition.GetType().Name
     pipeline_element_count = $pipelineElements.Count
@@ -154,29 +172,11 @@ function Convert-Condition([System.Management.Automation.Language.Ast]$Condition
     variable_path = if ($expression -is [System.Management.Automation.Language.VariableExpressionAst]) {
       $expression.VariablePath.UserPath
     } else { $null }
-    variable_references = @($Condition.FindAll({
-      param($node) $node -is [System.Management.Automation.Language.VariableExpressionAst]
-    }, $true) | ForEach-Object { $_.VariablePath.UserPath })
-    binary_operators = @($Condition.FindAll({
-      param($node) $node -is [System.Management.Automation.Language.BinaryExpressionAst]
-    }, $true) | ForEach-Object { [string]$_.Operator })
-    unary_operators = @($Condition.FindAll({
-      param($node) $node -is [System.Management.Automation.Language.UnaryExpressionAst]
-    }, $true) | ForEach-Object { [string]$_.TokenKind })
-    literals = @($Condition.FindAll({
-      param($node)
-      $node -is [System.Management.Automation.Language.ConstantExpressionAst] -or
-        $node -is [System.Management.Automation.Language.StringConstantExpressionAst]
-    }, $true) | ForEach-Object {
-      [ordered]@{ type = $_.GetType().Name; value = $_.Value; extent = Convert-Extent $_.Extent }
-    })
-    dynamic_node_types = @($Condition.FindAll({
-      param($node)
-      $node -is [System.Management.Automation.Language.CommandAst] -or
-        $node -is [System.Management.Automation.Language.SubExpressionAst] -or
-        $node -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
-        $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst]
-    }, $true) | ForEach-Object { $_.GetType().Name })
+    variable_references = $variables.ToArray()
+    binary_operators = $binaryOperators.ToArray()
+    unary_operators = $unaryOperators.ToArray()
+    literals = $literals.ToArray()
+    dynamic_node_types = $dynamicTypes.ToArray()
     extent = Convert-Extent $Condition.Extent
   }
 }
@@ -268,20 +268,7 @@ function Convert-Terminal([System.Management.Automation.Language.Ast]$Node) {
 
 function Test-StaticExpression([System.Management.Automation.Language.Ast]$Node) {
   if ($null -eq $Node) { return $false }
-  $dynamic = @($Node.FindAll({
-    param($child)
-    $child -is [System.Management.Automation.Language.VariableExpressionAst] -or
-      $child -is [System.Management.Automation.Language.CommandAst] -or
-      $child -is [System.Management.Automation.Language.SubExpressionAst] -or
-      $child -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -or
-      $child -is [System.Management.Automation.Language.MemberExpressionAst] -or
-      $child -is [System.Management.Automation.Language.BinaryExpressionAst] -or
-      $child -is [System.Management.Automation.Language.UnaryExpressionAst] -or
-      $child -is [System.Management.Automation.Language.ExpandableStringExpressionAst] -or
-      $child -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
-      $child -is [System.Management.Automation.Language.HashtableAst]
-  }, $true))
-  return $dynamic.Count -eq 0
+  return -not $script:dynamicExpressionAncestors.Contains($Node)
 }
 
 function Convert-Expression([System.Management.Automation.Language.Ast]$Node) {
@@ -305,6 +292,14 @@ function Convert-Expression([System.Management.Automation.Language.Ast]$Node) {
     $result.type_name = $Node.TypeName.FullName
   } elseif ($Node -is [System.Management.Automation.Language.ArrayLiteralAst]) {
     $result.items = @($Node.Elements | ForEach-Object { Convert-Expression $_ })
+  } elseif ($Node -is [System.Management.Automation.Language.HashtableAst]) {
+    $result.entries = @($Node.KeyValuePairs | ForEach-Object {
+      [ordered]@{ key = Convert-Expression $_.Item1; value = Convert-Expression $_.Item2 }
+    })
+  } elseif ($Node -is [System.Management.Automation.Language.StatementBlockAst]) {
+    if ($Node.Statements.Count -eq 1 -and $Node.Traps.Count -eq 0) {
+      $result.inner = Convert-Expression $Node.Statements[0]
+    }
   } elseif ($Node -is [System.Management.Automation.Language.ParenExpressionAst]) {
     $result.inner = Convert-Expression $Node.Pipeline
   } elseif ($Node -is [System.Management.Automation.Language.PipelineAst]) {
@@ -377,6 +372,26 @@ try {
   $ast = [System.Management.Automation.Language.Parser]::ParseFile(
     [IO.Path]::GetFullPath($TargetPath), [ref]$tokens, [ref]$parseErrors
   )
+  # A subtree contains a dynamic node exactly when its root is that node or an
+  # ancestor. Build this set once from the identical predicate, in this process
+  # only. Reference identity prevents mixing distinct nodes with equal text.
+  $script:dynamicExpressionAncestors = [Collections.Generic.HashSet[System.Management.Automation.Language.Ast]]::new()
+  foreach ($node in $ast.FindAll({
+    param($child)
+    $child -is [System.Management.Automation.Language.VariableExpressionAst] -or
+      $child -is [System.Management.Automation.Language.CommandAst] -or
+      $child -is [System.Management.Automation.Language.SubExpressionAst] -or
+      $child -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -or
+      $child -is [System.Management.Automation.Language.MemberExpressionAst] -or
+      $child -is [System.Management.Automation.Language.BinaryExpressionAst] -or
+      $child -is [System.Management.Automation.Language.UnaryExpressionAst] -or
+      $child -is [System.Management.Automation.Language.ExpandableStringExpressionAst] -or
+      $child -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
+      $child -is [System.Management.Automation.Language.HashtableAst]
+  }, $true)) {
+    $current = $node
+    while ($null -ne $current -and $script:dynamicExpressionAncestors.Add($current)) { $current = $current.Parent }
+  }
   $commands = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true) |
     ForEach-Object {
       [ordered]@{
@@ -525,6 +540,14 @@ try {
     return $node.Expression -is [System.Management.Automation.Language.VariableExpressionAst] -and
       $node.Expression.VariablePath.UserPath -in @('ExecutionContext', 'PSCmdlet')
   }, $true) | ForEach-Object { [ordered]@{ extent = Convert-CompactExtent $_.Extent } })
+  # Reject writable handle acquisition at the boundary; do not track aliases,
+  # assignments or pipeline consumers after a handle has escaped.
+  $writableReferences = @($ast.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.ConvertExpressionAst] -and
+      $node.Type.TypeName.FullName -in @('ref', 'System.Management.Automation.PSReference')
+  }, $true) | ForEach-Object {
+    [ordered]@{ target = Convert-Expression $_.Child; extent = Convert-CompactExtent $_.Extent }
+  })
   $rootParameters = if ($null -ne $ast.ParamBlock) {
     @($ast.ParamBlock.Parameters | ForEach-Object { Convert-Parameter $_ })
   } else { @() }
@@ -574,8 +597,11 @@ try {
   $exits = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.ExitStatementAst] }, $true) |
     ForEach-Object { Convert-Terminal $_ })
   $payload = [ordered]@{
-    schema_version = 5
+    schema_version = 7
     source_path = [IO.Path]::GetFullPath($TargetPath)
+    # Bind to the exact text the parser actually parsed, not a later file read.
+    source_sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+      [Text.UTF8Encoding]::new($false, $true).GetBytes($ast.Extent.Text))).ToLowerInvariant()
     runtime = [ordered]@{
       edition = $PSVersionTable.PSEdition
       version = $PSVersionTable.PSVersion.ToString()
@@ -591,6 +617,7 @@ try {
     assignments = $assignments
     variable_writes = $variableWrites
     variable_api_accesses = $variableApiAccesses
+    writable_references = $writableReferences
     tries = $tries
     parameters = $parameters
     root_parameters = $rootParameters
@@ -642,6 +669,7 @@ function rejectAstBoundary(code, message) {
 
 function parseAstProcessResult(result) {
   if (result?.error?.code === 'ETIMEDOUT') rejectAstBoundary('ast.timeout', 'PowerShell AST subprocess timed out');
+  if (result?.error?.code === 'ENOBUFS') rejectAstBoundary('ast.enobufs', 'PowerShell AST subprocess exceeded its output buffer');
   if (result?.error) rejectAstBoundary('ast.spawn_error', 'PowerShell AST subprocess failed to spawn');
   if (result?.signal) rejectAstBoundary('ast.signal', 'PowerShell AST subprocess was signalled');
   if (!Number.isInteger(result?.status)) rejectAstBoundary('ast.missing_exit', 'PowerShell AST subprocess has no integer exit status');
@@ -658,13 +686,13 @@ function parseAstProcessResult(result) {
   for (const key of ['source_path', 'runtime', 'parse_errors', 'commands', 'functions', 'ifs', 'throws', 'assignments',
     'tries', 'parameters', 'root_parameters', 'target_variable_references', 'target_unary_expressions',
     'target_foreach_variables', 'returns', 'exits', 'invoke_members', 'root_body_extent', 'root_statements',
-    'root_traps', 'root_extent', 'variable_writes', 'variable_api_accesses']) {
+    'root_traps', 'root_extent', 'variable_writes', 'variable_api_accesses', 'writable_references']) {
     if (!(key in document)) rejectAstBoundary('ast.incomplete_schema', `PowerShell AST output is incomplete: ${key}`);
   }
   if (document.runtime?.parser_type !== 'System.Management.Automation.Language.Parser') {
     rejectAstBoundary('ast.parser_identity', 'PowerShell AST parser identity is invalid');
   }
-  if (document.schema_version !== 5 ||
+  if (document.schema_version !== 7 || !/^[a-f0-9]{64}$/.test(document.source_sha256 ?? '') ||
       !Array.isArray(document.parse_errors) || !Array.isArray(document.commands) || !Array.isArray(document.functions) ||
       !Array.isArray(document.ifs) || !Array.isArray(document.throws) || !Array.isArray(document.assignments) ||
       !Array.isArray(document.tries) || !Array.isArray(document.parameters) || !Array.isArray(document.root_parameters) ||
@@ -675,6 +703,7 @@ function parseAstProcessResult(result) {
       !Array.isArray(document.variable_writes) || document.variable_writes.some(entry =>
         !Array.isArray(entry?.variables) || !entry?.target?.extent || !entry?.extent) ||
       !Array.isArray(document.variable_api_accesses) || document.variable_api_accesses.some(entry => !entry?.extent) ||
+      !Array.isArray(document.writable_references) || document.writable_references.some(entry => !entry?.extent || !entry?.target?.extent) ||
       document.functions.some((fn) => !Array.isArray(fn?.ancestors) || !Array.isArray(fn?.end_block_statements) ||
         !Array.isArray(fn?.end_block_traps) || !fn?.body_extent || !fn?.end_block_extent || !fn?.extent) ||
       document.tries.some((entry) => !Array.isArray(entry?.ancestors) || !Array.isArray(entry?.body_statements) || !entry?.extent) ||
@@ -705,18 +734,105 @@ function assertAstSourceIdentity(document, targetPath) {
   }
 }
 
+function restoreAstExtents(document, sourceBytes) {
+  if (document.source_sha256 !== sha256(sourceBytes)) {
+    rejectAstBoundary('ast.source_identity', 'PowerShell AST parsed source hash mismatch');
+  }
+  let source;
+  try {
+    source = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(sourceBytes);
+  } catch {
+    rejectAstBoundary('ast.source_identity', 'PowerShell AST source is not strict UTF-8');
+  }
+  const lineStarts = [0];
+  for (let offset = 0; offset < source.length; offset += 1) {
+    if (source[offset] === '\n') lineStarts.push(offset + 1);
+  }
+  const validRange = (start, end) => Number.isSafeInteger(start) && Number.isSafeInteger(end) &&
+    start >= 0 && start <= end && end <= source.length;
+  const position = offset => {
+    let low = 0, high = lineStarts.length;
+    while (low + 1 < high) {
+      const middle = (low + high) >>> 1;
+      if (lineStarts[middle] <= offset) low = middle;
+      else high = middle;
+    }
+    return { line: low + 1, column: offset - lineStarts[low] + 1 };
+  };
+  function extent(value) {
+    if (!value || Array.isArray(value) || Object.keys(value).length !== 1 ||
+        !Array.isArray(value.source_extent) || value.source_extent.length !== 2 ||
+        !validRange(...value.source_extent)) {
+      rejectAstBoundary('ast.invalid_extent', 'PowerShell AST compact extent is malformed or outside its source');
+    }
+    const [start, end] = value.source_extent;
+    const first = position(start), last = position(end);
+    return { text: source.slice(start, end), start_offset: start, end_offset: end,
+      start_line: first.line, start_column: first.column, end_line: last.line, end_column: last.column };
+  }
+  function restore(value) {
+    if (!value || typeof value !== 'object') return;
+    // Ancestor records intentionally store offsets inline. Check them too.
+    if (Object.hasOwn(value, 'start_offset') || Object.hasOwn(value, 'end_offset')) {
+      if (!validRange(value.start_offset, value.end_offset)) {
+        rejectAstBoundary('ast.invalid_extent', 'PowerShell AST ancestor offsets are outside their source');
+      }
+    }
+    if (Object.hasOwn(value, 'source_extent')) {
+      rejectAstBoundary('ast.invalid_extent', 'PowerShell AST extent marker is outside an extent field');
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (/(?:^|_)extent$/.test(key) && child !== null) value[key] = extent(child);
+      else if (key === 'nested_extents') {
+        if (!Array.isArray(child)) rejectAstBoundary('ast.invalid_extent', 'PowerShell AST nested extents must be an array');
+        value[key] = child.map(extent);
+      } else restore(child);
+    }
+  }
+  restore(document);
+  if (document.root_extent?.start_offset !== 0 || document.root_extent?.end_offset !== source.length) {
+    rejectAstBoundary('ast.source_identity', 'PowerShell AST root does not cover the complete source');
+  }
+  return document;
+}
+
 function extractPowerShellAst(targetPath) {
   const root = mkdtempSync(resolve(tmpdir(), 'tecm-powershell-ast-'));
   const extractorPath = resolve(root, 'extract.ps1');
   let result;
+  let elapsed = 0;
   try {
+    const sourceBytes = readFileSync(targetPath);
     writeFileSync(extractorPath, powershellAstExtractor);
+    const started = performance.now();
     result = spawnSync('pwsh', [
       '-NoLogo', '-NoProfile', '-NonInteractive', '-File', extractorPath, '-TargetPath', resolve(targetPath)
     ], { encoding: 'utf8', timeout: 15_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+    elapsed = performance.now() - started;
+    astProcessMetrics.count += 1;
+    astProcessMetrics.total_ms += elapsed;
+    astProcessMetrics.max_stdout_bytes = Math.max(astProcessMetrics.max_stdout_bytes, Buffer.byteLength(result.stdout ?? ''));
+    if (elapsed > astProcessMetrics.slowest_ms) {
+      astProcessMetrics.slowest_ms = elapsed;
+      astProcessMetrics.slowest_source = resolve(targetPath);
+    }
     const document = parseAstProcessResult(result);
     assertAstSourceIdentity(document, targetPath);
+    restoreAstExtents(document, sourceBytes);
+    if (!readFileSync(targetPath).equals(sourceBytes)) {
+      rejectAstBoundary('ast.source_identity', 'PowerShell AST source changed during extraction');
+    }
     return { document, process: compactProcess(result) };
+  } catch (error) {
+    // Preserve bounded subprocess facts before the validator maps the failure
+    // to its existing issue code. Never include source, huge stdout or paths.
+    error.extraction = { boundary_code: error.code ?? 'ast.unclassified',
+      ...compactProcess(result), error_name: result?.error?.name ?? null,
+      error_errno: result?.error?.errno ?? null, error_syscall: result?.error?.syscall ?? null,
+      elapsed_ms: elapsed, timeout_ms: 15_000, max_buffer_bytes: 8 * 1024 * 1024,
+      stdout_bytes: Buffer.byteLength(result?.stdout ?? ''), stderr_bytes: Buffer.byteLength(result?.stderr ?? ''),
+      stdout_sha256: sha256(result?.stdout ?? ''), stderr_sha256: sha256(result?.stderr ?? '') };
+    throw error;
   } finally {
     rmSync(root, { recursive: true, force: true });
     if (existsSync(root)) throw new Error('PowerShell AST extractor cleanup failed');
@@ -1235,22 +1351,23 @@ function canonicalCommand(command) {
 }
 
 function unwrapExpression(node) {
-  const wrappers = new Set(['ParenExpressionAst', 'PipelineAst', 'CommandExpressionAst']);
+  const wrappers = new Set(['ParenExpressionAst', 'PipelineAst', 'CommandExpressionAst', 'StatementBlockAst']);
   while (node && wrappers.has(node.type) && node.inner) node = node.inner;
   return node;
 }
 
 // Separate from bindCommand: its existing exact-spelling contracts are unchanged.
-function bindVariableArguments(command, parameters, switches = []) {
+function bindVariableArguments(command, parameters, switches = [], positions = []) {
   const bindings = new Map();
-  let positional = 0;
+  const positional = [];
   for (let i = 1; i < command.elements.length; i += 1) {
     const element = command.elements[i];
     if (element.splatted) return null;
     let name;
     let value = element.expression_ast;
     if (element.type === 'CommandParameterAst') {
-      const key = String(element.parameter_name).toLowerCase();
+      const raw = String(element.parameter_name).toLowerCase();
+      const key = commonParameterAliases.get(raw) ?? raw;
       const exact = parameters.find(name => name === key);
       const choices = exact ? [exact] : parameters.filter(name => name.startsWith(key));
       if (choices.length !== 1) return null;
@@ -1266,14 +1383,160 @@ function bindVariableArguments(command, parameters, switches = []) {
         }
       }
     } else {
-      while (bindings.has(parameters[positional])) positional += 1;
-      name = parameters[positional++];
-      if (!name) return null;
+      positional.push(value);
+      continue;
     }
     if (bindings.has(name)) return null;
     bindings.set(name, unwrapExpression(value));
   }
+  if (bindings.has('literalpath') && bindings.has('path')) return null;
+  const remaining = positions.filter(name => !bindings.has(name) && !(name === 'path' && bindings.has('literalpath')));
+  if (positional.length > remaining.length) return null;
+  positional.forEach((value, index) => bindings.set(remaining[index], unwrapExpression(value)));
   return bindings;
+}
+
+const commonParameterAliases = new Map([
+  ['ov', 'outvariable'], ['ev', 'errorvariable'], ['wv', 'warningvariable'],
+  ['iv', 'informationvariable'], ['pv', 'pipelinevariable'], ['ob', 'outbuffer'],
+  ['ea', 'erroraction'], ['wa', 'warningaction'], ['infa', 'informationaction'],
+  ['vb', 'verbose'], ['db', 'debug'], ['proga', 'progressaction']
+]);
+const commonParameters = ['verbose', 'debug', 'erroraction', 'warningaction', 'informationaction',
+  'progressaction', 'errorvariable', 'warningvariable', 'informationvariable', 'outvariable', 'outbuffer', 'pipelinevariable'];
+const outputVariableParameters = new Set(['outvariable', 'errorvariable', 'warningvariable', 'informationvariable', 'pipelinevariable']);
+function commonVariableParameter(key) {
+  key = String(key ?? '').toLowerCase();
+  key = commonParameterAliases.get(key) ?? key;
+  const matches = commonParameters.includes(key) ? [key] : commonParameters.filter(name => name.startsWith(key));
+  return matches.length === 1 && outputVariableParameters.has(matches[0]) ? matches[0] : null;
+}
+
+function resolveCommandVariableParameter(ast, command, token) {
+  const key = String(token ?? '').toLowerCase();
+  if (!key) return { kind: 'irrelevant' };
+  const expanded = commonParameterAliases.get(key) ?? key;
+  // Only tokens that could select an output-variable parameter need this
+  // security decision. Other binding contracts retain their own validators.
+  if (![...outputVariableParameters].some(name => name === expanded || name.startsWith(expanded)))
+    return { kind: 'irrelevant' };
+  const raw = String(command.command_name ?? '').toLowerCase();
+  const unknown = reason => ({ kind: 'unknown', reason });
+  if (command.elements[0]?.type !== 'StringConstantExpressionAst' || !raw || command.invocation_operator === 'Dot')
+    return unknown('command is not a proven literal invocation');
+  const definitions = ast.functions.filter(fn => canonicalVariable(fn.name)?.name === raw);
+  const aliasCommands = ast.commands.filter(other => ['set-alias', 'new-alias', 'import-alias'].includes(canonicalCommand(other)));
+  if (aliasCommands.some(other => {
+    if (canonicalCommand(other) === 'import-alias') return true;
+    const bound = bindVariableArguments(other, ['name', 'value', 'description', 'option', 'scope', 'force', 'passthru',
+      'whatif', 'confirm', ...commonParameters], ['force', 'passthru', 'whatif', 'confirm', 'verbose', 'debug'], ['name', 'value']);
+    const names = literalTargets(bound?.get('name'));
+    return !names || names.some(name => name.toLowerCase() === raw);
+  })) {
+    // The existing unconditional alias-definition/import gates already reject
+    // this script. Do not grant a custom-parameter exemption or add a second
+    // classification to their established exact-code controls.
+    return { kind: 'rejected', reason: 'existing alias-resolution gate rejects this command identity' };
+  }
+  if (raw === 'docker' && definitions.length === 0) return { kind: 'irrelevant', reason: 'native command contract' };
+  if (raw.includes('\\') || variableCommandAliases.has(raw)) return unknown('module-qualified or alias identity has no local exemption');
+  let custom = [];
+  let parameters = [];
+  if (definitions.length > 0) {
+    if (definitions.length !== 1) return unknown('duplicate or shadow function definitions');
+    const fn = definitions[0];
+    const owner = fn.ancestors[1];
+    if (String(fn.name).toLowerCase() !== raw || fn.ancestors[0]?.type !== 'NamedBlockAst' ||
+        owner?.type !== 'ScriptBlockAst' || !command.ancestors.some(ancestor =>
+          ancestor.type === 'ScriptBlockAst' && sameExtent(ancestor, owner)) || fn.extent.end_offset >= command.extent.start_offset)
+      return unknown('function is not a preceding direct definition in a visible lexical scope');
+    parameters = ast.parameters.filter(parameter => sameExtent(parameter.owner_scriptblock_extent, fn.body_extent) ||
+      (!parameter.owner_scriptblock_extent && parameter.nearest_function?.toLowerCase() === raw &&
+        inside(parameter.extent, fn.extent) && parameter.extent.end_offset <= fn.body_extent.start_offset));
+    custom = parameters.map(parameter => String(parameter.name).toLowerCase());
+    if (custom.length !== fn.parameters.length || new Set(custom).size !== custom.length ||
+        parameters.some(parameter => parameter.attributes.some(attribute =>
+          /^(?:alias|aliasattribute|system\.management\.automation\.aliasattribute)$/i.test(attribute.type_name ?? ''))))
+      return unknown('parameter declarations or aliases cannot be bound uniquely');
+  } else if (!['write-output', 'get-date', ...providerContracts.keys(),
+    'set-variable', 'new-variable', 'clear-variable', 'remove-variable', 'get-variable'].includes(raw)) {
+    return unknown('no unique visible local definition or supported command contract');
+  }
+  const effective = [...new Set([...custom, ...commonParameters])];
+  const resolveToken = token => {
+    token = token.toLowerCase();
+    if (custom.includes(token)) return { kind: 'custom', name: token };
+    token = commonParameterAliases.get(token) ?? token;
+    const matches = effective.includes(token) ? [token] : effective.filter(name => name.startsWith(token));
+    if (matches.length !== 1) return unknown('ambiguous or unbound parameter token');
+    return { kind: custom.includes(matches[0]) ? 'custom' : outputVariableParameters.has(matches[0]) ? 'common' : 'irrelevant', name: matches[0] };
+  };
+  const resolution = resolveToken(key);
+  if (parameters.length > 0) {
+    // A local exemption requires the invocation's named binding to be intact,
+    // not merely the presence of a matching declaration elsewhere in the AST.
+    const seen = new Set();
+    for (let index = 1; index < command.elements.length; index += 1) {
+      const element = command.elements[index];
+      if (element.splatted) return unknown('local invocation contains an unproven splat');
+      if (element.type !== 'CommandParameterAst') return unknown('local positional binding is not proven');
+      const bound = resolveToken(String(element.parameter_name));
+      if (!bound.name || seen.has(bound.name)) return unknown('local named binding is ambiguous or duplicated');
+      seen.add(bound.name);
+      const parameter = parameters.find(parameter => parameter.name.toLowerCase() === bound.name);
+      const isSwitch = parameter?.static_type === 'System.Management.Automation.SwitchParameter' ||
+        (!parameter && ['verbose', 'debug'].includes(bound.name));
+      if (!isSwitch && !element.argument) {
+        const value = command.elements[++index];
+        if (!value || value.splatted || value.type === 'CommandParameterAst') return unknown('named parameter argument is missing');
+      }
+    }
+  }
+  return resolution;
+}
+
+// Positions are cmdlet-specific. LiteralPath selects the corresponding set and
+// removes Path from positional binding. Unsupported sets fail closed.
+const providerContracts = new Map([
+  ['copy-item', { positions: ['path', 'destination'], required: ['destination'], extra: ['destination', 'container', 'recurse', 'tosession', 'fromsession'] }],
+  ['move-item', { positions: ['path', 'destination'], required: ['destination'], extra: ['destination'] }],
+  ['rename-item', { positions: ['path', 'newname'], required: ['newname'], extra: ['newname'] }],
+  ['set-item', { positions: ['path', 'value'], required: ['value'], extra: ['value'] }],
+  ['new-item', { positions: ['path'], required: [], extra: ['name', 'value', 'itemtype'], literal: false }],
+  ['clear-item', { positions: ['path'], required: [], extra: [] }],
+  ['remove-item', { positions: ['path'], required: [], extra: ['recurse'] }],
+  ['set-content', { positions: ['path', 'value'], required: ['value'], extra: ['value', 'encoding', 'nonewline', 'asbytestream'] }],
+  ['add-content', { positions: ['path', 'value'], required: ['value'], extra: ['value', 'encoding', 'nonewline', 'asbytestream'] }],
+  ['clear-content', { positions: ['path'], required: [], extra: [] }],
+  ['set-itemproperty', { positions: ['path', 'name', 'value'], required: ['name', 'value'], extra: ['name', 'value'] }],
+  ['new-itemproperty', { positions: ['path', 'name'], required: ['name', 'value'], extra: ['name', 'value', 'propertytype'] }],
+  ['clear-itemproperty', { positions: ['path', 'name'], required: ['name'], extra: ['name'] }],
+  ['remove-itemproperty', { positions: ['path', 'name'], required: ['name'], extra: ['name'] }],
+  ['get-item', { positions: ['path'], required: [], extra: [] }]
+]);
+
+function staticCommandSplat(ast, command, element) {
+  // A literal table immediately before this pipeline has no intervening code
+  // that could rebind it. Deliberately do not infer general data flow.
+  if (command.extent.start_offset !== command.enclosing_pipeline.extent.start_offset ||
+      command.elements.slice(1).some(item => !item.splatted &&
+        !['StringConstantExpressionAst', 'ConstantExpressionAst'].includes(item.type))) return null;
+  const writes = ast.variable_writes.filter(write => write.operator === 'Equals' &&
+    write.target.type === 'VariableExpressionAst' &&
+    String(write.target.variable_path).toLowerCase() === String(element.expression_ast.variable_path).toLowerCase() &&
+    write.extent.end_offset < command.enclosing_pipeline.extent.start_offset &&
+    ast.source_text.slice(write.extent.end_offset, command.enclosing_pipeline.extent.start_offset).trim() === '');
+  if (writes.length !== 1) return null;
+  const table = unwrapExpression(writes[0].value);
+  if (table?.type !== 'HashtableAst') return null;
+  const entries = new Map();
+  for (const entry of table.entries) {
+    const keys = literalTargets(entry.key);
+    const values = literalTargets(entry.value);
+    if (keys?.length !== 1 || values?.length !== 1 || entries.has(keys[0].toLowerCase())) return null;
+    entries.set(keys[0].toLowerCase(), values[0]);
+  }
+  return entries;
 }
 
 function literalTargets(node) {
@@ -1300,8 +1563,9 @@ function isTemporaryFileTarget(ast, command, target) {
       'set-item','new-item','clear-item','remove-item','copy-item','move-item','rename-item',
       'set-content','add-content','clear-content','set-itemproperty','new-itemproperty',
       'clear-itemproperty','remove-itemproperty'].indexOf(canonicalCommand(other)) >= 0 ||
-      other.elements.some(element => ['outvariable','ov','errorvariable','ev','warningvariable','wv',
-        'informationvariable','iv','pipelinevariable','pv'].indexOf(String(element.parameter_name).toLowerCase()) >= 0)))) return false;
+      other.elements.some(element => ['common', 'unknown', 'rejected'].includes(
+        resolveCommandVariableParameter(ast, other, element.parameter_name).kind) ||
+        (element.splatted && canonicalCommand(other) !== 'docker'))))) return false;
   const value = unwrapExpression(writes[0].value);
   if (value?.type === 'BinaryExpressionAst' && value.operator === 'Plus' &&
       value.right?.type === 'StringConstantExpressionAst') return ['.tmp', '.pending'].indexOf(value.right.value) >= 0;
@@ -1329,31 +1593,35 @@ function inspectProtectedWrites(ast, provenance) {
       if (canonicalVariable(variable)) record(variable, write);
     }
   }
+  for (const reference of ast.writable_references) {
+    const target = unwrapExpression(reference.target);
+    if (target?.type !== 'VariableExpressionAst' || target.splatted) result.unresolved.push(reference);
+    else record(target.variable_path, reference);
+  }
   for (const parameter of ast.parameters) {
     if (sourceNames.has(canonicalVariable(parameter.name)?.name) &&
         !provenance.chains.some(chain => chain.accepted && sameExtent(chain.parameter, parameter.extent))) result.sources.push(parameter);
   }
   const variableMutators = new Set(['set-variable', 'new-variable', 'clear-variable', 'remove-variable']);
-  const providerMutators = new Set(['set-item', 'new-item', 'clear-item', 'remove-item', 'copy-item',
-    'move-item', 'rename-item', 'set-content', 'add-content', 'clear-content',
-    'set-itemproperty', 'new-itemproperty', 'clear-itemproperty', 'remove-itemproperty']);
-  const common = ['scope', 'description', 'option', 'visibility', 'passthru', 'force', 'whatif', 'confirm',
-    'include', 'exclude', 'filter', 'recurse', 'credential', 'type', 'encoding', 'nonewline',
-    'erroraction', 'warningaction', 'informationaction', 'progressaction', 'verbose', 'debug',
-    'errorvariable', 'warningvariable', 'informationvariable', 'outvariable', 'outbuffer', 'pipelinevariable'];
-  const switches = ['passthru', 'force', 'whatif', 'confirm', 'recurse', 'nonewline', 'verbose', 'debug'];
+  const switches = ['passthru', 'force', 'whatif', 'confirm', 'recurse', 'nonewline', 'verbose', 'debug',
+    'valueonly', 'container', 'asbytestream'];
   for (const command of ast.commands) {
     const name = canonicalCommand(command);
     const leaf = name.split('\\').at(-1);
     const variable = variableMutators.has(leaf);
-    const provider = providerMutators.has(leaf);
-    const assignedGetter = ast.variable_writes.some(write => inside(command.extent, write.target.extent)) &&
-      (name === 'get-variable' || name === 'get-item');
-    if (variable || provider || assignedGetter) {
+    const provider = providerContracts.has(leaf);
+    const getter = leaf === 'get-variable' || leaf === 'get-item';
+    if (variable || provider || getter) {
       if (name !== leaf) { result.unresolved.push(command); continue; }
-      const names = variable || name === 'get-variable' ? ['name', 'value', ...common] :
-        ['path', 'value', 'literalpath', 'destination', 'newname', 'name', ...common];
-      const bound = bindVariableArguments(command, names, switches);
+      const contract = providerContracts.get(name);
+      const names = provider ? ['path', ...(contract.literal === false ? [] : ['literalpath']), ...contract.extra,
+        'passthru', 'force', 'whatif', 'confirm', 'include', 'exclude', 'filter', 'credential', ...commonParameters] :
+        ['name', 'value', 'scope', 'description', 'option', 'visibility', 'passthru', 'force', 'whatif', 'confirm',
+          'include', 'exclude', 'valueonly', ...commonParameters];
+      const positions = provider ? contract.positions : ['set-variable', 'new-variable'].includes(name) ? ['name', 'value'] : ['name'];
+      const bound = bindVariableArguments(command, names, switches, positions);
+      if (!bound || (provider && contract.required.some(key => !bound.has(key))) ||
+          (bound.has('tosession') || bound.has('fromsession'))) { result.unresolved.push(command); continue; }
       const target = bound?.get(variable || name === 'get-variable' ? 'name' : 'literalpath') ?? bound?.get('path');
       const targets = literalTargets(target);
       if (!targets) {
@@ -1361,22 +1629,54 @@ function inspectProtectedWrites(ast, provenance) {
           result.unresolved.push(command);
         continue;
       }
-      for (const target of targets) record(target, command, !variable && name !== 'get-variable');
+      // ValueOnly returns values, not PSVariable objects. Otherwise reject
+      // protected handle acquisition even if its eventual use looks read-only.
+      const valueOnly = name === 'get-variable' && bound.get('valueonly')?.type === 'ConstantExpressionAst' &&
+        bound.get('valueonly').value === true;
+      if (!valueOnly) for (const target of targets) record(target, command, provider);
       if (bound.has('destination') || bound.has('newname')) {
         const destinations = literalTargets(bound.get('destination') ?? bound.get('newname'));
         if (!destinations) result.unresolved.push(command);
         else for (const target of destinations) record(target, command, true);
+      }
+      // New-Item -Name is an item name, while property cmdlets use Name for
+      // the property. Never confuse either with positional Value.
+      if (name === 'new-item' && bound.has('name')) {
+        const names = literalTargets(bound.get('name'));
+        if (!names) result.unresolved.push(command);
+        else for (const target of names) record(target, command, true);
       }
     }
     // These common parameters bind output into variables without an assignment AST.
     for (let i = 1; i < command.elements.length; i += 1) {
       const element = command.elements[i];
       const key = String(element.parameter_name ?? '').toLowerCase();
-      if (!new Set(['outvariable','ov','errorvariable','ev','warningvariable','wv',
-        'informationvariable','iv','pipelinevariable','pv']).has(key)) continue;
+      const resolution = resolveCommandVariableParameter(ast, command, key);
+      if (resolution.kind === 'unknown') { result.unresolved.push(command); continue; }
+      if (resolution.kind !== 'common') continue;
       const targets = literalTargets(element.argument?.expression_ast ?? command.elements[i + 1]?.expression_ast);
       if (!targets) result.unresolved.push(command);
       else for (const target of targets) record(target.startsWith('+') ? target.slice(1) : target, command);
+    }
+    for (const element of command.elements.filter(element => element.splatted)) {
+      // docker is the existing native-command contract (its function/alias
+      // shadows are rejected separately); native arguments cannot bind common
+      // PowerShell output-variable parameters.
+      if (name === 'docker') continue;
+      const entries = staticCommandSplat(ast, command, element);
+      if (!entries) { result.unresolved.push(command); continue; }
+      for (const [key, value] of entries) {
+        const resolution = resolveCommandVariableParameter(ast, command, key);
+        if (resolution.kind === 'unknown') result.unresolved.push(command);
+        if (resolution.kind === 'common') record(value.startsWith('+') ? value.slice(1) : value, command);
+      }
+      // Only this bounded built-in binding is proven here. Provider, function,
+      // mixed named/splat and unknown command bindings remain fail closed.
+      const allowed = ['inputobject', 'noenumerate', ...commonParameters];
+      const keys = [...entries.keys()].map(key => commonParameterAliases.get(key) ?? key);
+      if (name !== 'write-output' || command.elements.some(element => element.type === 'CommandParameterAst') ||
+          command.elements.filter(element => element.splatted).length !== 1 ||
+          keys.some(key => !allowed.includes(key)) || new Set(keys).size !== keys.length) result.unresolved.push(command);
     }
   }
   return result;
@@ -1469,9 +1769,10 @@ function validateBatch1RaceTopology(databasePath, workflowText) {
     extraction = extractPowerShellAst(databasePath);
   } catch (error) {
     issues.push({ code: 'powershell.runtime_or_output', message: error instanceof Error ? error.message : String(error) });
-    return { issues, evidence: { extraction: 'FAIL' } };
+    return { issues, evidence: { extraction: 'FAIL', extraction_failure: error.extraction ?? null } };
   }
   const ast = extraction.document;
+  ast.source_text = databaseText;
   if (ast.parse_errors.length > 0) {
     issues.push({ code: 'powershell.parse', message: `PowerShell parser reported ${ast.parse_errors.length} error(s)` });
     return { issues, evidence: { runtime: ast.runtime, process: extraction.process, parse_errors: ast.parse_errors } };
@@ -2074,7 +2375,7 @@ function runTopologyControl(spec) {
     fixture = spec.mutate(fixture);
     const mutationProofs = activeMutationProofs;
     activeMutationProofs = null;
-    if (!Array.isArray(spec.expectedCodes) || spec.expectedCodes.length === 0) {
+    if (!Array.isArray(spec.expectedCodes) || (spec.expectedCodes.length === 0 && !spec.positive)) {
       throw new Error('negative control must declare a non-empty expectedCodes set');
     }
     const expectedCodes = [...spec.expectedCodes].sort();
@@ -2089,7 +2390,10 @@ function runTopologyControl(spec) {
     const validation = validateBatch1RaceTopology(databaseCopy, readFileSync(workflowCopy, 'utf8'));
     const controlIssues = validation.issues;
     const observedCodes = controlIssues.map((issue) => issue.code).sort();
-    const exactCodeSet = exactCodeSetMatch(expectedCodes, observedCodes);
+    const exactCodeSet = spec.positive ? expectedCodes.length === 0 && observedCodes.length === 0 :
+      exactCodeSetMatch(expectedCodes, observedCodes);
+    const provenanceAccepted = validation.evidence?.worker_source_provenance?.length === 3 &&
+      validation.evidence.worker_source_provenance.every(chain => chain.accepted);
     report = {
       id: spec.id,
       expected_failures: expectedCodes,
@@ -2098,8 +2402,10 @@ function runTopologyControl(spec) {
       parser_valid: validation.evidence?.parse_errors === 0,
       approved_tokens_retained: tokensRetained,
       candidate_changed: candidateChanged,
+      ...(spec.positive ? { worker_bindings_and_provenance_accepted: provenanceAccepted } : {}),
       mutation_proof: mutationProofs,
-      control_passed: exactCodeSet && tokensRetained && candidateChanged && mutationProven &&
+      ...(validation.evidence?.extraction_failure ? { extraction_failure: validation.evidence.extraction_failure } : {}),
+      control_passed: exactCodeSet && tokensRetained && candidateChanged && mutationProven && (!spec.positive || provenanceAccepted) &&
         (spec.allowParseFailure ? controlIssues.some((issue) => issue.code === 'powershell.parse') :
           validation.evidence?.parse_errors === 0 && !controlIssues.some((issue) => issue.code === 'powershell.runtime_or_output'))
     };
@@ -2700,6 +3006,110 @@ const protectedVariableControlSpecs = [
 }));
 commandResolutionControlSpecs.push(...protectedVariableControlSpecs);
 
+const indirectMutationControlSpecs = [];
+function indirectControl(id, insertion, expectedCodes, worker = false) {
+  return {
+    id: `CONTROL-INDIRECT-${id}`, expectedCodes, positive: expectedCodes.length === 0,
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: fixture => {
+      const anchor = worker ?
+        "            Set-Item -LiteralPath 'function:Invoke-NegativePreflightProcess' -Value ([scriptblock]::Create($CaptureSource))" :
+        '  if (-not $M40Acceptance) {';
+      return { ...fixture, database: replaceExactly(fixture.database, anchor, insertion + '\n' + anchor) };
+    }
+  };
+}
+for (const target of ['M40Acceptance', 'CaptureSource', 'PacketSource', 'ObserverSource']) {
+  const code = target === 'M40Acceptance' ? 'scope.m40_acceptance_write' : 'helper.source_write';
+  const value = target === 'M40Acceptance' ? '$true' : "'Write-Output REVIEW_INJECTED'";
+  for (const [kind, insertion] of [
+    ['REF', `$slot = [ref]$${target}\n$slot.Value = ${value}`],
+    ['GET-VARIABLE', `$slot = Get-Variable ${target}\n$alias = $slot\n$alias.Value = ${value}`],
+    ['GET-ITEM', `$slot = Get-Item Variable:${target}\n$slot.Value = ${value}`],
+    ['PIPELINE', `Get-Variable ${target} | ForEach-Object { $_.Value = ${value} }`],
+    ['GET-ITEM-PIPELINE', `gi Variable:${target} | % { $_.Value = ${value} }`]
+  ]) indirectMutationControlSpecs.push(indirectControl(`${target.toUpperCase()}-${kind}`, insertion, [code], target !== 'M40Acceptance'));
+}
+for (const [id, insertion, codes] of [
+  ['DYNAMIC-HANDLE', '$name = "CaptureSource"\n$slot = gv $name\n$slot.Value = "injected"', ['variable.target_unknown']],
+  ['DYNAMIC-REF', '$slot = [ref](Get-Variable $name)\n$slot.Value = "injected"', ['variable.target_unknown']],
+  ['COPY-DESTINATION', "$replacement = 'Write-Output REVIEW_INJECTED'\nCopy-Item Variable:replacement Variable:CaptureSource -Force", ['helper.source_write']],
+  ['MOVE-DESTINATION', 'Move-Item Variable:replacement Variable:PacketSource -Force', ['helper.source_write']],
+  ['RENAME-NEWNAME', 'Rename-Item Variable:replacement ObserverSource -Force', ['helper.source_write']],
+  ['COPY-LITERALPATH', 'Copy-Item -LiteralPath Variable:replacement Variable:CaptureSource -Force', ['helper.source_write']],
+  ['COPY-NAMED-AFTER-POSITIONAL', 'Copy-Item Variable:CaptureSource -Path Variable:replacement -Force', ['helper.source_write']],
+  ['COPY-DYNAMIC-DESTINATION', 'Copy-Item Variable:replacement $destination', ['variable.target_unknown']],
+  ['COPY-MISSING-DESTINATION', 'Copy-Item Variable:replacement', ['variable.target_unknown']],
+  ['COPY-CONFLICTING-SETS', 'Copy-Item -Path Variable:replacement -LiteralPath Variable:replacement -Destination Variable:CaptureSource', ['variable.target_unknown']],
+  ['SPLAT-OUTVARIABLE', "$options = @{ OutVariable = 'CaptureSource' }\nWrite-Output 'Write-Output REVIEW_INJECTED' @options | Out-Null", ['helper.source_write']],
+  ['SPLAT-ALIAS', "$options = @{ oV = '+PacketSource' }\nWrite-Output 'injected' @options | Out-Null", ['helper.source_write']],
+  ['SPLAT-DYNAMIC', 'Write-Output "injected" @options | Out-Null', ['variable.target_unknown']],
+  ['SPLAT-REBIND', "$options = @{ OutVariable = 'unrelated' }\n$options.OutVariable = 'CaptureSource'\nWrite-Output 'injected' @options", ['variable.target_unknown']],
+  ['SPLAT-OTHER-COMMAND', "$options = @{ OutVariable = 'CaptureSource' }\nGet-Date @options | Out-Null", ['helper.source_write', 'variable.target_unknown']],
+  ['SPLAT-PIPELINE-PREDECESSOR', "$options = @{ OutVariable = 'unrelated' }\nWrite-Output 'injected' | Write-Output @options", ['variable.target_unknown']]
+]) indirectMutationControlSpecs.push(indirectControl(id, insertion, codes));
+for (const abbreviation of ['OutV', 'oUtVa', 'OutVar', 'OutVari', 'OutVaria', 'OutVariab', 'OutVariabl', 'OutVariable', 'OV']) {
+  indirectMutationControlSpecs.push(indirectControl(`COMMON-${abbreviation.toUpperCase()}`,
+    `Write-Output 'Write-Output REVIEW_INJECTED' -${abbreviation} CaptureSource | Out-Null`, ['helper.source_write']));
+}
+indirectMutationControlSpecs.push(
+  indirectControl('POSITIVE-WORKER-BINDINGS', '$readOnly = @($CaptureSource, $PacketSource, $ObserverSource)', [], true),
+  indirectControl('POSITIVE-READS-AND-UNRELATED',
+    '$readOnly = $M40Acceptance\n$readOnly = Get-Variable M40Acceptance -ValueOnly\n$unrelated = 1\n$slot = [ref]$unrelated\n$slot.Value = 2\n$slot = Get-Variable unrelated\n$slot.Value = 3\nCopy-Item Variable:unrelated Variable:unrelatedCopy\nMove-Item Variable:unrelatedCopy Variable:unrelatedMoved\nRename-Item Variable:unrelatedMoved unrelatedRenamed', []),
+  indirectControl('POSITIVE-STATIC-SPLAT', "$options = @{ OutVariable = 'unrelated' }\nWrite-Output 'safe' @options | Out-Null", [])
+);
+
+// Keep approved helper bodies byte-for-byte intact. The baseline proves both
+// Publish-M40PipeLines calls; independent local functions exercise the same
+// binding rules without weakening helper body-hash provenance.
+const parameterBindingControlSpecs = [];
+function parameterBindingControl(id, insertion, expectedCodes) {
+  return {
+    id: `CONTROL-PARAMETER-BINDING-${id}`, expectedCodes, positive: expectedCodes.length === 0,
+    requiredTokens: mandatoryBatch1Tokens,
+    mutate: fixture => ({ ...fixture, database: replaceExactly(fixture.database,
+      'function Invoke-NegativePreflightProcess {', insertion + '\nfunction Invoke-NegativePreflightProcess {') })
+  };
+}
+const pipeBindingDefinition = 'function Test-LocalPipeBinding { param([object]$Pipe, [bool]$Final = $false) Write-Output $Pipe }';
+for (const [id, invocation] of [
+  ['POSITIVE-PIPE', 'Test-LocalPipeBinding -Pipe $pipe'],
+  ['POSITIVE-PIPE-FINAL', 'Test-LocalPipeBinding -Pipe $pipe -Final $true'],
+  ['POSITIVE-CASE', 'Test-LocalPipeBinding -pIpE $pipe -fInAl $true']
+]) parameterBindingControlSpecs.push(parameterBindingControl(id, `${pipeBindingDefinition}\n${invocation}`, []));
+for (const parameter of ['Pipe', 'PipelineVariable', 'PV', 'pIpE', 'pV', 'oUtV']) {
+  parameterBindingControlSpecs.push(parameterBindingControl(`COMMON-${parameter}`,
+    `Write-Output 'injected' -${parameter} CaptureSource | Out-Null`, ['helper.source_write']));
+}
+for (const [id, insertion, expectedCodes] of [
+  ['DYNAMIC-TARGET', "Write-Output 'injected' -Pipe $target", ['variable.target_unknown']],
+  ['MISSING-DEFINITION', 'Test-MissingPipeBinding -Pipe $pipe', ['variable.target_unknown']],
+  ['DUPLICATE-DEFINITION', `${pipeBindingDefinition}\n${pipeBindingDefinition}\nTest-LocalPipeBinding -Pipe $pipe`, ['variable.target_unknown']],
+  ['SHADOW-DEFINITION', `${pipeBindingDefinition}\nfunction Test-BindingCaller { ${pipeBindingDefinition}\nTest-LocalPipeBinding -Pipe $pipe }`, ['variable.target_unknown']],
+  ['CONDITIONAL-DEFINITION', `if ($true) { ${pipeBindingDefinition} }\nTest-LocalPipeBinding -Pipe $pipe`, ['variable.target_unknown']],
+  ['INVISIBLE-DEFINITION', `function Test-BindingOwner { ${pipeBindingDefinition}\nWrite-Output 'owner' }\nTest-LocalPipeBinding -Pipe $pipe`, ['variable.target_unknown']],
+  ['MODULE-IDENTITY', `${pipeBindingDefinition}\nUnprovenModule\\Test-LocalPipeBinding -Pipe $pipe`, ['variable.target_unknown']],
+  ['DYNAMIC-COMMAND', `${pipeBindingDefinition}\n$command = 'Test-LocalPipeBinding'\n& $command -Pipe $pipe`, ['command.dynamic_invocation', 'variable.target_unknown']],
+  ['ALIAS-IDENTITY', `${pipeBindingDefinition}\nSet-Alias -Name Test-LocalPipeBinding -Value Write-Output\nTest-LocalPipeBinding -Pipe $pipe`, ['command.alias_definition']],
+  ['AMBIGUOUS-PREFIX', "function Test-PipelineBinding { param($PipelineInput) Write-Output $PipelineInput }\nTest-PipelineBinding -Pipe CaptureSource", ['variable.target_unknown']],
+  ['DUPLICATE-NAMED-ARGUMENT', `${pipeBindingDefinition}\nTest-LocalPipeBinding -Pipe $pipe -pIpE $pipe`, ['variable.target_unknown']],
+  ['LOCAL-SPLAT', `${pipeBindingDefinition}\n$options = @{ Pipe = 'safe' }\nTest-LocalPipeBinding @options`, ['variable.target_unknown']]
+]) parameterBindingControlSpecs.push(parameterBindingControl(id, insertion, expectedCodes));
+
+// Retain each exact Stage 1 counterexample as an independent control, at the
+// original root-scope anchor, in addition to the broader handle matrix above.
+const originalBypassControlSpecs = [
+  ['M40-REF', '$slot = [ref]$M40Acceptance\n$slot.Value = $true', 'scope.m40_acceptance_write'],
+  ['M40-HANDLE', '$slot = Get-Variable M40Acceptance\n$slot.Value = $true', 'scope.m40_acceptance_write'],
+  ['M40-PIPELINE', 'Get-Variable M40Acceptance | ForEach-Object { $_.Value = $true }', 'scope.m40_acceptance_write'],
+  ['CAPTURE-REF', "$slot = [ref]$CaptureSource\n$slot.Value = 'Write-Output REVIEW_INJECTED'", 'helper.source_write'],
+  ['CAPTURE-HANDLE', "$slot = Get-Variable CaptureSource\n$slot.Value = 'Write-Output REVIEW_INJECTED'", 'helper.source_write'],
+  ['CAPTURE-GETITEM', "$slot = Get-Item Variable:CaptureSource\n$slot.Value = 'Write-Output REVIEW_INJECTED'", 'helper.source_write'],
+  ['COPY-POSITIONAL', "$replacement = 'Write-Output REVIEW_INJECTED'\nCopy-Item Variable:replacement Variable:CaptureSource -Force", 'helper.source_write'],
+  ['OUTV', "Write-Output 'Write-Output REVIEW_INJECTED' -OutV CaptureSource | Out-Null", 'helper.source_write'],
+  ['SPLAT', "$options = @{ OutVariable = 'CaptureSource' }\nWrite-Output 'Write-Output REVIEW_INJECTED' @options | Out-Null", 'helper.source_write']
+].map(([id, insertion, code]) => ({ ...indirectControl(`STAGE1-${id}`, insertion, [code]), id: `CONTROL-ORIGINAL-BYPASS-${id}` }));
+
 const exactControlCodeSets = new Map([
   ['CONTROL-MISSING-STAFF-EXISTING', ['race.order', 'race.staff-existing.invocation_count']],
   ['CONTROL-MISSING-STAFF-ABSENT', ['race.order', 'race.staff-absent.invocation_count']],
@@ -2721,7 +3131,7 @@ const exactControlCodeSets = new Map([
   ['CONTROL-CORRECT-TOKENS-WRONG-NAMED-PARAMETERS', ['race.staff-cross-role.first_file', 'race.staff-cross-role.second_file']],
   ['CONTROL-APPROVED-TOKEN-UNUSED-EXTRA-ARGUMENT', ['race.staff-existing.arguments', 'race.staff-existing.first_file']],
   ['CONTROL-DYNAMIC-PROTECTED-WORKER', ['race.staff-existing.first_file']],
-  ['CONTROL-UNVERIFIED-SPLATTING', ['command.protected_splat', 'race.staff-existing.arguments', 'race.staff-existing.first_file', 'race.staff-existing.second_file']],
+  ['CONTROL-UNVERIFIED-SPLATTING', ['command.protected_splat', 'race.staff-existing.arguments', 'race.staff-existing.first_file', 'race.staff-existing.second_file', 'variable.target_unknown']],
   ['CONTROL-ASSERTION-TOKEN-COMMENT-ONLY', ['race.staff-existing.assertion_reachable']],
   ['CONTROL-SETUP-TOKEN-STRING-ONLY', ['setup.command_count']],
   ['CONTROL-STAFF-EXISTING-RACE-UNINVOKED-SCRIPTBLOCK', ['race.staff-existing.executable_reachability']],
@@ -2757,10 +3167,11 @@ for (const spec of [...legacyTopologyControlSpecs, ...terminalControlSpecs, ...d
 
 function runAstBoundaryControls() {
   const validObject = {
-    schema_version: 5,
+    schema_version: 7,
     source_path: databaseVerifyPath,
+    source_sha256: sha256(databaseVerify),
     runtime: { parser_type: 'System.Management.Automation.Language.Parser' },
-    parse_errors: [], commands: [], functions: [], ifs: [], throws: [], assignments: [], variable_writes: [], variable_api_accesses: [], tries: [],
+    parse_errors: [], commands: [], functions: [], ifs: [], throws: [], assignments: [], variable_writes: [], variable_api_accesses: [], writable_references: [], tries: [],
     parameters: [], root_parameters: [], target_variable_references: [], target_unary_expressions: [],
     target_foreach_variables: [], returns: [], exits: [], invoke_members: [],
     root_body_extent: { start_offset: 0, end_offset: 0 }, root_statements: [], root_traps: [],
@@ -2806,6 +3217,38 @@ function runAstBoundaryControls() {
     observed_classification: sourceIdentityClassification,
     exact_match: sourceIdentityClassification === 'ast.source_identity',
     control_passed: sourceIdentityClassification === 'ast.source_identity' });
+  const sourceBytes = Buffer.from('a\r\n😀b\n');
+  const compactDocument = () => ({ source_sha256: sha256(sourceBytes),
+    root_extent: { source_extent: [0, sourceBytes.toString('utf8').length] },
+    extent: { source_extent: [3, 6] }, nested_extents: [{ source_extent: [0, 0] }] });
+  const compactCases = [
+    { id: 'CONTROL-AST-COMPACT-SOURCE-HASH', code: 'ast.source_identity', mutate: doc => { doc.source_sha256 = sha256('different candidate'); } },
+    { id: 'CONTROL-AST-COMPACT-NEGATIVE-OFFSET', code: 'ast.invalid_extent', mutate: doc => { doc.extent.source_extent[0] = -1; } },
+    { id: 'CONTROL-AST-COMPACT-REVERSED-OFFSETS', code: 'ast.invalid_extent', mutate: doc => { doc.extent.source_extent = [6, 3]; } },
+    { id: 'CONTROL-AST-COMPACT-OUTSIDE-SOURCE', code: 'ast.invalid_extent', mutate: doc => { doc.extent.source_extent[1] = 100; } },
+    { id: 'CONTROL-AST-COMPACT-NONINTEGER-OFFSET', code: 'ast.invalid_extent', mutate: doc => { doc.extent.source_extent[0] = 0.5; } },
+    { id: 'CONTROL-AST-COMPACT-MISSING-MARKER', code: 'ast.invalid_extent', mutate: doc => { doc.extent = {}; } },
+    { id: 'CONTROL-AST-COMPACT-EXTRA-FIELD', code: 'ast.invalid_extent', mutate: doc => { doc.extent.text = 'untrusted'; } },
+    { id: 'CONTROL-AST-COMPACT-TRUNCATED-ROOT', code: 'ast.source_identity', mutate: doc => { doc.root_extent.source_extent[1] -= 1; } }
+  ];
+  for (const spec of compactCases) {
+    const document = compactDocument();
+    spec.mutate(document);
+    let observed = null;
+    try { restoreAstExtents(document, sourceBytes); } catch (error) { observed = error.code; }
+    controls.push({ id: spec.id, expected_classification: spec.code, observed_classification: observed,
+      exact_match: observed === spec.code, control_passed: observed === spec.code });
+  }
+  const roundTrip = restoreAstExtents(compactDocument(), sourceBytes);
+  controls.push({ id: 'CONTROL-AST-COMPACT-UNICODE-CRLF-ROUNDTRIP', control_passed:
+    roundTrip.extent.text === '😀b' && roundTrip.extent.start_line === 2 && roundTrip.extent.start_column === 1 &&
+    roundTrip.extent.end_line === 2 && roundTrip.extent.end_column === 4 &&
+    roundTrip.root_extent.end_line === 3 && roundTrip.root_extent.end_column === 1 &&
+    roundTrip.nested_extents[0].text === '' });
+  let bufferClassification = null;
+  try { parseAstProcessResult({ error: { code: 'ENOBUFS' } }); } catch (error) { bufferClassification = error.code; }
+  controls.push({ id: 'CONTROL-AST-ENOBUFS', expected_classification: 'ast.enobufs', observed_classification: bufferClassification,
+    exact_match: bufferClassification === 'ast.enobufs', control_passed: bufferClassification === 'ast.enobufs' });
   return controls;
 }
 
@@ -3020,11 +3463,15 @@ const authorizedExitControls = authorizedExitControlSpecs.map(runTopologyControl
 const directThrowControls = directThrowControlSpecs.map(runTopologyControl);
 const safetyWrapperControls = safetyWrapperControlSpecs.map(runTopologyControl);
 const commandResolutionControls = commandResolutionControlSpecs.map(runTopologyControl);
+const indirectMutationControls = indirectMutationControlSpecs.map(runTopologyControl);
+const parameterBindingControls = parameterBindingControlSpecs.map(runTopologyControl);
+const originalBypassControls = originalBypassControlSpecs.map(runTopologyControl);
 const allMutationControls = [...legacyTopologyControls, ...terminalControls, ...authorizedExitControls, ...directThrowControls,
-  ...safetyWrapperControls, ...commandResolutionControls];
+  ...safetyWrapperControls, ...commandResolutionControls, ...indirectMutationControls, ...parameterBindingControls, ...originalBypassControls];
 for (const control of allMutationControls) {
   if (!control.control_passed) failures.push(
-    `[${control.id}] topology negative control failed: observed=${JSON.stringify(control.observed_failures)} error=${control.error ?? 'none'} restoration=${control.restoration} cleanup=${control.cleanup}`
+    `[${control.id}] topology negative control failed: observed=${JSON.stringify(control.observed_failures)} error=${control.error ?? 'none'} restoration=${control.restoration} cleanup=${control.cleanup}` +
+      (control.extraction_failure ? ` extraction=${JSON.stringify(control.extraction_failure)}` : '')
   );
 }
 const astBoundaryControls = runAstBoundaryControls();
@@ -3041,7 +3488,11 @@ const allControlsPassed = positiveTopologyControl.control_passed && completeVeri
   authorizedM40ExitPositiveControl.control_passed && directThrowPositiveControl.control_passed &&
   allMutationControls.every((control) => control.control_passed) &&
   astBoundaryControls.every((control) => control.control_passed) && sourceOverrideControl.control_passed &&
-  exactCodeSetComparatorControls.every((control) => control.control_passed);
+  exactCodeSetComparatorControls.every((control) => control.control_passed) &&
+  new Set([positiveTopologyControl, completeVerifierPositiveControl, authorizedM40ExitPositiveControl, directThrowPositiveControl,
+    ...allMutationControls, ...astBoundaryControls, sourceOverrideControl, ...exactCodeSetComparatorControls].map(control => control.id)).size ===
+      4 + allMutationControls.length + astBoundaryControls.length + 1 + exactCodeSetComparatorControls.length;
+if (!allControlsPassed && failures.length === 0) failures.push('Control aggregation or unique IDs failed');
 const restorationPassed = repositoryTopologyRestored();
 const cleanupPassed = allMutationControls.every((control) => control.cleanup === 'PASS');
 if (!restorationPassed) failures.push('Protected topology files were not restored');
@@ -3050,7 +3501,8 @@ if (!cleanupPassed) failures.push('Topology control cleanup failed');
 if (failures.length > 0) {
   console.error(failures.join('\n'));
   process.exitCode = 1;
-} else {
+}
+{
   console.log(JSON.stringify({
     guard: 'release-workflow',
     topology: staffRaceSpecs.map((race) => ({
@@ -3073,6 +3525,12 @@ if (failures.length > 0) {
     direct_throw_controls: directThrowControls,
     safety_wrapper_controls: safetyWrapperControls,
     command_resolution_controls: commandResolutionControls,
+    indirect_mutation_controls: indirectMutationControls,
+    parameter_binding_controls: parameterBindingControls,
+    original_bypass_controls: originalBypassControls,
+    performance: { elapsed_ms: performance.now() - guardStarted, ast_subprocesses: {
+      ...astProcessMetrics, average_ms: astProcessMetrics.count ? astProcessMetrics.total_ms / astProcessMetrics.count : 0 },
+      CI_TIMEOUT_WATCH: 'Retained: compare complete guard duration against the unchanged CI job timeout.' },
     exact_code_set_comparator_controls: exactCodeSetComparatorControls,
     control_totals: {
       legacy_negative: legacyTopologyControls.length,
@@ -3081,21 +3539,28 @@ if (failures.length > 0) {
       direct_throw_negative: directThrowControls.length,
       safety_wrapper_negative: safetyWrapperControls.length,
       command_resolution_negative: commandResolutionControls.length,
+      indirect_negative: indirectMutationControls.filter(control => control.expected_failures.length > 0).length,
+      indirect_positive: indirectMutationControls.filter(control => control.expected_failures.length === 0).length,
+      parameter_binding_negative: parameterBindingControls.filter(control => control.expected_failures.length > 0).length,
+      parameter_binding_positive: parameterBindingControls.filter(control => control.expected_failures.length === 0).length,
+      original_bypass_negative: originalBypassControls.length,
       ast_boundary: astBoundaryControls.length,
       exact_code_set_comparator: exactCodeSetComparatorControls.length,
       source_override: 1,
       positive: 4,
       total: legacyTopologyControls.length + terminalControls.length + authorizedExitControls.length + directThrowControls.length +
-        safetyWrapperControls.length + commandResolutionControls.length + astBoundaryControls.length +
+        safetyWrapperControls.length + commandResolutionControls.length + indirectMutationControls.length + parameterBindingControls.length +
+        originalBypassControls.length + astBoundaryControls.length +
         exactCodeSetComparatorControls.length + 1 + 4
     },
     ast_extraction: topologyValidation.evidence,
     ast_boundary_controls: astBoundaryControls,
     source_override_control: sourceOverrideControl,
     protected_hashes: Object.fromEntries([...protectedTopologySnapshots].map(([path, bytes]) => [path.slice(repositoryRoot.length + 1).replaceAll('\\', '/'), sha256(bytes)])),
+    failures,
     aggregation: allControlsPassed && restorationPassed && cleanupPassed ? 'PASS' : 'FAIL',
     restoration: restorationPassed ? 'PASS' : 'FAIL',
     cleanup: cleanupPassed ? 'PASS' : 'FAIL',
-    final_result: allControlsPassed && restorationPassed && cleanupPassed ? 'PASS' : 'FAIL'
+    final_result: failures.length === 0 && allControlsPassed && restorationPassed && cleanupPassed ? 'PASS' : 'FAIL'
   }));
 }
