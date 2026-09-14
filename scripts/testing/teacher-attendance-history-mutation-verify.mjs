@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
+import { stripVTControlCharacters } from 'node:util';
 import { repositoryWorkflowIsValid } from './repository-workflow-contract.mjs';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
@@ -1771,8 +1772,11 @@ function diagnosticLineSecurityCodes(line, stream) {
   const sidecarPayload = /@@TECM_M40_SEMANTIC@@|"schema"\s*:\s*"tecm\.m40\.semantic\./.test(line);
   const rawM40Sql = stream === 'stderr'
     && /(?:teacher_attendance_contention|submit_teacher_attendance|statement_timeout|SQLSTATE\s*57014|(?:^|\W)57014(?:\W|$))/i.test(line);
+  // Inspect both raw and visible text for rejection only. ANSI decoration must
+  // not hide an error label; baseline fingerprints and accepted records stay raw.
   const terminalErrorRecord = stream === 'stderr'
-    && /(?:M40_EXPECTED_TERMINAL_FAILURE|(?:^|\s)(?:Exception|RuntimeException|ParserError|Write-Error):|CategoryInfo\s*:|FullyQualifiedErrorId\s*:)/i.test(line);
+    && [line, stripVTControlCharacters(line)].some((text) =>
+      /(?:M40_EXPECTED_TERMINAL_FAILURE|(?:^|\s)(?:Exception|RuntimeException|ParserError|Write-Error):|CategoryInfo\s*:|FullyQualifiedErrorId\s*:)/i.test(text));
   if (privatePath) codes.add(m40DiagnosticRejectionCodes.privatePath);
   if (sensitive) codes.add(m40DiagnosticRejectionCodes.sensitive);
   if (sidecarPayload) codes.add(m40DiagnosticRejectionCodes.sidecarPayload);
@@ -3202,11 +3206,16 @@ function runDatabaseClassificationControls(mutation, baselineEvidence, selectedC
   });
 }
 
-function runPowerShellDiagnosticTerminationControl({ id, replacement, expectedCodes, fileEntrypoint = false }) {
+function runPowerShellDiagnosticTerminationControl({ id, replacement, expectedCodes, fileEntrypoint = false, requireAnsi = false }) {
   const tempRoot = mkdtempSync(resolve(tmpdir(), `tecm-m40-diagnostic-${id.toLowerCase()}-`));
   const target = resolve(tempRoot, 'termination-control.ps1');
   const original = Buffer.from('exit 0\n', 'utf8');
   const emptyProfile = diagnosticFingerprintProfile('');
+  const environment = databaseProbeEnvironment();
+  if (requireAnsi) {
+    environment.TERM = 'xterm-256color';
+    delete environment.NO_COLOR;
+  }
   let mutation = null;
   let result = null;
   let classification = null;
@@ -3223,7 +3232,7 @@ function runPowerShellDiagnosticTerminationControl({ id, replacement, expectedCo
     result = spawnSync('pwsh', args, {
       cwd: tempRoot,
       encoding: 'utf8',
-      env: databaseProbeEnvironment(),
+      env: environment,
       timeout: 30_000,
       windowsHide: true,
       maxBuffer: 256 * 1024
@@ -3237,8 +3246,9 @@ function runPowerShellDiagnosticTerminationControl({ id, replacement, expectedCo
   }
   const observedCodes = classification?.rejection_codes ?? ['M40_DIAGNOSTIC_CONTROL_NOT_CLASSIFIED'];
   const exactRejectionSet = exactSortedSet(observedCodes, expectedCodes);
+  const ansiRenderingObserved = /\u001b\[[0-9;]*m/.test(String(result?.stderr ?? ''));
   const processContract = result?.status === 1 && !result.error && !result.signal
-    && String(result.stdout ?? '').length === 0;
+    && String(result.stdout ?? '').length === 0 && (!requireAnsi || ansiRenderingObserved);
   if (!mutation || mutation.matches !== 1 || mutation.bytes.equals(original)
       || !exactRejectionSet || !processContract || !restored || !cleaned) {
     throw new VerifierError('M40_DIAGNOSTIC_CONTROL_FAILED', `${id} did not satisfy its exact termination contract`, {
@@ -3253,6 +3263,7 @@ function runPowerShellDiagnosticTerminationControl({ id, replacement, expectedCo
       process_error_code: result?.error?.code ?? null,
       stdout_bytes: Buffer.byteLength(String(result?.stdout ?? '')),
       stderr_bytes: Buffer.byteLength(String(result?.stderr ?? '')),
+      ...(requireAnsi ? { ansi_rendering_observed: ansiRenderingObserved } : {}),
       diagnostic_classification: classification,
       restoration: restored ? 'PASS' : 'FAIL',
       cleanup: cleaned ? 'PASS' : 'FAIL'
@@ -3273,6 +3284,7 @@ function runPowerShellDiagnosticTerminationControl({ id, replacement, expectedCo
     process_error: null,
     stdout_bytes: Buffer.byteLength(String(result.stdout ?? '')),
     stderr_bytes: Buffer.byteLength(String(result.stderr ?? '')),
+    ...(requireAnsi ? { ansi_rendering_observed: ansiRenderingObserved } : {}),
     diagnostic_classification: classification,
     restoration: 'PASS',
     cleanup: 'PASS',
@@ -3703,6 +3715,66 @@ function runDiagnosticFixtureControl({
   };
 }
 
+function runM40AnsiDiagnosticControls() {
+  const emptyProfile = diagnosticFingerprintProfile('');
+  const notice = approvedPreterminalNotices.keys().next().value;
+  const noticeProfile = diagnosticFingerprintProfile(notice);
+  const ansiError = '\u001b[31;1mException: \u001b[31;1mTERMINAL_PROBE_FAILURE\u001b[0m\n';
+  return [
+    runPowerShellDiagnosticTerminationControl({
+      id: 'CONTROL-M40-DIAGNOSTIC-ANSI-THROW-REJECTED',
+      requireAnsi: true,
+      replacement: "$PSStyle.OutputRendering = 'Ansi'; throw 'TERMINAL_PROBE_FAILURE'",
+      expectedCodes: [m40DiagnosticRejectionCodes.terminalErrorRecord]
+    }),
+    runPowerShellDiagnosticTerminationControl({
+      id: 'CONTROL-M40-DIAGNOSTIC-ANSI-WRITE-ERROR-REJECTED',
+      requireAnsi: true,
+      replacement: "$PSStyle.OutputRendering = 'Ansi'; $ErrorActionPreference = 'Stop'; Write-Error 'TERMINAL_PROBE_FAILURE'",
+      expectedCodes: [m40DiagnosticRejectionCodes.terminalErrorRecord]
+    }),
+    runDiagnosticFixtureControl({
+      id: 'CONTROL-M40-DIAGNOSTIC-ANSI-LF-ERROR-REJECTED',
+      baselineProfile: emptyProfile,
+      stderr: ansiError,
+      expectedCodes: [m40DiagnosticRejectionCodes.terminalErrorRecord],
+      assertClassification: (value) => !value.safe && value.terminal_error_record_count === 1
+        && value.unknown_diagnostic_count === 0 && Buffer.byteLength(ansiError) === 52
+    }),
+    runDiagnosticFixtureControl({
+      id: 'CONTROL-M40-DIAGNOSTIC-ANSI-UNKNOWN-REJECTED',
+      baselineProfile: emptyProfile,
+      stderr: '\u001b[31mUNCLASSIFIED_PRETERMINAL_DIAGNOSTIC\u001b[0m',
+      expectedCodes: [m40DiagnosticRejectionCodes.unclassified],
+      assertClassification: (value) => !value.safe && value.unknown_diagnostic_count === 1
+    }),
+    runDiagnosticFixtureControl({
+      id: 'CONTROL-M40-DIAGNOSTIC-ANSI-NOTICE-NOT-BASELINE',
+      baselineProfile: noticeProfile,
+      stderr: `\u001b[31m${notice}\u001b[0m`,
+      expectedCodes: [m40DiagnosticRejectionCodes.baselineMismatch, m40DiagnosticRejectionCodes.unclassified],
+      assertClassification: (value) => noticeProfile.safe && !value.safe && !value.baseline_exact_match
+        && value.missing_baseline_line_count === 1 && value.unknown_diagnostic_count === 1
+    }),
+    runDiagnosticFixtureControl({
+      id: 'CONTROL-M40-DIAGNOSTIC-ANSI-REJECTION-RECORD-NOT-ACCEPTED',
+      baselineProfile: emptyProfile,
+      stderr: '\u001b[31m[M40 REJECT] M40_UNAUTHORIZED_MARKER_OBSERVED\u001b[0m',
+      expectedCodes: [m40DiagnosticRejectionCodes.unclassified],
+      assertClassification: (value) => !value.safe && value.unknown_diagnostic_count === 1
+    }),
+    runDiagnosticFixtureControl({
+      id: 'CONTROL-M40-DIAGNOSTIC-ANSI-POST-SENTINEL-REJECTED',
+      baselineProfile: emptyProfile,
+      stdout: m40ExpectedTerminationLine,
+      stderr: ansiError,
+      expectedCodes: [m40DiagnosticRejectionCodes.postSentinel, m40DiagnosticRejectionCodes.terminalErrorRecord],
+      assertClassification: (value) => !value.safe && value.terminal_error_record_count === 1
+        && value.terminal_added_stderr_count === 1
+    })
+  ];
+}
+
 function runM40DiagnosticSafetyControls(baselineEvidence) {
   const emptyProfile = diagnosticFingerprintProfile('');
   if (!emptyProfile.safe) {
@@ -3868,7 +3940,8 @@ function runM40DiagnosticSafetyControls(baselineEvidence) {
       stderr: `${databaseFailureDiagnostic}\n${databaseFailureDiagnostic}`,
       expectedCodes: [m40DiagnosticRejectionCodes.unclassified],
       assertClassification: (value) => !value.safe && value.unknown_diagnostic_count === 2
-    })
+    }),
+    ...runM40AnsiDiagnosticControls()
   ];
   if (controls.length < 13 || controls.some(({ candidate_changed: changed, mutation_target_count: count }) => (
     changed !== true || count !== 1

@@ -70,7 +70,8 @@ jobs:
 
   repository-safety:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Hosted Guard reached 19m54s; reserve time for setup and the remaining checks.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:

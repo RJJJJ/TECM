@@ -187,6 +187,23 @@ outcome because of a failure.
 
 ## Evidence and replay
 
+Terminal-error rejection inspects both raw text and text without ANSI decoration,
+so a colored PowerShell `Exception:` or `Write-Error:` label remains a rejection.
+This is not normalization for acceptance: NOTICE fingerprints, sanctioned records,
+original stdout/stderr and their hashes retain the raw output. ANSI controls cover
+real throw/Write-Error processes, the 52-byte LF error fixture, unknown diagnostics,
+decorated NOTICE/rejection records and errors after the terminal sentinel. The
+fixture reproduces the observed CI classification failure; the historical CI
+log did not preserve its 52 raw stderr bytes, so byte identity is not claimed.
+
+The `repository-safety` job budget is 30 minutes after the hosted Guard alone
+reached 19m54s within its former 20-minute job budget. Setup, the repository
+security scan and Deno checking share this budget. `CI_TIMEOUT_WATCH` remains a
+reminder to compare the entire job duration with that limit, not a separate check
+or an automatic budget assertion. Guard
+subprocess timeouts and validation contracts are unchanged. Hosted confirmation
+still requires fresh CI after independent review and separately authorized push.
+
 The F1–F3 review corrections reject duplicate decoded JSON keys at every object
 level before parsing the terminal or semantic sidecar (maximum nesting 32).
 Conflicting values are never resolved by choosing the first or last value.
