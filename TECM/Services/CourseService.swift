@@ -6,10 +6,11 @@ protocol CourseServicing {
 }
 
 struct CourseService: CourseServicing {
-    private let client: SupabaseClient
+    private let clientResolver: SupabaseClientResolver
+    private var client: SupabaseClient { clientResolver.client }
 
-    init(client: SupabaseClient = SupabaseClientProvider.shared) {
-        self.client = client
+    init(client: SupabaseClient? = nil) {
+        clientResolver = SupabaseClientResolver(client: client)
     }
 
     func fetchCourses() async throws -> [Course] {

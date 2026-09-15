@@ -186,7 +186,53 @@ enum UserAppRole: String {
     case guest
     case parent
     case teacher
+    case staff
     case admin
+}
+
+struct UserRoleCapabilities: Equatable {
+    let primaryRole: UserAppRole
+    let organizationRoles: Set<UserAppRole>
+    let hasParentRole: Bool
+
+    static let guest = UserRoleCapabilities(
+        primaryRole: .guest,
+        organizationRoles: [],
+        hasParentRole: false
+    )
+
+    var hasTeacherRole: Bool {
+        organizationRoles.contains(.teacher)
+    }
+
+    var canAccessTeacherTools: Bool {
+        hasTeacherRole || organizationRoles.contains(.admin)
+    }
+
+    static func resolve(organizationRoleNames: [String], hasParentProfile: Bool) -> UserRoleCapabilities {
+        let organizationRoles = Set(organizationRoleNames.compactMap {
+            UserAppRole(rawValue: $0.lowercased())
+        }).subtracting([.guest, .parent])
+
+        let primaryRole: UserAppRole
+        if organizationRoles.contains(.admin) {
+            primaryRole = .admin
+        } else if organizationRoles.contains(.staff) {
+            primaryRole = .staff
+        } else if organizationRoles.contains(.teacher) {
+            primaryRole = .teacher
+        } else if hasParentProfile {
+            primaryRole = .parent
+        } else {
+            primaryRole = .guest
+        }
+
+        return UserRoleCapabilities(
+            primaryRole: primaryRole,
+            organizationRoles: organizationRoles,
+            hasParentRole: hasParentProfile
+        )
+    }
 }
 
 enum ExamAttendanceStatus: String, CaseIterable, Identifiable, Codable {

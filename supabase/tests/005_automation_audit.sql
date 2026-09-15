@@ -5,11 +5,17 @@ select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001'
 
 update public.organizations set low_credit_threshold=9 where id='10000000-0000-4000-8000-000000000000';
 
+reset role;
+set role service_role;
 insert into public.makeup_entitlements(
   organization_id,student_id,units_granted,units_remaining,status,idempotency_key,created_at
 ) values (
   '10000000-0000-4000-8000-000000000000','15000000-0000-4000-8000-000000000001',1,1,'available','automation-old-makeup','2026-01-01'
 ) on conflict (organization_id,idempotency_key) do nothing;
+
+reset role;
+set role authenticated;
+select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);
 
 select public.run_automation_job('10000000-0000-4000-8000-000000000000','low_credit','2027-01-09');
 select public.run_automation_job('10000000-0000-4000-8000-000000000000','low_credit','2027-01-09');

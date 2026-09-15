@@ -12,7 +12,7 @@ struct TeacherTodayClassView: View {
                 subtitle: "只顯示已指派給目前登入教師的考試班課堂。"
             )
 
-            if authViewModel.currentRole != .teacher && authViewModel.currentRole != .admin {
+            if !authViewModel.canAccessTeacherTools {
                 EmptyStateView(title: "需要教師權限", message: "請使用已建立 teacher_profile 的教師帳號登入後點名。")
             } else if viewModel.isLoading {
                 VStack(spacing: Theme.Spacing.md) {
@@ -41,7 +41,7 @@ struct TeacherTodayClassView: View {
     }
 
     private func loadIfTeacher() async {
-        guard authViewModel.currentRole == .teacher || authViewModel.currentRole == .admin else { return }
+        guard authViewModel.canAccessTeacherTools else { return }
         await viewModel.load()
     }
 }

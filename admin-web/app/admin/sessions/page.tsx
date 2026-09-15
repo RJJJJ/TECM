@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { getOperationsContext, formatMacauDateTime, todayMacau } from '@/lib/operations/context';
 import { Badge, DataTable, EmptyState, ErrorState, PageHeader } from '@/components/operations-ui';
+import { statusLabel } from '@/lib/operations/labels';
 
 export default async function SessionsPage() {
   const { supabase, organizationId, role, user } = await getOperationsContext();
@@ -19,13 +20,13 @@ export default async function SessionsPage() {
 
   return <>
     <PageHeader title="今日課堂" description={`澳門時間 ${today} 的課堂安排與點名進度。老師只會看到自己負責的課堂。`}/>
-    {error ? <ErrorState message={error.message}/> : !data?.length ? <EmptyState>今天沒有已安排課堂。</EmptyState> :
+    {error ? <ErrorState error={error} fallback="讀取課堂安排失敗，請稍後再試。"/> : !data?.length ? <EmptyState>今天沒有已安排課堂。</EmptyState> :
       <DataTable headers={['時間', '班別', '導師', '點名人數', '狀態', '操作']}>{data.map((row: any) => <tr key={row.id}>
         <td className="whitespace-nowrap px-4 py-3">{formatMacauDateTime(row.starts_at)}</td>
         <td className="px-4 py-3 font-medium">{row.exam_cohorts?.name || '—'}</td>
         <td className="px-4 py-3">{row.teacher_profiles?.display_name || '—'}</td>
         <td className="px-4 py-3">{row.attendance_records?.length ?? 0}</td>
-        <td className="px-4 py-3"><Badge tone={row.status === 'completed' ? 'green' : 'blue'}>{row.status}</Badge></td>
+        <td className="px-4 py-3"><Badge tone={row.status === 'completed' ? 'green' : 'blue'}>{statusLabel(row.status)}</Badge></td>
         <td className="px-4 py-3"><Link href="/admin/attendance" className="font-medium text-teal-700 underline">開啟點名</Link></td>
       </tr>)}</DataTable>}
   </>;

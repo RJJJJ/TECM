@@ -1,0 +1,14 @@
+{
+  "Simulator Target Bundle": "app.TECM",
+  "aps": {
+    "alert": {
+      "title": "TECM 教育中心",
+      "body": "你有一則新的課堂提醒。"
+    },
+    "sound": "default",
+    "badge": 1
+  },
+  "notification_id": "00000000-0000-4000-8000-000000000001",
+  "category": "class_reminder",
+  "deep_link": "tecm://notifications/00000000-0000-4000-8000-000000000001"
+}

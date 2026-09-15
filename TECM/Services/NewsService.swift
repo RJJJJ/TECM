@@ -7,11 +7,12 @@ protocol NewsServicing {
 }
 
 struct NewsService: NewsServicing {
-    private let client: SupabaseClient
+    private let clientResolver: SupabaseClientResolver
+    private var client: SupabaseClient { clientResolver.client }
     private let formatter: DateFormatter
 
-    init(client: SupabaseClient = SupabaseClientProvider.shared) {
-        self.client = client
+    init(client: SupabaseClient? = nil) {
+        clientResolver = SupabaseClientResolver(client: client)
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_Hant_TW")
         formatter.dateFormat = "yyyy/MM/dd"

@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { updateFaqTopicAction, type UpdateFaqTopicFormState } from './actions';
 
 type TopicEditable = {
@@ -36,17 +37,17 @@ function clientValidate(formData: FormData) {
   const name = String(formData.get('name') ?? '').trim();
   const sortOrderRaw = String(formData.get('sort_order') ?? '').trim();
 
-  if (!name) return 'Topic name 為必填。';
+  if (!name) return '分類名稱為必填。';
 
   const sortOrder = Number(sortOrderRaw || '0');
-  if (!Number.isFinite(sortOrder)) return 'Sort order 必須是數字。';
+  if (!Number.isFinite(sortOrder)) return '排序必須是數字。';
 
   return null;
 }
 
 export default function FaqTopicEditForm({ topic }: Props) {
   const formAction = updateFaqTopicAction.bind(null, topic.id);
-  const [state, action] = useFormState(formAction, initialState);
+  const [state, action] = useActionState(formAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [showSavedHint, setShowSavedHint] = useState(false);
 
@@ -63,8 +64,8 @@ export default function FaqTopicEditForm({ topic }: Props) {
   return (
     <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div>
-        <h3 className="text-lg font-semibold text-slate-900">編輯 FAQ Topic</h3>
-        <p className="mt-1 text-xs text-slate-500">可更新 topic 名稱與排序。</p>
+        <h3 className="text-lg font-semibold text-slate-900">編輯常見問題分類</h3>
+        <p className="mt-1 text-xs text-slate-500">可更新分類名稱與排序。</p>
       </div>
 
       <form
@@ -84,7 +85,7 @@ export default function FaqTopicEditForm({ topic }: Props) {
         <div className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-2">
           <div>
             <label htmlFor="topic_name" className="mb-1 block text-sm font-medium text-slate-700">
-              Topic Name
+              分類名稱
             </label>
             <input
               id="topic_name"
@@ -99,7 +100,7 @@ export default function FaqTopicEditForm({ topic }: Props) {
 
           <div>
             <label htmlFor="topic_sort_order" className="mb-1 block text-sm font-medium text-slate-700">
-              Sort Order
+              排序
             </label>
             <input
               id="topic_sort_order"

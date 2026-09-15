@@ -6,10 +6,11 @@ protocol FAQServicing {
 }
 
 struct FAQService: FAQServicing {
-    private let client: SupabaseClient
+    private let clientResolver: SupabaseClientResolver
+    private var client: SupabaseClient { clientResolver.client }
 
-    init(client: SupabaseClient = SupabaseClientProvider.shared) {
-        self.client = client
+    init(client: SupabaseClient? = nil) {
+        clientResolver = SupabaseClientResolver(client: client)
     }
 
     func fetchFAQ() async throws -> [FAQItem] {

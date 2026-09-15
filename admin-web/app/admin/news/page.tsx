@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { getOperationsContext } from '@/lib/operations/context';
+import { EmptyState, ErrorState } from '@/components/operations-ui';
 import NewsCreateForm from './news-create-form';
 
 type NewsItemRow = {
@@ -47,11 +48,12 @@ function featuredBadge(isFeatured: boolean) {
 }
 
 export default async function AdminNewsPage() {
-  const supabase = await createServerSupabaseClient();
+  const { supabase, organizationId } = await getOperationsContext();
 
   const { data, error } = await supabase
     .from('news_items')
     .select('id, category, title, summary, content, is_featured, is_active, published_at, sort_order, updated_at')
+    .eq('organization_id', organizationId)
     .order('published_at', { ascending: false })
     .order('sort_order', { ascending: true })
     .order('updated_at', { ascending: false });
@@ -62,27 +64,25 @@ export default async function AdminNewsPage() {
     <div className="space-y-5">
       <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
         <div>
-          <h2 className="text-2xl font-semibold text-slate-900">News Management</h2>
-          <p className="mt-1 text-sm text-slate-600">管理首頁 news_items（published_at desc / sort_order asc）</p>
+          <h2 className="text-2xl font-semibold text-slate-900">最新消息管理</h2>
+          <p className="mt-1 text-sm text-slate-600">管理首頁公告及發布次序。</p>
         </div>
         <NewsCreateForm />
       </section>
 
       <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-lg font-semibold text-slate-900">News List</h3>
+          <h3 className="text-lg font-semibold text-slate-900">消息列表</h3>
           <p className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">共 {newsItems.length} 筆</p>
         </div>
 
         {error && (
-          <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-            讀取 news 失敗：{error.message}
-          </p>
+            <ErrorState error={error} fallback="讀取最新消息失敗，請稍後再試。" />
         )}
 
         {!error && newsItems.length === 0 && (
           <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600">
-            目前尚無 news，請先建立第一則。
+            目前尚無最新消息，請先建立第一則。
           </p>
         )}
 
@@ -91,14 +91,14 @@ export default async function AdminNewsPage() {
             <table className="min-w-full divide-y divide-slate-200 text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Title</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Category</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Featured</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Active</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Published At</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Sort Order</th>
-                  <th className="px-4 py-3 text-left font-medium text-slate-600">Updated At</th>
-                  <th className="px-4 py-3 text-right font-medium text-slate-600">Action</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">標題</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">類別</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">置頂</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">狀態</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">發布時間</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">排序</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600">更新時間</th>
+                  <th className="px-4 py-3 text-right font-medium text-slate-600">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
@@ -112,10 +112,10 @@ export default async function AdminNewsPage() {
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-slate-700">{item.category ?? '-'}</td>
                     <td className="px-4 py-3">
-                      <span className={featuredBadge(item.is_featured)}>{item.is_featured ? 'Featured' : 'Normal'}</span>
+                      <span className={featuredBadge(item.is_featured)}>{item.is_featured ? '是' : '否'}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={activeBadge(item.is_active)}>{item.is_active ? 'Active' : 'Inactive'}</span>
+                      <span className={activeBadge(item.is_active)}>{item.is_active ? '啟用' : '停用'}</span>
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDateTime(item.published_at)}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-slate-700">{item.sort_order}</td>
@@ -125,7 +125,7 @@ export default async function AdminNewsPage() {
                         href={`/admin/news/${item.id}`}
                         className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
                       >
-                        Edit
+                        編輯
                       </Link>
                     </td>
                   </tr>

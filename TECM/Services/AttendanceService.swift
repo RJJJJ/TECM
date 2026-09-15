@@ -7,10 +7,11 @@ protocol AttendanceServicing {
 }
 
 struct AttendanceService: AttendanceServicing {
-    private let client: SupabaseClient
+    private let clientResolver: SupabaseClientResolver
+    private var client: SupabaseClient { clientResolver.client }
 
-    init(client: SupabaseClient = SupabaseClientProvider.shared) {
-        self.client = client
+    init(client: SupabaseClient? = nil) {
+        clientResolver = SupabaseClientResolver(client: client)
     }
 
     func fetchSessionStudents(sessionID: UUID) async throws -> [TeacherSessionStudent] {
