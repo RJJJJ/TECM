@@ -305,6 +305,8 @@ const sourceFiles = [
   testPath,
   'supabase/migrations/202608140014_teacher_attendance_history_access.sql',
   'supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql',
+  'supabase/migrations/20260922135148_teacher_attendance_membership_and_roster.sql',
+  'supabase/tests/021_teacher_attendance_membership_and_roster.sql',
   'admin-web/app/admin/attendance/page.tsx',
   'admin-web/components/teacher-attendance-form.tsx',
   'admin-web/components/admin-shell.tsx',
@@ -321,7 +323,7 @@ const sourceFiles = [
 const cases = [
   {
     id: 'M30',
-    file: 'supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql',
+    file: 'supabase/migrations/20260922135148_teacher_attendance_membership_and_roster.sql',
     search: '  if not exists (\n    select 1 from public.teacher_profiles tp',
     replacement: '  if false and not exists (\n    select 1 from public.teacher_profiles tp',
     expectedTest: 'teacher attendance history has server-enforced assignment, tenant, and write boundaries',
@@ -341,7 +343,7 @@ const cases = [
   },
   {
     id: 'M32',
-    file: 'supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql',
+    file: 'supabase/migrations/20260922135148_teacher_attendance_membership_and_roster.sql',
     search: "if session_row.starts_at > now() then raise exception 'future session attendance is not allowed'; end if;",
     replacement: "if false then raise exception 'future session attendance is not allowed'; end if;",
     expectedTest: 'teacher history corrections are guarded, idempotent, auditable, and concurrency-safe',
@@ -357,7 +359,7 @@ const cases = [
   },
   {
     id: 'M39',
-    file: 'supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql',
+    file: 'supabase/migrations/20260922135148_teacher_attendance_membership_and_roster.sql',
     search: '        or target_expected_revision <> attendance_row.revision then',
     replacement: '        or false then',
     expectedTest: 'teacher history corrections are guarded, idempotent, auditable, and concurrency-safe',
@@ -365,7 +367,7 @@ const cases = [
   },
   {
     id: 'M40',
-    file: 'supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql',
+    file: 'supabase/migrations/20260922135148_teacher_attendance_membership_and_roster.sql',
     search: "  if not pg_try_advisory_xact_lock(hashtextextended(\n    'teacher-attendance:' || session_row.organization_id::text || ':' || target_session_id::text || ':' || target_student_id::text,\n    0\n  )) then\n    raise exception 'attendance update is already in progress';\n  end if;",
     replacement: "  perform pg_advisory_xact_lock(hashtextextended(\n    'teacher-attendance:' || session_row.organization_id::text || ':' || target_session_id::text || ':' || target_student_id::text,\n    0\n  ));",
     expectedTest: 'database existing/absent attendance contention proof',
@@ -2782,8 +2784,8 @@ function runDatabaseBaseline() {
   const result = runDatabaseProbe();
   const output = outputOf(result);
   const summaryPattern = m40AcceptanceMode
-    ? /^\[PASS\] M40 acceptance database: repeatable migrations and seed, SQL suites 001-008\/017-019, bounded existing\/absent attendance contention, retry assertions, negative preflight$/m
-    : /\[PASS\] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-020,/;
+    ? /^\[PASS\] M40 acceptance database: repeatable migrations and seed, SQL suites 001-008\/017-019\/021, bounded existing\/absent attendance contention, retry assertions, negative preflight$/m
+    : /\[PASS\] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-021,/;
   const completeScope = summaryPattern.test(output) && (!m40AcceptanceMode || (
     countOccurrences(output, '[CONTENTION PASS] teacher-attendance-contention-existing bounded classification, verified finalization, and no-side-effect proof') === 1
     && countOccurrences(output, '[CONTENTION PASS] teacher-attendance-contention-absent bounded classification, verified finalization, and no-side-effect proof') === 1
@@ -3990,7 +3992,9 @@ function runDatabaseMutation(mutation, options = {}) {
     }
     worktreeAdded = true;
 
-    const protectedRelatives = [...new Set([databaseVerifierPath, ...sourceFiles.filter(file => file.startsWith('supabase/tests/concurrency/teacher_attendance_contention_')), mutation.file])];
+    // Include current schema/test inputs even while they are uncommitted; HEAD
+    // alone can contain a superseded teacher RPC or omit the new regression.
+    const protectedRelatives = [...new Set([databaseVerifierPath, ...sourceFiles.filter(file => file.startsWith('supabase/')), mutation.file])];
     for (const relative of protectedRelatives) {
       const destination = resolve(worktreeRoot, relative);
       writeFileSync(destination, readFileSync(resolve(repoRoot, relative)));
@@ -4692,7 +4696,7 @@ function runM40TimeoutScopeControls(mutation, baselineEvidence, selectedControl 
 function runM40DifferentMutationControl(baselineEvidence) {
   const mutation = {
     id: 'M40-REAL-DIFFERENT-MUTATION',
-    file: 'supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql',
+    file: 'supabase/migrations/20260922135148_teacher_attendance_membership_and_roster.sql',
     search: "    raise exception 'attendance update is already in progress';",
     replacement: "    raise exception 'GENERIC_P0001_M40_PROBE';",
     expectedTest: 'database existing/absent attendance contention proof',

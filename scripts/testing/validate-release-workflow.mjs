@@ -3612,6 +3612,8 @@ rejectMatch(fixtureEnvironment, /console\.log\(|console\.error\(/, 'Fixture help
 
 for (const file of [
   '020_batch1_release_blockers.sql',
+  '021_teacher_attendance_membership_and_roster.sql',
+  '20260922135148_teacher_attendance_membership_and_roster.sql',
   'batch1_payment_worker.sql', 'batch1_payment_assert.sql',
   'batch1_intake_worker.sql', 'batch1_intake_assert.sql'
 ]) {

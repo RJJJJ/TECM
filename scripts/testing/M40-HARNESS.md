@@ -44,7 +44,7 @@ the next starts; final success also requires source restoration.
 
 The formal entry passes the explicit `-M40Acceptance` switch to the database
 verifier. The default invocation still runs the full repository scope. The M40
-scope keeps **all migration and seed setup**, SQL suites 001–008/017–019,
+scope keeps **all migration and seed setup**, SQL suites 001–008/017–019/021,
 both existing/absent contention cases, retry assertions, negative preflight and
 the original outer cleanup/terminal path. APNS business tests and unrelated
 business races stay in the full repository scope. An APNS migration failure that

@@ -440,33 +440,112 @@ struct TeacherSessionStudentDTO: Decodable {
     let displayName: String
     let schoolName: String?
     let attendanceStatus: String?
+    let attendanceRevision: Int64?
+
+    init(
+        studentID: UUID,
+        displayName: String,
+        schoolName: String?,
+        attendanceStatus: String?,
+        attendanceRevision: Int64? = nil
+    ) {
+        self.studentID = studentID
+        self.displayName = displayName
+        self.schoolName = schoolName
+        self.attendanceStatus = attendanceStatus
+        self.attendanceRevision = attendanceRevision
+    }
 
     enum CodingKeys: String, CodingKey {
         case studentID = "student_id"
         case displayName = "display_name"
         case schoolName = "school_name"
         case attendanceStatus = "attendance_status"
+        case attendanceRevision = "attendance_revision"
     }
 
     func toModel() -> TeacherSessionStudent {
-        TeacherSessionStudent(
+        let normalizedStatus = attendanceStatus?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawStatus = normalizedStatus?.isEmpty == false ? normalizedStatus : nil
+
+        return TeacherSessionStudent(
             id: studentID,
             displayName: displayName,
             schoolName: schoolName,
-            status: ExamAttendanceStatus(rawValue: attendanceStatus ?? "") ?? .present
+            status: rawStatus.map(ExamAttendanceStatus.init(serverRawValue:)) ?? .present,
+            attendanceRevision: attendanceRevision,
+            attendanceStatusRawValue: rawStatus
         )
     }
 }
 
-struct AttendanceSubmitPayload: Encodable {
-    let studentID: UUID
-    let status: String
-    let internalNote: String?
+struct TeacherAttendanceRosterRPCParams: Encodable {
+    let targetSessionID: UUID
 
     enum CodingKeys: String, CodingKey {
-        case studentID = "student_id"
-        case status
-        case internalNote = "internal_note"
+        case targetSessionID = "target_session_id"
+    }
+}
+
+struct SubmitTeacherAttendanceRPCParams: Encodable {
+    let targetSessionID: UUID
+    let targetStudentID: UUID
+    let targetStatus: String
+    let targetExpectedRevision: Int64?
+    let targetReason: String
+    let targetRequestID: String
+
+    init(request: AttendanceSubmissionRequest) {
+        targetSessionID = request.sessionID
+        targetStudentID = request.studentID
+        targetStatus = request.status.rawValue
+        targetExpectedRevision = request.expectedRevision
+        targetReason = request.reason
+        targetRequestID = request.requestID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case targetSessionID = "target_session_id"
+        case targetStudentID = "target_student_id"
+        case targetStatus = "target_status"
+        case targetExpectedRevision = "target_expected_revision"
+        case targetReason = "target_reason"
+        case targetRequestID = "target_request_id"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(targetSessionID.uuidString, forKey: .targetSessionID)
+        try container.encode(targetStudentID.uuidString, forKey: .targetStudentID)
+        try container.encode(targetStatus, forKey: .targetStatus)
+        if let targetExpectedRevision {
+            try container.encode(targetExpectedRevision, forKey: .targetExpectedRevision)
+        } else {
+            try container.encodeNil(forKey: .targetExpectedRevision)
+        }
+        try container.encode(targetReason, forKey: .targetReason)
+        try container.encode(targetRequestID, forKey: .targetRequestID)
+    }
+}
+
+struct TeacherAttendanceSubmissionResultDTO: Decodable {
+    let changed: Bool
+    let revision: Int64
+    let idempotentReplay: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case changed
+        case revision
+        case idempotentReplay = "idempotent_replay"
+    }
+
+    func toModel() -> AttendanceSubmissionResult {
+        AttendanceSubmissionResult(
+            changed: changed,
+            revision: revision,
+            idempotentReplay: idempotentReplay
+        )
     }
 }
 

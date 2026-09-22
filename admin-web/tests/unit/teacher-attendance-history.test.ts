@@ -9,6 +9,7 @@ const read = (relative: string) => readFileSync(`${root}/${relative}`, 'utf8');
 
 const migration = read('../supabase/migrations/202608140014_teacher_attendance_history_access.sql');
 const revisionMigration = read('../supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql');
+const teacherRpcMigration = read('../supabase/migrations/20260922135148_teacher_attendance_membership_and_roster.sql');
 const page = read('app/admin/attendance/page.tsx');
 const form = read('components/teacher-attendance-form.tsx');
 const actions = read('lib/operations/actions.ts');
@@ -19,14 +20,15 @@ test('teacher attendance history has server-enforced assignment, tenant, and wri
   assert.match(migration, /create or replace function public\.get_teacher_attendance_sessions\(\)/);
   assert.match(migration, /om\.role = 'teacher'/);
   assert.match(migration, /tp\.id = ls\.teacher_id/);
-  assert.match(revisionMigration, /create or replace function public\.submit_teacher_attendance/);
+  assert.match(teacherRpcMigration, /create or replace function public\.submit_teacher_attendance/);
+  assert.match(teacherRpcMigration, /if actor_role is distinct from 'teacher' then raise exception 'teacher role required'/i);
   assert.match(
-    revisionMigration,
+    teacherRpcMigration,
     /if not exists \(\s+select 1 from public\.teacher_profiles tp/,
     'M30 assignment guard missing'
   );
-  assert.match(revisionMigration, /teacher is not assigned to this session/);
-  assert.match(revisionMigration, /student is not active in this session cohort/);
+  assert.match(teacherRpcMigration, /teacher is not assigned to this session/);
+  assert.match(teacherRpcMigration, /student is not active in this session cohort/);
   assert.match(migration, /drop policy if exists attendance_teacher_write_own_session on public\.attendance_records/);
   assert.match(migration, /create policy attendance_teacher_read_assigned/);
   assert.match(migration, /if not public\.can_manage_organization\(session_organization_id\) then raise exception 'staff authorization required'/);
@@ -38,27 +40,27 @@ test('teacher history corrections are guarded, idempotent, auditable, and concur
   assert.match(revisionMigration, /before insert or update on public\.attendance_records/);
   assert.match(revisionMigration, /drop function if exists public\.submit_teacher_attendance\(uuid,uuid,text,timestamptz,text,text\)/);
   assert.match(
-    revisionMigration,
+    teacherRpcMigration,
     /target_expected_revision <> attendance_row\.revision/,
     'M39 stale revision equality guard missing'
   );
-  assert.match(revisionMigration, /if attendance_row\.id is null then\s+if target_expected_revision is not null/);
-  assert.match(revisionMigration, /future session attendance is not allowed/);
+  assert.match(teacherRpcMigration, /if attendance_row\.id is null then\s+if target_expected_revision is not null/);
+  assert.match(teacherRpcMigration, /future session attendance is not allowed/);
   assert.match(
-    revisionMigration,
+    teacherRpcMigration,
     /if session_row\.starts_at > now\(\) then raise exception 'future session attendance is not allowed'/,
     'M32 future-session denial missing'
   );
-  assert.match(revisionMigration, /attendance correction reason is required/);
-  assert.match(revisionMigration, /attendance has changed; reload before submitting/);
+  assert.match(teacherRpcMigration, /attendance correction reason is required/);
+  assert.match(teacherRpcMigration, /attendance has changed; reload before submitting/);
   assert.match(
-    revisionMigration,
+    teacherRpcMigration,
     /if not pg_try_advisory_xact_lock\(hashtextextended\([\s\S]+?raise exception 'attendance update is already in progress'/,
     'M40 non-blocking attendance contention guard missing'
   );
-  assert.match(revisionMigration, /request_seen := found/);
-  assert.match(revisionMigration, /'idempotent_replay', true/);
-  assert.match(revisionMigration, /attendance is linked to finalized leave or makeup records/);
+  assert.match(teacherRpcMigration, /request_seen := found/);
+  assert.match(teacherRpcMigration, /'idempotent_replay', true/);
+  assert.match(teacherRpcMigration, /attendance is linked to finalized leave or makeup records/);
   assert.match(migration, /create or replace function public\.capture_attendance_history_audit/);
   assert.match(
     migration,

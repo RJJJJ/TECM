@@ -23,7 +23,8 @@ $containerName = "tecm-db-verify-$PID"
 $database = 'tecm_verify'
 $unsafeDatabase = 'tecm_unsafe_preflight'
 $containerStarted = $false
-$revisionGuardMigration = '/workspace/supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql'
+# Overrides must replace the final effective teacher RPC, not its superseded body.
+$revisionGuardMigration = '/workspace/supabase/migrations/20260922135148_teacher_attendance_membership_and_roster.sql'
 $overrideDirectory = $null
 $verificationError = $null
 $cleanupError = $null
@@ -864,10 +865,12 @@ try {
     '/workspace/supabase/migrations/202608140014_teacher_attendance_history_access.sql',
     '/workspace/supabase/migrations/202608240015_attendance_function_execute_hardening.sql',
     '/workspace/supabase/migrations/202608240015_attendance_function_execute_hardening.sql',
-    $revisionGuardMigration,
-    $revisionGuardMigration,
+    '/workspace/supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql',
+    '/workspace/supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql',
     '/workspace/supabase/migrations/20260830100127_batch1_staff_attendance_operation_idempotency.sql',
     '/workspace/supabase/migrations/20260830100127_batch1_staff_attendance_operation_idempotency.sql',
+    $revisionGuardMigration,
+    $revisionGuardMigration,
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/seed.sql',
     '/workspace/supabase/tests/001_schema_contract.sql',
@@ -889,7 +892,8 @@ try {
     '/workspace/supabase/tests/017_teacher_attendance_history_access.sql',
     '/workspace/supabase/tests/018_attendance_function_execute_hardening.sql',
     '/workspace/supabase/tests/019_teacher_attendance_revision_guard.sql',
-    '/workspace/supabase/tests/020_batch1_release_blockers.sql'
+    '/workspace/supabase/tests/020_batch1_release_blockers.sql',
+    '/workspace/supabase/tests/021_teacher_attendance_membership_and_roster.sql'
   )
 
   if ($M40Acceptance) {
@@ -2429,9 +2433,9 @@ try {
   }
 
   if ($M40Acceptance) {
-    Write-Host '[PASS] M40 acceptance database: repeatable migrations and seed, SQL suites 001-008/017-019, bounded existing/absent attendance contention, retry assertions, negative preflight'
+    Write-Host '[PASS] M40 acceptance database: repeatable migrations and seed, SQL suites 001-008/017-019/021, bounded existing/absent attendance contention, retry assertions, negative preflight'
   } else {
-    Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-020, bounded existing/absent attendance contention and races, deterministic teacher-link A/B winner races, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
+    Write-Host '[PASS] repeatable migrations, negative preflight, repeatable seed, RLS, SQL suites 001-021, bounded existing/absent attendance contention and races, deterministic teacher-link A/B winner races, parent races, Admin operations races, bounded Course link/enrollment races, outbox claim race, dispatch-boundary race, and makeup same-task booking/completion race'
   }
   docker exec $containerName psql -U postgres -d $database -F ',' -Atc `
     "select 'tables',count(*) from pg_tables where schemaname='public'

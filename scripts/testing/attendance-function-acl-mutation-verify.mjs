@@ -16,10 +16,11 @@ const repoRoot = resolve(import.meta.dirname, '../..');
 const migrationPath = 'supabase/migrations/202608240015_attendance_function_execute_hardening.sql';
 const revisionMigrationPath = 'supabase/migrations/20260825150954_teacher_attendance_revision_guard.sql';
 const batch1MigrationPath = 'supabase/migrations/20260830100127_batch1_staff_attendance_operation_idempotency.sql';
+const teacherMembershipMigrationPath = 'supabase/migrations/20260922135148_teacher_attendance_membership_and_roster.sql';
 const assertionPath = 'supabase/tests/018_attendance_function_execute_hardening.sql';
 const raceAssertionPath = 'supabase/tests/concurrency/teacher_attendance_assert.sql';
 const existingRaceAssertionPath = 'supabase/tests/concurrency/teacher_attendance_existing_assert.sql';
-const immutablePaths = [migrationPath, revisionMigrationPath, batch1MigrationPath, assertionPath, raceAssertionPath, existingRaceAssertionPath];
+const immutablePaths = [migrationPath, revisionMigrationPath, batch1MigrationPath, teacherMembershipMigrationPath, assertionPath, raceAssertionPath, existingRaceAssertionPath];
 const sourceFiles = [
   'supabase/tests/000_bootstrap.sql',
   'supabase/migrations/202607110000_legacy_baseline.sql',
@@ -44,6 +45,7 @@ const sourceFiles = [
   migrationPath,
   revisionMigrationPath,
   batch1MigrationPath,
+  teacherMembershipMigrationPath,
   assertionPath
 ];
 const pre015Files = sourceFiles.slice(0, sourceFiles.indexOf(migrationPath));
@@ -512,6 +514,9 @@ function executeScenario(spec, context) {
 
     const batch1Migration = runPsqlFile(batch1MigrationPath);
     if (batch1Migration.status !== 0) throw failureForProcess('BATCH1_MIGRATION_FAILED', batch1Migration, context.containerName);
+
+    const teacherMembershipMigration = runPsqlFile(teacherMembershipMigrationPath);
+    if (teacherMembershipMigration.status !== 0) throw failureForProcess('TEACHER_MEMBERSHIP_MIGRATION_FAILED', teacherMembershipMigration, context.containerName);
 
     const repeatSeed = runPsqlFile('supabase/seed.sql');
     if (repeatSeed.status !== 0) throw failureForProcess('REPEAT_SEED_FAILED', repeatSeed, context.containerName);

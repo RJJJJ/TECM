@@ -6,6 +6,10 @@ struct TeacherAttendanceView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var tabRouter: TabRouter
 
+    private var sessionHasEnded: Bool {
+        Date() >= session.endsAt
+    }
+
     var body: some View {
         ScreenContainer(title: "學生出席", showBackButton: true, bottomSpacing: .rootTab) {
             PremiumSectionHeader(
@@ -19,21 +23,76 @@ struct TeacherAttendanceView: View {
                     SkeletonCard()
                     SkeletonCard()
                 }
-            } else if let errorMessage = viewModel.errorMessage {
-                EmptyStateView(title: "無法載入學生出席", message: errorMessage)
-            } else if viewModel.students.isEmpty {
-                EmptyStateView(title: "暫無學生", message: "此考試班的 active 學生會顯示在這裡。")
             } else {
+                if let errorMessage = viewModel.errorMessage {
+                    errorFeedbackCard(message: errorMessage)
+                }
+
+                if let noticeMessage = viewModel.noticeMessage {
+                    QuietCard {
+                        Label(noticeMessage, systemImage: "info.circle")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+                }
+
                 if let successMessage = viewModel.successMessage {
                     SuccessStateView(title: "已提交", message: successMessage)
                 }
 
-                LazyVStack(spacing: Theme.Spacing.sm) {
-                    ForEach(viewModel.students) { student in
-                        TeacherAttendanceStudentRow(
-                            student: student,
-                            selection: binding(for: student.id)
-                        )
+                if !viewModel.visibleUnsubmittedDrafts.isEmpty {
+                    QuietCard {
+                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                            Text("以下草稿尚未儲存；重新載入後請確認是否套用，或放棄此草稿。")
+                            ForEach(viewModel.visibleUnsubmittedDrafts) { draft in
+                                Text("\(draft.displayName)：原先選擇「\(draft.status.title)」")
+                                Button("放棄此草稿") {
+                                    viewModel.discardConflictingDraft(studentID: draft.id)
+                                }
+                                .disabled(viewModel.isLoading || viewModel.isSubmitting)
+                            }
+                        }
+                        .font(Theme.Typography.caption)
+                    }
+                }
+
+                if !viewModel.unavailablePendingStudents.isEmpty {
+                    QuietCard {
+                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                            Text("以下待確認的提交目前不在最新名單，請重新載入；學生再次出現後才會重試。")
+                            ForEach(viewModel.unavailablePendingStudents) { student in
+                                Text("\(student.displayName)：原先選擇「\(student.status.title)」")
+                            }
+                            Button("重新載入最新狀態") {
+                                Task { await viewModel.load(sessionID: session.id) }
+                            }
+                            .font(Theme.Typography.caption.weight(.semibold))
+                            .foregroundStyle(Theme.Colors.primary)
+                            .disabled(viewModel.isLoading || viewModel.isSubmitting)
+                        }
+                        .font(Theme.Typography.caption)
+                    }
+                }
+
+                if viewModel.students.isEmpty {
+                    EmptyStateView(
+                        title: viewModel.errorMessage == nil ? "暫無學生" : "無法載入學生出席",
+                        message: viewModel.errorMessage ?? "此考試班的 active 學生會顯示在這裡。"
+                    )
+                } else {
+                    if sessionHasEnded {
+                        correctionReasonCard
+                    }
+
+                    LazyVStack(spacing: Theme.Spacing.sm) {
+                        ForEach(viewModel.students) { student in
+                            TeacherAttendanceStudentRow(
+                                student: student,
+                                selection: binding(for: student.id),
+                                isEditable: viewModel.canEdit(studentID: student.id),
+                                isPending: viewModel.isPending(studentID: student.id)
+                            )
+                        }
                     }
                 }
             }
@@ -51,7 +110,9 @@ struct TeacherAttendanceView: View {
     }
 
     private var shouldShowSubmitBar: Bool {
-        !viewModel.isLoading && !viewModel.students.isEmpty && viewModel.successMessage == nil
+        !viewModel.isLoading
+            && !viewModel.students.isEmpty
+            && !viewModel.requiresAuthoritativeReload
     }
 
     private var submitBar: some View {
@@ -60,9 +121,63 @@ struct TeacherAttendanceView: View {
                 title: viewModel.isSubmitting ? "提交中..." : "提交出席紀錄",
                 isDisabled: viewModel.isSubmitting
             ) {
-                Task { await viewModel.submit(sessionID: session.id) }
+                Task {
+                    await viewModel.submit(
+                        sessionID: session.id,
+                        sessionEnded: sessionHasEnded
+                    )
+                }
             }
             .frame(height: 48)
+        }
+    }
+
+    private var correctionReasonCard: some View {
+        ElevatedCard {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text("更正原因（會套用至本次需要提交的學生）")
+                    .font(Theme.Typography.cardTitle)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                TextField("例如：家長臨時請假", text: $viewModel.correctionReason, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(
+                        viewModel.isSubmitting
+                            || viewModel.requiresAuthoritativeReload
+                    )
+                if viewModel.hasPendingUncertainRequests {
+                    Text("重試會沿用該筆原有資料；此處新原因只套用至尚未送出的請求。")
+                        .font(Theme.Typography.caption)
+                }
+                Text("課堂結束後，任何新增或變更都必須填寫原因。")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+        }
+    }
+
+    private func errorFeedbackCard(message: String) -> some View {
+        ElevatedCard {
+            HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Theme.Colors.warning)
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    Text("提交未完成")
+                        .font(Theme.Typography.cardTitle)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                    Text(message)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+
+                    if viewModel.requiresAuthoritativeReload {
+                        Button("重新載入最新狀態") {
+                            Task { await viewModel.load(sessionID: session.id) }
+                        }
+                        .font(Theme.Typography.caption.weight(.semibold))
+                        .foregroundStyle(Theme.Colors.primary)
+                        .disabled(viewModel.isLoading || viewModel.isSubmitting)
+                    }
+                }
+            }
         }
     }
 
@@ -105,6 +220,8 @@ struct TeacherAttendanceView: View {
 private struct TeacherAttendanceStudentRow: View {
     let student: TeacherSessionStudent
     @Binding var selection: ExamAttendanceStatus
+    let isEditable: Bool
+    let isPending: Bool
 
     var body: some View {
         ElevatedCard {
@@ -126,17 +243,35 @@ private struct TeacherAttendanceStudentRow: View {
 
                     Spacer(minLength: Theme.Spacing.sm)
 
-                    Image(systemName: selection.systemImage)
+                    if isPending {
+                        Text("待重試")
+                            .font(Theme.Typography.caption.weight(.semibold))
+                            .foregroundStyle(Theme.Colors.warning)
+                    }
+
+                    Image(systemName: student.status.systemImage)
                         .foregroundStyle(Theme.Colors.primary)
                         .accessibilityHidden(true)
                 }
 
-                Picker("出席狀態", selection: $selection) {
-                    ForEach([ExamAttendanceStatus.present, .absent, .excused]) { status in
-                        Text(status.title).tag(status)
+                if isEditable {
+                    Picker("出席狀態", selection: $selection) {
+                        ForEach([ExamAttendanceStatus.present, .absent, .excused]) { status in
+                            Text(status.title).tag(status)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(!isEditable)
+                } else {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Text(student.statusDisplayTitle)
+                            .font(Theme.Typography.caption.weight(.semibold))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                        Text(isPending ? "結果未確認，重試會沿用本次資料" : "唯讀")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
-                .pickerStyle(.segmented)
             }
         }
     }
@@ -149,7 +284,12 @@ private struct TeacherAttendanceRowsPreview: View {
         ScrollView {
             LazyVStack(spacing: Theme.Spacing.sm) {
                 ForEach(Array(mockStudents.enumerated()), id: \.element.id) { index, student in
-                    TeacherAttendanceStudentRow(student: student, selection: $statuses[index])
+                    TeacherAttendanceStudentRow(
+                        student: student,
+                        selection: $statuses[index],
+                        isEditable: true,
+                        isPending: false
+                    )
                 }
             }
             .padding()

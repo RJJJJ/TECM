@@ -64,7 +64,19 @@ jobs:
       - run: npm run test:mutation:uat
       - name: Prepare PostgreSQL image for database verification
         run: docker pull postgres:15-alpine && docker image inspect postgres:15-alpine --format '{{.Id}}'
+      - name: Prepare M40 evidence directory
+        run: mkdir -p -m 700 "$RUNNER_TEMP/tecm-m40-evidence"
       - run: npm run test:mutation:teacher-attendance
+        env:
+          TECM_M40_EVIDENCE_ROOT: ${{ runner.temp }}/tecm-m40-evidence
+      - name: Upload M40 evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tecm-m40-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event_name }}
+          path: ${{ runner.temp }}/tecm-m40-evidence
+          if-no-files-found: warn
+          retention-days: 7
       - run: npm run build
       - run: npm audit --audit-level=high
 
