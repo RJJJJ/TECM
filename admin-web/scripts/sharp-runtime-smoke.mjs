@@ -8,7 +8,7 @@ assert.equal(process.versions.node.split('.')[0], '22', 'Sharp smoke test requir
 const require = createRequire(import.meta.url);
 const sharpPackagePath = join(dirname(dirname(require.resolve('sharp'))), 'package.json');
 const sharpPackage = JSON.parse(await readFile(sharpPackagePath, 'utf8'));
-assert.equal(sharpPackage.version, '0.35.3', 'installed Sharp must be exactly 0.35.3');
+assert.equal(sharpPackage.version, '0.35.4', 'installed Sharp must be exactly 0.35.4');
 
 const smoke = async () => {
   const { default: sharp } = await import('sharp');
