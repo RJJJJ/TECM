@@ -43,13 +43,19 @@ struct TeacherAttendanceView: View {
                 if !viewModel.visibleUnsubmittedDrafts.isEmpty {
                     QuietCard {
                         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                            Text("以下草稿尚未儲存；重新載入後請確認是否套用，或放棄此草稿。")
+                            Text("以下為保留的原草稿；請對照最新狀態重新選擇，或放棄此草稿。")
                             ForEach(viewModel.visibleUnsubmittedDrafts) { draft in
                                 Text("\(draft.displayName)：原先選擇「\(draft.status.title)」")
+                                if let request = viewModel.pendingSubmission(for: draft.id) {
+                                    Text("先前提交結果仍未確認，重試已遇到版本衝突。放棄僅移除此裝置草稿，不代表伺服器未曾寫入。")
+                                    if !request.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Text("原提交原因：\(request.reason)")
+                                    }
+                                }
                                 Button("放棄此草稿") {
                                     viewModel.discardConflictingDraft(studentID: draft.id)
                                 }
-                                .disabled(viewModel.isLoading || viewModel.isSubmitting)
+                                .disabled(!viewModel.canDiscardDraft(studentID: draft.id))
                             }
                         }
                         .font(Theme.Typography.caption)
@@ -59,7 +65,7 @@ struct TeacherAttendanceView: View {
                 if !viewModel.unavailablePendingStudents.isEmpty {
                     QuietCard {
                         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                            Text("以下待確認的提交目前不在最新名單，請重新載入；學生再次出現後才會重試。")
+                            Text("以下待確認的提交目前不在最新名單，請重新載入。已遇到版本衝突的原草稿需明確放棄或重新選擇，不會自動重試。")
                             ForEach(viewModel.unavailablePendingStudents) { student in
                                 Text("\(student.displayName)：待確認的原提交：\(student.status.title)")
                             }
@@ -91,6 +97,7 @@ struct TeacherAttendanceView: View {
                                 selection: binding(for: student.id),
                                 isEditable: viewModel.canEdit(studentID: student.id),
                                 pendingSubmission: viewModel.pendingSubmission(for: student.id),
+                                hasSubmissionConflict: viewModel.hasSubmissionConflict(studentID: student.id),
                                 authoritativeStatusTitle: viewModel.authoritativeStatusTitle(for: student.id)
                             )
                         }
@@ -146,7 +153,7 @@ struct TeacherAttendanceView: View {
                             || viewModel.requiresAuthoritativeReload
                     )
                 if viewModel.hasPendingUncertainRequests {
-                    Text("重試會沿用該筆原有資料；此處新原因只套用至尚未送出的請求。")
+                    Text("待重試請求會沿用原資料；已衝突的提交須重新選擇。此處原因只套用至新提交。")
                         .font(Theme.Typography.caption)
                 }
                 Text("課堂結束後，任何新增或變更都必須填寫原因。")
@@ -223,6 +230,7 @@ private struct TeacherAttendanceStudentRow: View {
     @Binding var selection: ExamAttendanceStatus
     let isEditable: Bool
     let pendingSubmission: AttendanceSubmissionRequest?
+    let hasSubmissionConflict: Bool
     let authoritativeStatusTitle: String?
 
     private var isPending: Bool {
@@ -250,7 +258,7 @@ private struct TeacherAttendanceStudentRow: View {
                     Spacer(minLength: Theme.Spacing.sm)
 
                     if isPending {
-                        Text("待重試")
+                        Text(hasSubmissionConflict ? "版本衝突" : "待重試")
                             .font(Theme.Typography.caption.weight(.semibold))
                             .foregroundStyle(Theme.Colors.warning)
                     }
@@ -273,11 +281,15 @@ private struct TeacherAttendanceStudentRow: View {
                                 .font(Theme.Typography.caption)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
-                        Text("重試會沿用原提交資料")
+                        Text(hasSubmissionConflict
+                            ? "先前結果仍未確認；重新選擇才會建立新提交。"
+                            : "重試會沿用原提交資料")
                             .font(Theme.Typography.caption)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
-                } else if isEditable {
+                }
+
+                if isEditable {
                     Picker("出席狀態", selection: $selection) {
                         ForEach([ExamAttendanceStatus.present, .absent, .excused]) { status in
                             Text(status.title).tag(status)
@@ -285,7 +297,7 @@ private struct TeacherAttendanceStudentRow: View {
                     }
                     .pickerStyle(.segmented)
                     .disabled(!isEditable)
-                } else {
+                } else if !isPending {
                     HStack(spacing: Theme.Spacing.xs) {
                         Text(student.statusDisplayTitle)
                             .font(Theme.Typography.caption.weight(.semibold))
@@ -312,6 +324,7 @@ private struct TeacherAttendanceRowsPreview: View {
                         selection: $statuses[index],
                         isEditable: true,
                         pendingSubmission: nil,
+                        hasSubmissionConflict: false,
                         authoritativeStatusTitle: nil
                     )
                 }

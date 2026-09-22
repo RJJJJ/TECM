@@ -55,6 +55,7 @@ final class TeacherAttendanceViewModel: ObservableObject {
     private var pendingStudentSnapshots: [UUID: TeacherSessionStudent] = [:]
     private var uncertainRequestIDs: Set<UUID> = []
     private var preservedDrafts: [UUID: PreservedDraft] = [:]
+    private var explicitlyDiscardedDraftIDs: Set<UUID> = []
 
     init(attendanceService: AttendanceServicing = AttendanceService()) {
         self.attendanceService = attendanceService
@@ -90,10 +91,16 @@ final class TeacherAttendanceViewModel: ObservableObject {
         guard !isSubmitting, !isLoading, !requiresAuthoritativeReload else { return }
         guard let index = students.firstIndex(where: { $0.id == studentID }) else { return }
         guard students[index].isEditable, status.isWritable else { return }
-        guard pendingRequests[studentID] == nil else { return }
+        let isSubmissionConflict = hasSubmissionConflict(studentID: studentID)
+        guard pendingRequests[studentID] == nil || isSubmissionConflict else { return }
 
         students[index].status = status
+        if isSubmissionConflict {
+            clearPendingRequest(for: studentID)
+        }
         conflictingDrafts.removeAll { $0.id == studentID }
+        preservedDrafts.removeValue(forKey: studentID)
+        explicitlyDiscardedDraftIDs.remove(studentID)
         successMessage = nil
         noticeMessage = nil
     }
@@ -101,7 +108,10 @@ final class TeacherAttendanceViewModel: ObservableObject {
     func canEdit(studentID: UUID) -> Bool {
         guard !isSubmitting, !isLoading, !requiresAuthoritativeReload else { return false }
         guard let student = students.first(where: { $0.id == studentID }) else { return false }
-        return student.isEditable && pendingRequests[studentID] == nil
+        if pendingRequests[studentID] != nil {
+            return hasSubmissionConflict(studentID: studentID) && student.isEditable
+        }
+        return student.isEditable
     }
 
     func isPending(studentID: UUID) -> Bool {
@@ -123,10 +133,29 @@ final class TeacherAttendanceViewModel: ObservableObject {
             : "紀錄不完整，請重新載入"
     }
 
+    func hasSubmissionConflict(studentID: UUID) -> Bool {
+        pendingRequests[studentID] != nil
+            && conflictingDrafts.contains(where: { $0.id == studentID })
+    }
+
+    func canDiscardDraft(studentID: UUID) -> Bool {
+        guard !isLoading, !isSubmitting else { return false }
+        guard visibleUnsubmittedDrafts.contains(where: { $0.id == studentID }) else {
+            return false
+        }
+        guard pendingRequests[studentID] != nil else { return true }
+        return hasSubmissionConflict(studentID: studentID)
+            && !requiresAuthoritativeReload
+    }
+
     func discardConflictingDraft(studentID: UUID) {
-        guard !isLoading, !isSubmitting, pendingRequests[studentID] == nil else { return }
+        guard canDiscardDraft(studentID: studentID) else { return }
+        if pendingRequests[studentID] != nil {
+            clearPendingRequest(for: studentID)
+        }
         conflictingDrafts.removeAll { $0.id == studentID }
         preservedDrafts.removeValue(forKey: studentID)
+        explicitlyDiscardedDraftIDs.insert(studentID)
     }
 
     var hasPendingUncertainRequests: Bool {
@@ -172,7 +201,7 @@ final class TeacherAttendanceViewModel: ObservableObject {
 
         guard !candidates.isEmpty else {
             if !visibleUnsubmittedDrafts.isEmpty {
-                noticeMessage = "仍有未儲存的草稿，請重新載入後確認或放棄。"
+                noticeMessage = "仍有保留的草稿，請重新載入後確認或放棄。"
             } else if !pendingRequests.isEmpty {
                 noticeMessage = "仍有待確認的提交，請重新載入最新狀態。"
             } else {
@@ -248,15 +277,15 @@ final class TeacherAttendanceViewModel: ObservableObject {
                 if serviceError == .attendanceChanged,
                    uncertainRequestIDs.contains(student.id) {
                     // A stale response after an earlier uncertain outcome is
-                    // still a definite response to an unsafe retry. Preserve
-                    // the original request until a confirmed success or replay.
+                    // still unsafe to interpret as a non-commit. Preserve the
+                    // original request and draft until explicit recovery.
+                    let draft = pendingStudentSnapshots[student.id]
+                        ?? pendingSnapshot(for: request, currentStudent: student)
+                    appendConflictingDraftIfNeeded(draft)
                     requiresAuthoritativeReload = true
                     preserveCurrentDrafts()
                     clearActiveRosterForReload()
-                    errorMessage = partialFailureMessage(
-                        completedCount: completedCount,
-                        error: error
-                    )
+                    errorMessage = uncertainConflictMessage(completedCount: completedCount)
                 } else if serviceError == .attendanceChanged {
                     let draft = pendingStudentSnapshots[student.id]
                         ?? pendingSnapshot(for: request, currentStudent: student)
@@ -323,7 +352,7 @@ final class TeacherAttendanceViewModel: ObservableObject {
         }
 
         if !conflictingDrafts.isEmpty {
-            noticeMessage = "本次提交已完成，但仍有未儲存的衝突草稿需要確認。"
+            noticeMessage = "本次提交已完成，但仍有保留的衝突草稿需要確認。"
         } else if !unavailablePendingStudents.isEmpty {
             noticeMessage = "本次提交已完成，但仍有名單外待確認的提交；請重新載入最新狀態。"
         } else {
@@ -333,6 +362,7 @@ final class TeacherAttendanceViewModel: ObservableObject {
 
     private func needsSubmission(_ student: TeacherSessionStudent) -> Bool {
         guard student.isEditable else { return false }
+        guard !explicitlyDiscardedDraftIDs.contains(student.id) else { return false }
         if pendingRequests[student.id] != nil {
             return true
         }
@@ -475,6 +505,14 @@ final class TeacherAttendanceViewModel: ObservableObject {
     private func appendConflictingDraftIfNeeded(_ draft: TeacherSessionStudent) {
         guard !conflictingDrafts.contains(where: { $0.id == draft.id }) else { return }
         conflictingDrafts.append(draft)
+    }
+
+    private func uncertainConflictMessage(completedCount: Int) -> String {
+        let message = "原提交結果仍未確認；重試遇到出席紀錄已變更，請重新載入最新狀態後重新選擇或放棄。"
+        if completedCount > 0 {
+            return "部分提交完成（已處理 \(completedCount) 位）；\(message)"
+        }
+        return message
     }
 
     private func isUncertainOutcome(_ error: AttendanceServiceError) -> Bool {
