@@ -61,7 +61,7 @@ struct TeacherAttendanceView: View {
                         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                             Text("以下待確認的提交目前不在最新名單，請重新載入；學生再次出現後才會重試。")
                             ForEach(viewModel.unavailablePendingStudents) { student in
-                                Text("\(student.displayName)：原先選擇「\(student.status.title)」")
+                                Text("\(student.displayName)：待確認的原提交：\(student.status.title)")
                             }
                             Button("重新載入最新狀態") {
                                 Task { await viewModel.load(sessionID: session.id) }
@@ -90,7 +90,8 @@ struct TeacherAttendanceView: View {
                                 student: student,
                                 selection: binding(for: student.id),
                                 isEditable: viewModel.canEdit(studentID: student.id),
-                                isPending: viewModel.isPending(studentID: student.id)
+                                pendingSubmission: viewModel.pendingSubmission(for: student.id),
+                                authoritativeStatusTitle: viewModel.authoritativeStatusTitle(for: student.id)
                             )
                         }
                     }
@@ -221,7 +222,12 @@ private struct TeacherAttendanceStudentRow: View {
     let student: TeacherSessionStudent
     @Binding var selection: ExamAttendanceStatus
     let isEditable: Bool
-    let isPending: Bool
+    let pendingSubmission: AttendanceSubmissionRequest?
+    let authoritativeStatusTitle: String?
+
+    private var isPending: Bool {
+        pendingSubmission != nil
+    }
 
     var body: some View {
         ElevatedCard {
@@ -254,7 +260,24 @@ private struct TeacherAttendanceStudentRow: View {
                         .accessibilityHidden(true)
                 }
 
-                if isEditable {
+                if let pendingSubmission {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                        Text("伺服器目前狀態：\(authoritativeStatusTitle ?? "尚未取得")")
+                            .font(Theme.Typography.caption.weight(.semibold))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                        Text("待確認的原提交：\(pendingSubmission.status.title)")
+                            .font(Theme.Typography.caption.weight(.semibold))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                        if !pendingSubmission.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("原提交原因：\(pendingSubmission.reason)")
+                                .font(Theme.Typography.caption)
+                                .foregroundStyle(Theme.Colors.textSecondary)
+                        }
+                        Text("重試會沿用原提交資料")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+                } else if isEditable {
                     Picker("出席狀態", selection: $selection) {
                         ForEach([ExamAttendanceStatus.present, .absent, .excused]) { status in
                             Text(status.title).tag(status)
@@ -267,7 +290,7 @@ private struct TeacherAttendanceStudentRow: View {
                         Text(student.statusDisplayTitle)
                             .font(Theme.Typography.caption.weight(.semibold))
                             .foregroundStyle(Theme.Colors.textSecondary)
-                        Text(isPending ? "結果未確認，重試會沿用本次資料" : "唯讀")
+                        Text("唯讀")
                             .font(Theme.Typography.caption)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
@@ -288,7 +311,8 @@ private struct TeacherAttendanceRowsPreview: View {
                         student: student,
                         selection: $statuses[index],
                         isEditable: true,
-                        isPending: false
+                        pendingSubmission: nil,
+                        authoritativeStatusTitle: nil
                     )
                 }
             }

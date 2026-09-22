@@ -108,6 +108,21 @@ final class TeacherAttendanceViewModel: ObservableObject {
         pendingRequests[studentID] != nil
     }
 
+    func pendingSubmission(for studentID: UUID) -> AttendanceSubmissionRequest? {
+        pendingRequests[studentID]
+    }
+
+    func authoritativeStatusTitle(for studentID: UUID) -> String? {
+        guard let baseline = authoritativeBaseline[studentID] else { return nil }
+        guard baseline.revision == nil else { return baseline.status.title }
+        guard let student = students.first(where: { $0.id == studentID }) else {
+            return "紀錄不完整，請重新載入"
+        }
+        return student.attendanceStatusRawValue == nil
+            ? "尚未記錄"
+            : "紀錄不完整，請重新載入"
+    }
+
     func discardConflictingDraft(studentID: UUID) {
         guard !isLoading, !isSubmitting, pendingRequests[studentID] == nil else { return }
         conflictingDrafts.removeAll { $0.id == studentID }
@@ -198,15 +213,27 @@ final class TeacherAttendanceViewModel: ObservableObject {
 
             do {
                 let result = try await attendanceService.submitAttendance(request: request)
-                guard !Task.isCancelled else { return }
                 clearPendingRequest(for: student.id)
                 applySuccessfulSubmission(request: request, result: result)
                 completedCount += 1
 
                 if result.idempotentReplay == true {
                     requiresAuthoritativeReload = true
+                    if Task.isCancelled {
+                        preserveCurrentDrafts()
+                        clearActiveRosterForReload()
+                        errorMessage = "提交結果已確認，請重新載入最新出席狀態。"
+                        return
+                    }
                     let reloaded = await reloadAuthoritativeRoster(sessionID: sessionID)
-                    guard !Task.isCancelled else { return }
+                    if Task.isCancelled {
+                        if !reloaded {
+                            preserveCurrentDrafts()
+                            clearActiveRosterForReload()
+                            errorMessage = "提交結果已確認，請重新載入最新出席狀態。"
+                        }
+                        return
+                    }
                     if reloaded {
                         noticeMessage = "已確認該請求曾完成，並已重新載入；其餘未衝突的草稿已保留，請確認後再次提交。"
                     } else {
@@ -214,18 +241,42 @@ final class TeacherAttendanceViewModel: ObservableObject {
                     }
                     return
                 }
-            } catch {
+
                 guard !Task.isCancelled else { return }
+            } catch {
                 let serviceError = AttendanceServiceError.from(error)
-                if serviceError == .attendanceChanged {
+                if serviceError == .attendanceChanged,
+                   uncertainRequestIDs.contains(student.id) {
+                    // A stale response after an earlier uncertain outcome is
+                    // still a definite response to an unsafe retry. Preserve
+                    // the original request until a confirmed success or replay.
+                    requiresAuthoritativeReload = true
+                    preserveCurrentDrafts()
+                    clearActiveRosterForReload()
+                    errorMessage = partialFailureMessage(
+                        completedCount: completedCount,
+                        error: error
+                    )
+                } else if serviceError == .attendanceChanged {
                     let draft = pendingStudentSnapshots[student.id]
                         ?? pendingSnapshot(for: request, currentStudent: student)
                     clearPendingRequest(for: student.id)
                     conflictingDrafts.removeAll { $0.id == student.id }
                     conflictingDrafts.append(draft)
                     requiresAuthoritativeReload = true
+                    if Task.isCancelled {
+                        errorMessage = "出席紀錄已變更，請重新載入最新狀態後再提交。"
+                        return
+                    }
                     let reloaded = await reloadAuthoritativeRoster(sessionID: sessionID)
-                    guard !Task.isCancelled else { return }
+                    if Task.isCancelled {
+                        if !reloaded {
+                            preserveCurrentDrafts()
+                            clearActiveRosterForReload()
+                            errorMessage = "出席紀錄已變更，且無法重新載入最新狀態；請重新載入後再提交。"
+                        }
+                        return
+                    }
                     if reloaded {
                         errorMessage = "出席紀錄已變更，已重新載入最新狀態；請確認後再提交。"
                     } else {

@@ -761,6 +761,419 @@ final class TeacherAttendanceTests: XCTestCase {
         XCTAssertEqual(viewModel.students.first?.status, .present)
     }
 
+    func testCancelledCancellationErrorRetainsRequestThroughReloadAndAuthorizationDenial() async {
+        let sessionID = UUID()
+        let studentID = UUID()
+        let student = TeacherSessionStudent(
+            id: studentID,
+            displayName: "Cancelled student",
+            schoolName: nil,
+            status: .present,
+            attendanceRevision: 1,
+            attendanceStatusRawValue: "present"
+        )
+        let service = MockAttendanceService(
+            rosters: [[student], [student]],
+            outcomes: [.failure(AttendanceServiceError.authorizationDenied)]
+        )
+        let viewModel = TeacherAttendanceViewModel(attendanceService: service)
+
+        await viewModel.load(sessionID: sessionID)
+        viewModel.updateStatus(for: studentID, status: .absent)
+        viewModel.correctionReason = "原因 A"
+        service.suspendSubmit = true
+        let started = expectation(description: "suspended submission")
+        service.onSubmitSuspended = { started.fulfill() }
+        let submission = Task { await viewModel.submit(sessionID: sessionID, sessionEnded: true) }
+        await fulfillment(of: [started], timeout: 2)
+        let originalRequest = service.requests[0]
+
+        submission.cancel()
+        service.resumeSubmit?.resume(throwing: CancellationError())
+        await submission.value
+
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID), originalRequest)
+        XCTAssertTrue(viewModel.hasPendingUncertainRequests)
+        service.suspendSubmit = false
+        viewModel.correctionReason = "原因 B"
+        await viewModel.load(sessionID: sessionID)
+        await viewModel.submit(sessionID: sessionID, sessionEnded: true)
+
+        XCTAssertEqual(service.requests.count, 2)
+        XCTAssertEqual(service.requests[1], originalRequest)
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID), originalRequest)
+        XCTAssertTrue(viewModel.requiresAuthoritativeReload)
+        XCTAssertFalse(viewModel.canEdit(studentID: studentID))
+    }
+
+    func testCancelledTransportRetainsRequestThroughReloadAndAuthorizationDenial() async {
+        let sessionID = UUID()
+        let studentID = UUID()
+        let student = TeacherSessionStudent(
+            id: studentID,
+            displayName: "Transport student",
+            schoolName: nil,
+            status: .present,
+            attendanceRevision: 1,
+            attendanceStatusRawValue: "present"
+        )
+        let service = MockAttendanceService(
+            rosters: [[student], [student]],
+            outcomes: [.failure(AttendanceServiceError.authorizationDenied)]
+        )
+        let viewModel = TeacherAttendanceViewModel(attendanceService: service)
+
+        await viewModel.load(sessionID: sessionID)
+        viewModel.updateStatus(for: studentID, status: .absent)
+        viewModel.correctionReason = "保留原因"
+        service.suspendSubmit = true
+        let started = expectation(description: "suspended transport submission")
+        service.onSubmitSuspended = { started.fulfill() }
+        let submission = Task { await viewModel.submit(sessionID: sessionID) }
+        await fulfillment(of: [started], timeout: 2)
+        let originalRequest = service.requests[0]
+
+        submission.cancel()
+        service.resumeSubmit?.resume(throwing: TestAttendanceError.transport)
+        await submission.value
+
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID), originalRequest)
+        XCTAssertTrue(viewModel.hasPendingUncertainRequests)
+        service.suspendSubmit = false
+        await viewModel.load(sessionID: sessionID)
+        await viewModel.submit(sessionID: sessionID)
+
+        XCTAssertEqual(service.requests.count, 2)
+        XCTAssertEqual(service.requests[1], originalRequest)
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID), originalRequest)
+        XCTAssertTrue(viewModel.requiresAuthoritativeReload)
+        XCTAssertTrue(viewModel.students.isEmpty)
+    }
+
+    func testUncertainRequestSurvivesLaterDefiniteRejections() async {
+        let definiteRejections: [AttendanceServiceError] = [
+            .attendanceChanged,
+            .reasonRequired,
+            .sessionNotStarted,
+            .sessionCancelled,
+            .sessionFinalized
+        ]
+
+        for rejection in definiteRejections {
+            let sessionID = UUID()
+            let studentID = UUID()
+            let student = TeacherSessionStudent(
+                id: studentID,
+                displayName: "Definite rejection student",
+                schoolName: nil,
+                status: .present,
+                attendanceRevision: 1,
+                attendanceStatusRawValue: "present"
+            )
+            let service = MockAttendanceService(
+                rosters: [[student], [student]],
+                outcomes: [
+                    .failure(TestAttendanceError.transport),
+                    .failure(rejection)
+                ]
+            )
+            let viewModel = TeacherAttendanceViewModel(attendanceService: service)
+
+            await viewModel.load(sessionID: sessionID)
+            viewModel.updateStatus(for: studentID, status: .absent)
+            await viewModel.submit(sessionID: sessionID)
+            let originalRequest = service.requests[0]
+            await viewModel.load(sessionID: sessionID)
+            await viewModel.submit(sessionID: sessionID)
+
+            XCTAssertEqual(service.requests[1], originalRequest)
+            XCTAssertEqual(viewModel.pendingSubmission(for: studentID), originalRequest)
+            XCTAssertTrue(viewModel.requiresAuthoritativeReload)
+            XCTAssertTrue(viewModel.students.isEmpty)
+            XCTAssertTrue(viewModel.conflictingDrafts.isEmpty)
+        }
+    }
+
+    func testCancelledLateSuccessConfirmsOnlyCurrentRow() async {
+        let sessionID = UUID()
+        let first = TeacherSessionStudent(id: UUID(), displayName: "A", schoolName: nil, status: .present)
+        let second = TeacherSessionStudent(id: UUID(), displayName: "B", schoolName: nil, status: .present)
+        let service = MockAttendanceService(rosters: [[first, second]], outcomes: [])
+        let viewModel = TeacherAttendanceViewModel(attendanceService: service)
+
+        await viewModel.load(sessionID: sessionID)
+        viewModel.updateStatus(for: first.id, status: .absent)
+        viewModel.updateStatus(for: second.id, status: .absent)
+        service.suspendSubmit = true
+        let started = expectation(description: "suspended late success")
+        service.onSubmitSuspended = { started.fulfill() }
+        let submission = Task { await viewModel.submit(sessionID: sessionID) }
+        await fulfillment(of: [started], timeout: 2)
+        submission.cancel()
+        service.resumeSubmit?.resume(returning: AttendanceSubmissionResult(
+            changed: true,
+            revision: 1,
+            idempotentReplay: nil
+        ))
+        await submission.value
+
+        XCTAssertEqual(service.requests.count, 1)
+        XCTAssertNil(viewModel.pendingSubmission(for: first.id))
+        XCTAssertNil(viewModel.pendingSubmission(for: second.id))
+        XCTAssertEqual(viewModel.students.first(where: { $0.id == first.id })?.status, .absent)
+        XCTAssertEqual(viewModel.students.first(where: { $0.id == first.id })?.attendanceRevision, 1)
+        XCTAssertNil(viewModel.successMessage)
+    }
+
+    func testCancelledLateReplayRetiresRequestRequiresReloadAndDoesNotFetch() async {
+        let sessionID = UUID()
+        let first = TeacherSessionStudent(id: UUID(), displayName: "A", schoolName: nil, status: .present)
+        let second = TeacherSessionStudent(id: UUID(), displayName: "B", schoolName: nil, status: .present)
+        let service = MockAttendanceService(rosters: [[first, second]], outcomes: [])
+        let viewModel = TeacherAttendanceViewModel(attendanceService: service)
+
+        await viewModel.load(sessionID: sessionID)
+        viewModel.updateStatus(for: first.id, status: .absent)
+        viewModel.updateStatus(for: second.id, status: .absent)
+        service.suspendSubmit = true
+        let started = expectation(description: "suspended late replay")
+        service.onSubmitSuspended = { started.fulfill() }
+        let submission = Task { await viewModel.submit(sessionID: sessionID) }
+        await fulfillment(of: [started], timeout: 2)
+        submission.cancel()
+        service.resumeSubmit?.resume(returning: AttendanceSubmissionResult(
+            changed: false,
+            revision: 2,
+            idempotentReplay: true
+        ))
+        await submission.value
+
+        XCTAssertEqual(service.fetchCallCount, 1)
+        XCTAssertEqual(service.requests.count, 1)
+        XCTAssertNil(viewModel.pendingSubmission(for: first.id))
+        XCTAssertTrue(viewModel.requiresAuthoritativeReload)
+        XCTAssertTrue(viewModel.errorMessage?.contains("重新載入") == true)
+        XCTAssertTrue(viewModel.students.isEmpty)
+        XCTAssertEqual(viewModel.visibleUnsubmittedDrafts.map(\.id), [second.id])
+    }
+
+    func testCancelledReplayRefreshLeavesActionableReloadState() async {
+        let sessionID = UUID()
+        let student = TeacherSessionStudent(
+            id: UUID(),
+            displayName: "Replay refresh student",
+            schoolName: nil,
+            status: .present,
+            attendanceRevision: 1,
+            attendanceStatusRawValue: "present"
+        )
+        let refreshed = TeacherSessionStudent(
+            id: student.id,
+            displayName: student.displayName,
+            schoolName: nil,
+            status: .absent,
+            attendanceRevision: 2,
+            attendanceStatusRawValue: "absent"
+        )
+        let service = MockAttendanceService(
+            rosters: [[student], [refreshed]],
+            outcomes: []
+        )
+        let viewModel = TeacherAttendanceViewModel(attendanceService: service)
+
+        await viewModel.load(sessionID: sessionID)
+        viewModel.updateStatus(for: student.id, status: .absent)
+        service.suspendSubmit = true
+        let submitStarted = expectation(description: "suspended replay submission")
+        service.onSubmitSuspended = { submitStarted.fulfill() }
+        let fetchStarted = expectation(description: "suspended replay refresh")
+        service.suspendFetch = true
+        service.onFetchSuspended = { fetchStarted.fulfill() }
+        let submission = Task { await viewModel.submit(sessionID: sessionID) }
+        await fulfillment(of: [submitStarted], timeout: 2)
+        service.resumeSubmit?.resume(returning: AttendanceSubmissionResult(
+            changed: false,
+            revision: 2,
+            idempotentReplay: true
+        ))
+        await fulfillment(of: [fetchStarted], timeout: 2)
+        submission.cancel()
+        service.resumeFetch?.resume()
+        await submission.value
+
+        XCTAssertEqual(service.fetchCallCount, 2)
+        XCTAssertTrue(viewModel.requiresAuthoritativeReload)
+        XCTAssertTrue(viewModel.errorMessage?.contains("重新載入") == true)
+        XCTAssertTrue(viewModel.students.isEmpty)
+    }
+
+    func testCancelledLateStaleResponseRecordsConflictWithoutRefreshing() async {
+        let sessionID = UUID()
+        let studentID = UUID()
+        let student = TeacherSessionStudent(
+            id: studentID,
+            displayName: "Cancelled stale student",
+            schoolName: nil,
+            status: .present,
+            attendanceRevision: 1,
+            attendanceStatusRawValue: "present"
+        )
+        let service = MockAttendanceService(rosters: [[student]], outcomes: [])
+        let viewModel = TeacherAttendanceViewModel(attendanceService: service)
+
+        await viewModel.load(sessionID: sessionID)
+        viewModel.updateStatus(for: studentID, status: .absent)
+        service.suspendSubmit = true
+        let started = expectation(description: "suspended stale response")
+        service.onSubmitSuspended = { started.fulfill() }
+        let submission = Task { await viewModel.submit(sessionID: sessionID) }
+        await fulfillment(of: [started], timeout: 2)
+        submission.cancel()
+        service.resumeSubmit?.resume(throwing: AttendanceServiceError.attendanceChanged)
+        await submission.value
+
+        XCTAssertEqual(service.fetchCallCount, 1)
+        XCTAssertEqual(service.requests.count, 1)
+        XCTAssertNil(viewModel.pendingSubmission(for: studentID))
+        XCTAssertEqual(viewModel.conflictingDrafts.first?.status, .absent)
+        XCTAssertTrue(viewModel.requiresAuthoritativeReload)
+        XCTAssertTrue(viewModel.errorMessage?.contains("重新載入") == true)
+    }
+
+    func testCancelledInitialDenialClearsOnlyResolvedRequest() async {
+        let sessionID = UUID()
+        let first = TeacherSessionStudent(
+            id: UUID(),
+            displayName: "First student",
+            schoolName: nil,
+            status: .present,
+            attendanceRevision: 1,
+            attendanceStatusRawValue: "present"
+        )
+        let second = TeacherSessionStudent(
+            id: UUID(),
+            displayName: "Second student",
+            schoolName: nil,
+            status: .present,
+            attendanceRevision: 1,
+            attendanceStatusRawValue: "present"
+        )
+        let service = MockAttendanceService(
+            rosters: [[first, second], [first, second]],
+            outcomes: [.failure(TestAttendanceError.transport)]
+        )
+        let viewModel = TeacherAttendanceViewModel(attendanceService: service)
+
+        await viewModel.load(sessionID: sessionID)
+        viewModel.updateStatus(for: second.id, status: .absent)
+        await viewModel.submit(sessionID: sessionID)
+        let secondRequest = service.requests[0]
+        await viewModel.load(sessionID: sessionID)
+        viewModel.updateStatus(for: first.id, status: .absent)
+
+        service.suspendSubmit = true
+        let started = expectation(description: "suspended initial denial")
+        service.onSubmitSuspended = { started.fulfill() }
+        let submission = Task { await viewModel.submit(sessionID: sessionID) }
+        await fulfillment(of: [started], timeout: 2)
+        submission.cancel()
+        service.resumeSubmit?.resume(throwing: AttendanceServiceError.authorizationDenied)
+        await submission.value
+
+        XCTAssertEqual(service.requests.count, 2)
+        XCTAssertNil(viewModel.pendingSubmission(for: first.id))
+        XCTAssertEqual(viewModel.pendingSubmission(for: second.id), secondRequest)
+        XCTAssertEqual(viewModel.unavailablePendingStudents.map(\.id), [second.id])
+        XCTAssertTrue(viewModel.requiresAuthoritativeReload)
+    }
+
+    func testPendingPayloadAndAuthoritativeTitleRemainSeparatedAcrossReload() async {
+        let sessionID = UUID()
+        let studentID = UUID()
+        let initial = TeacherSessionStudent(
+            id: studentID,
+            displayName: "Presentation student",
+            schoolName: nil,
+            status: .present,
+            attendanceRevision: 1,
+            attendanceStatusRawValue: "present"
+        )
+        let changed = TeacherSessionStudent(
+            id: studentID,
+            displayName: "Presentation student",
+            schoolName: nil,
+            status: .excused,
+            attendanceRevision: 3,
+            attendanceStatusRawValue: "excused"
+        )
+        let service = MockAttendanceService(
+            rosters: [[initial], [changed]],
+            outcomes: [
+                .failure(TestAttendanceError.transport),
+                .success(AttendanceSubmissionResult(changed: false, revision: 3, idempotentReplay: true))
+            ]
+        )
+        let viewModel = TeacherAttendanceViewModel(attendanceService: service)
+
+        await viewModel.load(sessionID: sessionID)
+        XCTAssertEqual(viewModel.authoritativeStatusTitle(for: studentID), "出席")
+        viewModel.updateStatus(for: studentID, status: .absent)
+        viewModel.correctionReason = "原因 A"
+        await viewModel.submit(sessionID: sessionID, sessionEnded: true)
+        let originalRequest = service.requests[0]
+
+        XCTAssertEqual(viewModel.students.first?.status, .absent)
+        XCTAssertEqual(viewModel.authoritativeStatusTitle(for: studentID), "出席")
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID), originalRequest)
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID)?.status, .absent)
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID)?.reason, "原因 A")
+        await viewModel.load(sessionID: sessionID)
+        XCTAssertEqual(viewModel.students.first?.status, .excused)
+        XCTAssertEqual(viewModel.students.first?.attendanceRevision, 3)
+        XCTAssertEqual(viewModel.authoritativeStatusTitle(for: studentID), "請假")
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID), originalRequest)
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID)?.status, .absent)
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID)?.reason, "原因 A")
+        viewModel.correctionReason = "原因 B"
+
+        await viewModel.submit(sessionID: sessionID, sessionEnded: true)
+
+        XCTAssertEqual(service.requests.last, originalRequest)
+        XCTAssertNil(viewModel.pendingSubmission(for: studentID))
+        XCTAssertEqual(viewModel.authoritativeStatusTitle(for: studentID), "請假")
+    }
+
+    func testAuthoritativeStatusTitleDistinguishesUnrecordedAndIncompleteBaselines() async {
+        let sessionID = UUID()
+        let unrecordedID = UUID()
+        let incompleteID = UUID()
+        let service = MockAttendanceService(rosters: [[
+            TeacherSessionStudent(
+                id: unrecordedID,
+                displayName: "Unrecorded",
+                schoolName: nil,
+                status: .present,
+                attendanceRevision: nil,
+                attendanceStatusRawValue: nil
+            ),
+            TeacherSessionStudent(
+                id: incompleteID,
+                displayName: "Incomplete",
+                schoolName: nil,
+                status: .present,
+                attendanceRevision: nil,
+                attendanceStatusRawValue: "present"
+            )
+        ]], outcomes: [])
+        let viewModel = TeacherAttendanceViewModel(attendanceService: service)
+
+        await viewModel.load(sessionID: sessionID)
+
+        XCTAssertEqual(viewModel.authoritativeStatusTitle(for: unrecordedID), "尚未記錄")
+        XCTAssertEqual(viewModel.authoritativeStatusTitle(for: incompleteID), "紀錄不完整，請重新載入")
+        XCTAssertNil(viewModel.authoritativeStatusTitle(for: UUID()))
+    }
+
     func testFailedConflictReloadPreservesDraftUntilExplicitRetry() async {
         let sessionID = UUID()
         let first = TeacherSessionStudent(id: UUID(), displayName: "A", schoolName: nil,
@@ -817,6 +1230,9 @@ private final class MockAttendanceService: AttendanceServicing {
     var suspendFetch = false
     var onFetchSuspended: (() -> Void)?
     var resumeFetch: CheckedContinuation<Void, Never>?
+    var suspendSubmit = false
+    var onSubmitSuspended: (() -> Void)?
+    var resumeSubmit: CheckedContinuation<AttendanceSubmissionResult, Error>?
     var fetchError: Error?
     var fetchOutcomes: [Result<[TeacherSessionStudent], Error>] = []
     var rosters: [[TeacherSessionStudent]]
@@ -857,6 +1273,12 @@ private final class MockAttendanceService: AttendanceServicing {
 
     func submitAttendance(request: AttendanceSubmissionRequest) async throws -> AttendanceSubmissionResult {
         requests.append(request)
+        if suspendSubmit {
+            return try await withCheckedThrowingContinuation { continuation in
+                resumeSubmit = continuation
+                onSubmitSuspended?()
+            }
+        }
         guard !outcomes.isEmpty else {
             return AttendanceSubmissionResult(changed: true, revision: 1, idempotentReplay: nil)
         }
