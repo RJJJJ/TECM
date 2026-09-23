@@ -2,7 +2,7 @@ export default function BookingDetailLoading() {
   return (
     <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
       <div>
-        <p className="text-sm font-medium text-slate-700">載入 booking 詳情中...</p>
+        <p className="text-sm font-medium text-slate-700">正在載入預約詳情...</p>
         <p className="text-xs text-slate-500">正在取得詳細資料與可編輯欄位。</p>
       </div>
 

@@ -23,3 +23,5 @@
 ## Manual checks remain required
 
 Admin auth, Supabase-backed data, and staff workflow should remain part of staging UAT until stable automated coverage exists.
+
+Run Admin Web UAT in a browser Guest profile with all extensions disabled. Browser extensions may inject attributes such as `data-sharkid` before React hydrates the page and create a false hydration-mismatch report; this is not a product failure and must not be worked around with `suppressHydrationWarning` or other product code.

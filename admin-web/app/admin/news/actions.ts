@@ -1,8 +1,8 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
-import { verifyActiveStaffAccess } from '@/lib/auth/staff-access';
+import { getOperationsContext } from '@/lib/operations/context';
+import { safeOperationMessage, UserFacingOperationError, userFacingError } from '@/lib/operations/errors';
 
 export type CreateNewsFormState = {
   status: 'idle' | 'success' | 'error';
@@ -34,42 +34,19 @@ export async function createNewsAction(
   const publishedAtRaw = String(formData.get('published_at') ?? '').trim();
   const sortOrderRaw = String(formData.get('sort_order') ?? '').trim();
 
-  if (!title) {
-    return { status: 'error', message: 'Title 為必填。' };
-  }
-
-  if (!publishedAtRaw) {
-    return { status: 'error', message: 'Publish date 為必填。' };
-  }
-
+  if (!title) return { status: 'error', message: '標題為必填。' };
+  if (!publishedAtRaw) return { status: 'error', message: '發佈日期為必填。' };
   const publishedAt = parsePublishedAt(publishedAtRaw);
-  if (!publishedAt) {
-    return { status: 'error', message: 'Publish date 格式錯誤。' };
-  }
-
-  if (!sortOrderRaw) {
-    return { status: 'error', message: 'Sort order 為必填。' };
-  }
-
+  if (!publishedAt) return { status: 'error', message: '發佈日期格式錯誤。' };
+  if (!sortOrderRaw) return { status: 'error', message: '排序次序為必填。' };
   const sortOrder = Number(sortOrderRaw);
-  if (!Number.isFinite(sortOrder)) {
-    return { status: 'error', message: 'Sort order 必須是數字。' };
-  }
+  if (!Number.isFinite(sortOrder)) return { status: 'error', message: '排序次序必須是數字。' };
 
-  const supabase = await createServerSupabaseClient();
-  const access = await verifyActiveStaffAccess(supabase);
-
-  if (!access.allowed) {
-    await supabase.auth.signOut();
-    return {
-      status: 'error',
-      message: '你沒有權限新增 news。'
-    };
-  }
-
-  const { data, error } = await supabase
-    .from('news_items')
-    .insert({
+  try {
+    const context = await getOperationsContext();
+    if (!['admin', 'staff'].includes(context.role)) throw userFacingError('只有管理員或職員可以管理最新消息。');
+    const { data, error } = await context.supabase.from('news_items').insert({
+      organization_id: context.organizationId,
       category,
       title,
       summary,
@@ -79,18 +56,11 @@ export async function createNewsAction(
       is_active: isActive,
       published_at: publishedAt,
       sort_order: sortOrder
-    })
-    .select('id')
-    .single();
-
-  if (error || !data) {
-    return { status: 'error', message: error?.message ?? '新增失敗，請稍後再試。' };
+    }).select('id').single();
+    if (error || !data) throw error ?? new Error('news insert returned no row');
+    revalidatePath('/admin/news');
+    return { status: 'success', message: '最新消息已新增。' };
+  } catch (error) {
+    return { status: 'error', message: error instanceof UserFacingOperationError ? error.message : safeOperationMessage(error, '新增最新消息失敗，請稍後再試。', 'create-news') };
   }
-
-  revalidatePath('/admin/news');
-
-  return {
-    status: 'success',
-    message: 'News 已新增。'
-  };
 }

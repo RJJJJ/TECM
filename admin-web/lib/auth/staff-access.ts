@@ -1,8 +1,16 @@
 import { type SupabaseClient, type User } from '@supabase/supabase-js';
 
+export type StaffMembership = {
+  organization_id: string;
+  role: 'admin' | 'staff' | 'teacher';
+  status: 'active';
+  organizations: { name?: string | null } | null;
+};
+
 type StaffAccessResult = {
   allowed: boolean;
   user: User | null;
+  memberships: StaffMembership[];
 };
 
 export async function verifyActiveStaffAccess(
@@ -15,34 +23,24 @@ export async function verifyActiveStaffAccess(
   if (!user) {
     return {
       allowed: false,
-      user: null
+      user: null,
+      memberships: []
     };
   }
 
-  const { data: organizationMember, error: membershipError } = await supabase
+  const { data: membershipData, error: membershipError } = await supabase
     .from('organization_members')
-    .select('user_id, status, role')
+    .select('organization_id, status, role, organizations(name)')
     .eq('user_id', user.id)
     .eq('status', 'active')
     .in('role', ['admin', 'staff', 'teacher'])
-    .limit(1)
-    .maybeSingle();
+    .order('created_at');
 
-  if (!membershipError && organizationMember) return { allowed: true, user };
-
-  // Compatibility fallback while an existing deployment is moving from the
-  // global v1 role table to organization_members.
-  const { data: staffRole, error } = await supabase
-    .from('staff_roles')
-    .select('user_id, is_active')
-    .eq('user_id', user.id)
-    .eq('is_active', true)
-    .maybeSingle();
-
-  if (error || !staffRole) return { allowed: false, user };
+  if (membershipError || !membershipData?.length) return { allowed: false, user, memberships: [] };
 
   return {
     allowed: true,
-    user
+    user,
+    memberships: membershipData as unknown as StaffMembership[]
   };
 }

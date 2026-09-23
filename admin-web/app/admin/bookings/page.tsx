@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { getOperationsContext } from '@/lib/operations/context';
+import { ErrorState } from '@/components/operations-ui';
 import {
   type FollowUpPriority,
   followUpPriorityBadgeClass,
@@ -43,11 +44,11 @@ type SearchParams = {
 };
 
 const STATUS_OPTIONS: Array<{ label: string; value: 'all' | BookingStatus }> = [
-  { label: 'All', value: 'all' },
-  { label: 'Pending', value: 'pending' },
-  { label: 'Confirmed', value: 'confirmed' },
-  { label: 'Completed', value: 'completed' },
-  { label: 'Cancelled', value: 'cancelled' }
+  { label: '全部', value: 'all' },
+  { label: '待處理', value: 'pending' },
+  { label: '已確認', value: 'confirmed' },
+  { label: '已完成', value: 'completed' },
+  { label: '已取消', value: 'cancelled' }
 ];
 
 function pickSingle(value?: string | string[]) {
@@ -91,15 +92,15 @@ function formatDateTime(dateValue: string | null) {
 function statusLabel(status: string | null) {
   switch (status) {
     case 'pending':
-      return 'Pending';
+      return '待處理';
     case 'confirmed':
-      return 'Confirmed';
+      return '已確認';
     case 'completed':
-      return 'Completed';
+      return '已完成';
     case 'cancelled':
-      return 'Cancelled';
+      return '已取消';
     default:
-      return 'Unknown';
+      return '未知';
   }
 }
 
@@ -142,7 +143,7 @@ export default async function AdminBookingsPage({
   searchParams?: Promise<SearchParams>;
 }) {
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
-  const supabase = await createServerSupabaseClient();
+  const { supabase, organizationId } = await getOperationsContext();
 
   const selectedStatus = pickSingle(resolvedSearchParams?.status) ?? 'all';
   const selectedCampusId = pickSingle(resolvedSearchParams?.campus) ?? 'all';
@@ -152,6 +153,7 @@ export default async function AdminBookingsPage({
   const { data: campusData } = await supabase
     .from('campuses')
     .select('id, name')
+    .eq('organization_id', organizationId)
     .order('name', { ascending: true });
 
   const campuses = (campusData ?? []) as CampusOption[];
@@ -174,6 +176,7 @@ export default async function AdminBookingsPage({
       campuses(name)
     `
     )
+    .eq('organization_id', organizationId)
     .order('created_at', { ascending: false });
 
   if (selectedStatus !== 'all') {
@@ -203,6 +206,7 @@ export default async function AdminBookingsPage({
     ? await supabase
         .from('follow_up_tasks')
         .select('booking_id, priority')
+        .eq('organization_id', organizationId)
         .eq('status', 'open')
         .in('booking_id', bookingIds)
     : { data: [] };
@@ -227,8 +231,8 @@ export default async function AdminBookingsPage({
     <section className="space-y-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
-          <h2 className="text-2xl font-semibold text-slate-900">Booking Management</h2>
-          <p className="mt-1 text-sm text-slate-600">最新 booking 列表（依建立時間由新到舊）</p>
+          <h2 className="text-2xl font-semibold text-slate-900">試堂預約管理</h2>
+          <p className="mt-1 text-sm text-slate-600">最新預約列表（依建立時間由新到舊）</p>
         </div>
         <p className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
           共 {bookings.length} 筆結果
@@ -241,13 +245,13 @@ export default async function AdminBookingsPage({
       >
         <div className="md:col-span-2">
           <label htmlFor="keyword" className="mb-1 block text-xs font-medium text-slate-600">
-            Keyword
+            關鍵字
           </label>
           <input
             id="keyword"
             name="keyword"
             type="search"
-            placeholder="parent / child / phone"
+            placeholder="家長／學生／電話"
             defaultValue={selectedKeyword}
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-slate-300 focus:ring"
           />
@@ -255,7 +259,7 @@ export default async function AdminBookingsPage({
 
         <div>
           <label htmlFor="status" className="mb-1 block text-xs font-medium text-slate-600">
-            Status
+            狀態
           </label>
           <select
             id="status"
@@ -273,7 +277,7 @@ export default async function AdminBookingsPage({
 
         <div>
           <label htmlFor="campus" className="mb-1 block text-xs font-medium text-slate-600">
-            Campus
+            校區
           </label>
           <select
             id="campus"
@@ -281,7 +285,7 @@ export default async function AdminBookingsPage({
             defaultValue={selectedCampusId}
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-slate-300 focus:ring"
           >
-            <option value="all">All</option>
+            <option value="all">全部</option>
             {campuses.map((campus) => (
               <option key={campus.id} value={campus.id}>
                 {campus.name}
@@ -292,7 +296,7 @@ export default async function AdminBookingsPage({
 
         <div>
           <label htmlFor="date" className="mb-1 block text-xs font-medium text-slate-600">
-            Booking Date
+            預約日期
           </label>
           <input
             id="date"
@@ -321,13 +325,11 @@ export default async function AdminBookingsPage({
 
       {error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-4 text-sm text-rose-700">
-          <p className="font-semibold">無法載入 bookings</p>
-          <p className="mt-1">{error.message}</p>
-          <p className="mt-2 text-xs">請稍後重新整理，或確認 Supabase 連線狀態。</p>
+          <ErrorState error={error} fallback="讀取預約失敗，請稍後再試。" />
         </div>
       ) : bookings.length === 0 ? (
         <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-10 text-center">
-          <p className="text-sm font-medium text-slate-700">目前沒有符合條件的 booking</p>
+          <p className="text-sm font-medium text-slate-700">目前沒有符合條件的預約</p>
           <p className="mt-1 text-xs text-slate-500">你可以調整上方篩選條件，或清除條件查看全部資料。</p>
         </div>
       ) : (
@@ -335,12 +337,12 @@ export default async function AdminBookingsPage({
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50">
               <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
-                <th className="px-4 py-3 font-medium">Parent / Child</th>
-                <th className="px-4 py-3 font-medium">Course / Campus</th>
-                <th className="px-4 py-3 font-medium">Booking Time</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Timeline</th>
-                <th className="px-4 py-3 font-medium">Action</th>
+                <th className="px-4 py-3 font-medium">家長／學生</th>
+                <th className="px-4 py-3 font-medium">課程／校區</th>
+                <th className="px-4 py-3 font-medium">預約時間</th>
+                <th className="px-4 py-3 font-medium">狀態</th>
+                <th className="px-4 py-3 font-medium">時間紀錄</th>
+                <th className="px-4 py-3 font-medium">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
@@ -348,12 +350,12 @@ export default async function AdminBookingsPage({
                 <tr key={booking.id} className="align-top hover:bg-slate-50/80">
                   <td className="px-4 py-3">
                     <p className="font-medium text-slate-800">{booking.parent_name || '-'}</p>
-                    <p className="mt-1 text-xs text-slate-500">Child: {booking.child_name || '-'}</p>
-                    <p className="mt-1 text-xs text-slate-500">Phone: {booking.phone || '-'}</p>
+                    <p className="mt-1 text-xs text-slate-500">學生：{booking.child_name || '-'}</p>
+                    <p className="mt-1 text-xs text-slate-500">電話：{booking.phone || '-'}</p>
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-medium text-slate-800">{booking.course_title_snapshot || '-'}</p>
-                    <p className="mt-1 text-xs text-slate-500">Campus: {booking.campuses?.name || '-'}</p>
+                    <p className="mt-1 text-xs text-slate-500">校區：{booking.campuses?.name || '-'}</p>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-slate-700">
                     <p>{formatDate(booking.booking_date)}</p>
@@ -372,8 +374,8 @@ export default async function AdminBookingsPage({
                     </div>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-600">
-                    <p>Created: {formatDateTime(booking.created_at)}</p>
-                    <p className="mt-1">Updated: {formatDateTime(booking.updated_at)}</p>
+                    <p>建立：{formatDateTime(booking.created_at)}</p>
+                    <p className="mt-1">更新：{formatDateTime(booking.updated_at)}</p>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center">

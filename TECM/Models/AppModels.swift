@@ -186,14 +186,99 @@ enum UserAppRole: String {
     case guest
     case parent
     case teacher
+    case staff
     case admin
 }
 
-enum ExamAttendanceStatus: String, CaseIterable, Identifiable, Codable {
+struct UserRoleCapabilities: Equatable {
+    let primaryRole: UserAppRole
+    let organizationRoles: Set<UserAppRole>
+    let hasParentRole: Bool
+
+    static let guest = UserRoleCapabilities(
+        primaryRole: .guest,
+        organizationRoles: [],
+        hasParentRole: false
+    )
+
+    var hasTeacherRole: Bool {
+        organizationRoles.contains(.teacher)
+    }
+
+    var canAccessTeacherTools: Bool {
+        hasTeacherRole || organizationRoles.contains(.admin)
+    }
+
+    static func resolve(organizationRoleNames: [String], hasParentProfile: Bool) -> UserRoleCapabilities {
+        let organizationRoles = Set(organizationRoleNames.compactMap {
+            UserAppRole(rawValue: $0.lowercased())
+        }).subtracting([.guest, .parent])
+
+        let primaryRole: UserAppRole
+        if organizationRoles.contains(.admin) {
+            primaryRole = .admin
+        } else if organizationRoles.contains(.staff) {
+            primaryRole = .staff
+        } else if organizationRoles.contains(.teacher) {
+            primaryRole = .teacher
+        } else if hasParentProfile {
+            primaryRole = .parent
+        } else {
+            primaryRole = .guest
+        }
+
+        return UserRoleCapabilities(
+            primaryRole: primaryRole,
+            organizationRoles: organizationRoles,
+            hasParentRole: hasParentProfile
+        )
+    }
+}
+
+enum ExamAttendanceStatus: CaseIterable, Identifiable, Codable, Equatable, Hashable {
     case present
     case excused
     case absent
-    case makeupCompleted = "makeup_completed"
+    case makeupCompleted
+    case unsupported(String)
+
+    static var allCases: [ExamAttendanceStatus] {
+        [.present, .excused, .absent, .makeupCompleted]
+    }
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "present": self = .present
+        case "excused": self = .excused
+        case "absent": self = .absent
+        case "makeup_completed": self = .makeupCompleted
+        default: return nil
+        }
+    }
+
+    init(serverRawValue: String) {
+        self = ExamAttendanceStatus(rawValue: serverRawValue) ?? .unsupported(serverRawValue)
+    }
+
+    var rawValue: String {
+        switch self {
+        case .present: return "present"
+        case .excused: return "excused"
+        case .absent: return "absent"
+        case .makeupCompleted: return "makeup_completed"
+        case .unsupported(let rawValue): return rawValue
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let rawValue = try decoder.singleValueContainer().decode(String.self)
+        self = ExamAttendanceStatus(serverRawValue: rawValue)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 
     var id: String { rawValue }
 
@@ -203,6 +288,7 @@ enum ExamAttendanceStatus: String, CaseIterable, Identifiable, Codable {
         case .excused: return "請假"
         case .absent: return "缺席"
         case .makeupCompleted: return "已補課"
+        case .unsupported(let rawValue): return "未支援狀態：\(rawValue)"
         }
     }
 
@@ -212,6 +298,16 @@ enum ExamAttendanceStatus: String, CaseIterable, Identifiable, Codable {
         case .excused: return "calendar.badge.clock"
         case .absent: return "xmark.circle.fill"
         case .makeupCompleted: return "checkmark.seal.fill"
+        case .unsupported: return "questionmark.circle.fill"
+        }
+    }
+
+    var isWritable: Bool {
+        switch self {
+        case .present, .absent, .excused:
+            return true
+        case .makeupCompleted, .unsupported:
+            return false
         }
     }
 }
@@ -240,7 +336,56 @@ struct TeacherSessionStudent: Identifiable {
     let id: UUID
     let displayName: String
     let schoolName: String?
+    let attendanceStatusRawValue: String?
     var status: ExamAttendanceStatus
+    var attendanceRevision: Int64?
+
+    init(
+        id: UUID,
+        displayName: String,
+        schoolName: String?,
+        status: ExamAttendanceStatus,
+        attendanceRevision: Int64? = nil,
+        attendanceStatusRawValue: String? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.schoolName = schoolName
+        self.status = status
+        self.attendanceRevision = attendanceRevision
+        self.attendanceStatusRawValue = attendanceStatusRawValue
+    }
+
+    var isEditable: Bool {
+        guard status.isWritable else { return false }
+        guard let attendanceStatusRawValue else { return true }
+        guard attendanceRevision != nil else { return false }
+        return ExamAttendanceStatus(serverRawValue: attendanceStatusRawValue).isWritable
+    }
+
+    var isReadOnly: Bool { !isEditable }
+
+    var statusDisplayTitle: String {
+        if attendanceStatusRawValue != nil && attendanceRevision == nil {
+            return "紀錄不完整，請重新載入"
+        }
+        return status.title
+    }
+}
+
+struct AttendanceSubmissionRequest: Equatable {
+    let sessionID: UUID
+    let studentID: UUID
+    let status: ExamAttendanceStatus
+    let expectedRevision: Int64?
+    let reason: String
+    let requestID: String
+}
+
+struct AttendanceSubmissionResult: Equatable {
+    let changed: Bool
+    let revision: Int64
+    let idempotentReplay: Bool?
 }
 
 struct ParentExamAttendanceSummary: Identifiable {

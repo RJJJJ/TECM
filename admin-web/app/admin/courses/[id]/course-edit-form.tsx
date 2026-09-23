@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { updateCourseAction, type UpdateCourseFormState } from './actions';
 
 type CampusOption = {
@@ -51,15 +52,15 @@ function clientValidate(formData: FormData) {
   const title = String(formData.get('title') ?? '').trim();
   const sortOrderRaw = String(formData.get('sort_order') ?? '').trim();
 
-  if (!title) return 'Title 為必填。';
-  if (sortOrderRaw && !Number.isFinite(Number(sortOrderRaw))) return 'Sort order 必須是數字。';
+  if (!title) return '課程名稱為必填。';
+  if (sortOrderRaw && !Number.isFinite(Number(sortOrderRaw))) return '排序必須是數字。';
 
   return null;
 }
 
 export default function CourseEditForm({ course, campuses }: Props) {
   const formAction = updateCourseAction.bind(null, course.id);
-  const [state, action] = useFormState(formAction, initialState);
+  const [state, action] = useActionState(formAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [showSavedHint, setShowSavedHint] = useState(false);
 
@@ -77,7 +78,7 @@ export default function CourseEditForm({ course, campuses }: Props) {
     <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div>
         <h3 className="text-lg font-semibold text-slate-900">課程基本資訊</h3>
-        <p className="mt-1 text-xs text-slate-500">可更新 courses 全部欄位。</p>
+        <p className="mt-1 text-xs text-slate-500">可更新課程的全部資料。</p>
       </div>
 
       <form
@@ -97,7 +98,7 @@ export default function CourseEditForm({ course, campuses }: Props) {
         <div className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-2">
           <div className="md:col-span-2">
             <label htmlFor="title" className="mb-1 block text-sm font-medium text-slate-700">
-              Title
+              課程名稱
             </label>
             <input
               id="title"
@@ -112,7 +113,7 @@ export default function CourseEditForm({ course, campuses }: Props) {
 
           <div>
             <label htmlFor="category" className="mb-1 block text-sm font-medium text-slate-700">
-              Category
+              類別
             </label>
             <input
               id="category"
@@ -126,7 +127,7 @@ export default function CourseEditForm({ course, campuses }: Props) {
 
           <div>
             <label htmlFor="level" className="mb-1 block text-sm font-medium text-slate-700">
-              Level
+              程度
             </label>
             <input
               id="level"
@@ -140,7 +141,7 @@ export default function CourseEditForm({ course, campuses }: Props) {
 
           <div>
             <label htmlFor="age_group" className="mb-1 block text-sm font-medium text-slate-700">
-              Age Group
+              年齡組別
             </label>
             <input
               id="age_group"
@@ -154,7 +155,7 @@ export default function CourseEditForm({ course, campuses }: Props) {
 
           <div>
             <label htmlFor="campus_id" className="mb-1 block text-sm font-medium text-slate-700">
-              Campus
+              校區
             </label>
             <select
               id="campus_id"
@@ -165,7 +166,7 @@ export default function CourseEditForm({ course, campuses }: Props) {
               <option value="">未指定</option>
               {campuses.map((campus) => (
                 <option key={campus.id} value={campus.id}>
-                  {campus.name} {!campus.is_active ? '(Inactive)' : ''}
+                  {campus.name} {!campus.is_active ? '（停用）' : ''}
                 </option>
               ))}
             </select>
@@ -173,7 +174,7 @@ export default function CourseEditForm({ course, campuses }: Props) {
 
           <div>
             <label htmlFor="recommended" className="mb-1 block text-sm font-medium text-slate-700">
-              Recommended
+              推薦課程
             </label>
             <select
               id="recommended"
@@ -181,14 +182,14 @@ export default function CourseEditForm({ course, campuses }: Props) {
               defaultValue={course.recommended ? 'true' : 'false'}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
             >
-              <option value="false">No</option>
-              <option value="true">Yes</option>
+              <option value="false">否</option>
+              <option value="true">是</option>
             </select>
           </div>
 
           <div>
             <label htmlFor="is_active" className="mb-1 block text-sm font-medium text-slate-700">
-              Is Active
+              啟用狀態
             </label>
             <select
               id="is_active"
@@ -196,14 +197,14 @@ export default function CourseEditForm({ course, campuses }: Props) {
               defaultValue={course.is_active ? 'true' : 'false'}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
             >
-              <option value="true">Active</option>
-              <option value="false">Inactive</option>
+              <option value="true">啟用</option>
+              <option value="false">停用</option>
             </select>
           </div>
 
           <div>
             <label htmlFor="sort_order" className="mb-1 block text-sm font-medium text-slate-700">
-              Sort Order
+              排序
             </label>
             <input
               id="sort_order"
@@ -216,7 +217,7 @@ export default function CourseEditForm({ course, campuses }: Props) {
 
           <div className="md:col-span-2">
             <label htmlFor="summary" className="mb-1 block text-sm font-medium text-slate-700">
-              Summary
+              課程摘要
             </label>
             <textarea
               id="summary"
@@ -229,7 +230,7 @@ export default function CourseEditForm({ course, campuses }: Props) {
 
           <div className="md:col-span-2">
             <label htmlFor="schedule_text" className="mb-1 block text-sm font-medium text-slate-700">
-              Schedule Text
+              課堂時間說明
             </label>
             <textarea
               id="schedule_text"

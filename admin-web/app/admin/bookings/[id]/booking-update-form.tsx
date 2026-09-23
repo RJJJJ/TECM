@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { updateBookingAction, type UpdateFormState } from './actions';
 
 type BookingEditable = {
@@ -46,11 +47,11 @@ function clientValidate(formData: FormData) {
   const endTime = String(formData.get('end_time') ?? '').trim();
 
   if (!bookingDate || !startTime || !endTime) {
-    return '請完整填寫 booking date / start time / end time。';
+    return '請完整填寫預約日期、開始時間及結束時間。';
   }
 
-  if (startTime > endTime) {
-    return 'Start time 不可晚於 end time。';
+  if (startTime >= endTime) {
+    return '開始時間必須早於結束時間。';
   }
 
   return null;
@@ -58,7 +59,7 @@ function clientValidate(formData: FormData) {
 
 export default function BookingUpdateForm({ booking }: Props) {
   const formAction = updateBookingAction.bind(null, booking.id);
-  const [state, action] = useFormState(formAction, initialState);
+  const [state, action] = useActionState(formAction, initialState);
   const [clientMessage, setClientMessage] = useState<string | null>(null);
   const [showSavedHint, setShowSavedHint] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState(booking.status ?? 'pending');
@@ -77,8 +78,8 @@ export default function BookingUpdateForm({ booking }: Props) {
     <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-lg font-semibold text-slate-900">更新 Booking</h3>
-          <p className="mt-1 text-xs text-slate-500">僅更新既有欄位（Status / Date / Time / Note）</p>
+          <h3 className="text-lg font-semibold text-slate-900">更新預約</h3>
+          <p className="mt-1 text-xs text-slate-500">僅更新預約狀態、日期、時間及備註。</p>
         </div>
       </div>
 
@@ -99,7 +100,7 @@ export default function BookingUpdateForm({ booking }: Props) {
         <div className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-2">
           <div>
             <label htmlFor="status" className="mb-1 block text-sm font-medium text-slate-700">
-              Status
+              狀態
             </label>
             <select
               id="status"
@@ -108,16 +109,16 @@ export default function BookingUpdateForm({ booking }: Props) {
               onChange={(event) => setSelectedStatus(event.target.value)}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-slate-300 focus:ring"
             >
-              <option value="pending">Pending</option>
-              <option value="confirmed">Confirmed</option>
-              <option value="completed">Completed</option>
-              <option value="cancelled">Cancelled</option>
+              <option value="pending">待確認</option>
+              <option value="confirmed">已確認</option>
+              <option value="completed">已完成</option>
+              <option value="cancelled">已取消</option>
             </select>
           </div>
 
           <div>
             <label htmlFor="booking_date" className="mb-1 block text-sm font-medium text-slate-700">
-              Booking Date
+              預約日期
             </label>
             <input
               id="booking_date"
@@ -131,7 +132,7 @@ export default function BookingUpdateForm({ booking }: Props) {
 
           <div>
             <label htmlFor="start_time" className="mb-1 block text-sm font-medium text-slate-700">
-              Start Time
+              開始時間
             </label>
             <input
               id="start_time"
@@ -145,7 +146,7 @@ export default function BookingUpdateForm({ booking }: Props) {
 
           <div>
             <label htmlFor="end_time" className="mb-1 block text-sm font-medium text-slate-700">
-              End Time
+              結束時間
             </label>
             <input
               id="end_time"
@@ -159,7 +160,7 @@ export default function BookingUpdateForm({ booking }: Props) {
 
           <div className="md:col-span-2">
             <label htmlFor="note" className="mb-1 block text-sm font-medium text-slate-700">
-              Note
+              備註
             </label>
             <textarea
               id="note"
@@ -182,7 +183,7 @@ export default function BookingUpdateForm({ booking }: Props) {
               <span>
                 <span className="block font-medium">確認預約時同步建立 App 內家長通知</span>
                 <span className="mt-1 block text-xs text-blue-700">
-                  只會發送正式的預約確認通知，不會發送 AI 內部跟進建議；同一 booking 會避免重複通知。
+                  只會發送正式的預約確認通知，不會發送智能跟進建議；同一筆預約會避免重複通知。
                 </span>
               </span>
             </label>

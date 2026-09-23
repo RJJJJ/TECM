@@ -44,7 +44,7 @@ npm run dev
 ```powershell
 npx playwright install chromium
 $env:PLAYWRIGHT_ADMIN_EMAIL='admin@tecm.local'
-$env:PLAYWRIGHT_ADMIN_PASSWORD='LocalDemoOnly-1234'
+$env:PLAYWRIGHT_ADMIN_PASSWORD='<local seed password>'
 npm run test:e2e
 ```
 
