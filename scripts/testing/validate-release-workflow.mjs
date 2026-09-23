@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -91,6 +91,23 @@ const powershellAstExtractor = String.raw`
 [CmdletBinding()]
 param([Parameter(Mandatory = $true)][string]$TargetPath)
 $ErrorActionPreference = 'Stop'
+$script:phaseClock = [Diagnostics.Stopwatch]::StartNew()
+$script:phaseWriter = $null
+$script:phaseEntryEpochMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$script:phasePowerShellVersion = $PSVersionTable.PSVersion.ToString()
+$phasePath = [IO.Path]::ChangeExtension($PSCommandPath, '.phases')
+$script:phaseWriter = [IO.StreamWriter]::new($phasePath, $true, [Text.UTF8Encoding]::new($false))
+$script:phaseWriter.AutoFlush = $true
+function Write-ExtractorPhase([string]$Name) {
+  $record = [ordered]@{
+    phase = $Name
+    elapsed_ms = [Math]::Round($script:phaseClock.Elapsed.TotalMilliseconds, 3)
+    entry_epoch_ms = $script:phaseEntryEpochMs
+    powershell_version = $script:phasePowerShellVersion
+  }
+  $script:phaseWriter.WriteLine(($record | ConvertTo-Json -Compress))
+}
+Write-ExtractorPhase 'entry'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
 
@@ -376,6 +393,7 @@ function Convert-Element([System.Management.Automation.Language.CommandElementAs
 }
 
 try {
+  Write-ExtractorPhase 'input_start'
   $tokens = $null
   $parseErrors = $null
   $inputBytes = [IO.MemoryStream]::new()
@@ -387,9 +405,11 @@ try {
     $sourceBytes[1] -eq 187 -and $sourceBytes[2] -eq 191) { 3 } else { 0 }
   $sourceText = [Text.UTF8Encoding]::new($false, $true).GetString(
     $sourceBytes, $bomLength, $sourceBytes.Length - $bomLength)
+  Write-ExtractorPhase 'parse_start'
   $ast = [System.Management.Automation.Language.Parser]::ParseInput(
     $sourceText, [IO.Path]::GetFullPath($TargetPath), [ref]$tokens, [ref]$parseErrors
   )
+  Write-ExtractorPhase 'walk_start'
   # A subtree contains a dynamic node exactly when its root is that node or an
   # ancestor. Build this set once from the identical predicate, in this process
   # only. Reference identity prevents mixing distinct nodes with equal text.
@@ -615,6 +635,7 @@ try {
     ForEach-Object { Convert-Terminal $_ })
   $exits = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.ExitStatementAst] }, $true) |
     ForEach-Object { Convert-Terminal $_ })
+  Write-ExtractorPhase 'payload_start'
   $payload = [ordered]@{
     schema_version = 8
     source_path = [IO.Path]::GetFullPath($TargetPath)
@@ -660,10 +681,18 @@ try {
     })
     root_extent = Convert-Extent $ast.Extent
   }
-  [Console]::Out.Write(($payload | ConvertTo-Json -Depth 64 -Compress))
+  Write-ExtractorPhase 'serialize_start'
+  $json = $payload | ConvertTo-Json -Depth 64 -Compress
+  Write-ExtractorPhase 'output_start'
+  [Console]::Out.Write($json)
+  Write-ExtractorPhase 'output_done'
 } catch {
   [Console]::Error.Write('PowerShell AST extraction failed')
   exit 1
+} finally {
+  if ($null -ne $script:phaseWriter) {
+    $script:phaseWriter.Dispose()
+  }
 }
 `;
 
@@ -677,6 +706,57 @@ function compactProcess(result) {
 
 function rejectAstBoundary(code, message) {
   throw new AstBoundaryError(code, message);
+}
+
+const astExtractorPhases = ['entry', 'input_start', 'parse_start', 'walk_start', 'payload_start',
+  'serialize_start', 'output_start', 'output_done'];
+
+function readAstPhaseDiagnostics(path, spawnEpochMs, snapshot) {
+  const unavailable = (reason) => ({ authoritative: false, available: false, unavailable_reason: reason,
+    entry_epoch_ms: null, entry_delay_ms: null, powershell_version: null, phase_elapsed_ms: {}, last_phase: null,
+    extractor_sha256: sha256(powershellAstExtractor), source_raw_sha256: snapshot.raw_sha256 });
+  try {
+    const info = statSync(path);
+    if (!info.isFile()) return unavailable('not_file');
+    if (info.size >= 16 * 1024) return unavailable('too_large');
+    const bytes = readFileSync(path);
+    if (bytes.length >= 16 * 1024) return unavailable('too_large');
+    const text = bytes.toString('utf8');
+    if (!Buffer.from(text, 'utf8').equals(bytes)) return unavailable('invalid_utf8');
+    const lines = text.split(/\r\n|\n/);
+    if (lines.at(-1) === '') lines.pop();
+    if (lines.length === 0 || lines.length > astExtractorPhases.length) return unavailable('invalid_lines');
+    const phaseElapsed = {};
+    let previousElapsed = -1;
+    let entryEpochMs = null;
+    let powerShellVersion = null;
+    for (let index = 0; index < lines.length; index += 1) {
+      const record = JSON.parse(lines[index]);
+      if (!record || typeof record !== 'object' || Array.isArray(record) ||
+          Object.keys(record).sort().join(',') !== 'elapsed_ms,entry_epoch_ms,phase,powershell_version' ||
+          record.phase !== astExtractorPhases[index] || !Number.isFinite(record.elapsed_ms) ||
+          record.elapsed_ms < 0 || record.elapsed_ms < previousElapsed || !Number.isSafeInteger(record.entry_epoch_ms) ||
+          record.entry_epoch_ms < 0 || typeof record.powershell_version !== 'string' ||
+          !/^\d+(?:\.\d+)*$/.test(record.powershell_version)) return unavailable('invalid_record');
+      if (index === 0) {
+        entryEpochMs = record.entry_epoch_ms;
+        powerShellVersion = record.powershell_version;
+      } else if (record.entry_epoch_ms !== entryEpochMs || record.powershell_version !== powerShellVersion) {
+        return unavailable('inconsistent_entry');
+      }
+      previousElapsed = record.elapsed_ms;
+      phaseElapsed[record.phase] = record.elapsed_ms;
+    }
+    return { authoritative: false, available: true, unavailable_reason: null,
+      entry_epoch_ms: entryEpochMs,
+      entry_delay_ms: Number.isSafeInteger(spawnEpochMs) && entryEpochMs >= spawnEpochMs
+        ? entryEpochMs - spawnEpochMs : null,
+      powershell_version: powerShellVersion, phase_elapsed_ms: phaseElapsed,
+      last_phase: astExtractorPhases[lines.length - 1], extractor_sha256: sha256(powershellAstExtractor),
+      source_raw_sha256: snapshot.raw_sha256 };
+  } catch {
+    return unavailable('unavailable');
+  }
 }
 
 function createSourceSnapshot(targetPath, inputBytes) {
@@ -836,10 +916,11 @@ function restoreAstExtents(document, snapshot) {
   return document;
 }
 
-function runAstParserProcess(snapshot, extractorPath) {
+function runAstParserProcess(snapshot, extractorPath, timing = { spawnEpochMs: null }) {
   assertSourceSnapshotCurrent(snapshot);
   const started = performance.now();
   let result;
+  timing.spawnEpochMs = Date.now();
   try {
     result = spawnSync('pwsh', [
       '-NoLogo', '-NoProfile', '-NonInteractive', '-File', extractorPath, '-TargetPath', snapshot.path
@@ -863,16 +944,19 @@ function extractPowerShellAst(snapshot) {
   const extractorPath = resolve(root, 'extract.ps1');
   let result;
   let elapsed = 0;
+  let phaseDiagnostics = null;
+  const timing = { spawnEpochMs: null };
   try {
     writeFileSync(extractorPath, powershellAstExtractor);
     const started = performance.now();
-    try { result = runAstParserProcess(snapshot, extractorPath); }
+    try { result = runAstParserProcess(snapshot, extractorPath, timing); }
     finally { elapsed = performance.now() - started; }
+    phaseDiagnostics = readAstPhaseDiagnostics(resolve(root, 'extract.phases'), timing.spawnEpochMs, snapshot);
     const document = parseAstProcessResult(result);
     assertAstSourceIdentity(document, snapshot.path);
     restoreAstExtents(document, snapshot);
     document.source_text = snapshot.text;
-    return { document, snapshot, process: compactProcess(result) };
+    return { document, snapshot, process: { ...compactProcess(result), diagnostics: phaseDiagnostics } };
   } catch (error) {
     // Preserve bounded subprocess facts before the validator maps the failure
     // to its existing issue code. Never include source, huge stdout or paths.
@@ -881,7 +965,8 @@ function extractPowerShellAst(snapshot) {
       error_errno: result?.error?.errno ?? null, error_syscall: result?.error?.syscall ?? null,
       elapsed_ms: elapsed, timeout_ms: 15_000, max_buffer_bytes: 8 * 1024 * 1024,
       stdout_bytes: Buffer.byteLength(result?.stdout ?? ''), stderr_bytes: Buffer.byteLength(result?.stderr ?? ''),
-      stdout_sha256: sha256(result?.stdout ?? ''), stderr_sha256: sha256(result?.stderr ?? '') };
+      stdout_sha256: sha256(result?.stdout ?? ''), stderr_sha256: sha256(result?.stderr ?? ''),
+      diagnostics: phaseDiagnostics ?? readAstPhaseDiagnostics(resolve(root, 'extract.phases'), timing.spawnEpochMs, snapshot) };
     throw error;
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -3234,7 +3319,8 @@ function runAstBoundaryControls() {
   };
   const validDocument = JSON.stringify(validObject);
   const specs = [
-    { id: 'CONTROL-AST-TIMEOUT', expectedClassification: 'ast.timeout', result: { status: null, signal: null, error: { code: 'ETIMEDOUT' }, stdout: '', stderr: '' } },
+    { id: 'CONTROL-AST-TIMEOUT', expectedClassification: 'ast.timeout', result: { status: null, signal: null, error: { code: 'ETIMEDOUT' }, stdout: '', stderr: '',
+      diagnostics: { authoritative: false, available: true, last_phase: 'output_done' } } },
     { id: 'CONTROL-AST-SIGNAL', expectedClassification: 'ast.signal', result: { status: null, signal: 'SIGTERM', stdout: '', stderr: '' } },
     { id: 'CONTROL-AST-NONZERO-EXIT', expectedClassification: 'ast.nonzero_exit', result: { status: 1, signal: null, stdout: validDocument, stderr: '' } },
     { id: 'CONTROL-AST-SPAWN-ERROR', expectedClassification: 'ast.spawn_error', result: { status: null, signal: null, error: { code: 'ENOENT' }, stdout: '', stderr: '' } },
@@ -3246,7 +3332,8 @@ function runAstBoundaryControls() {
       stdout: JSON.stringify({ ...validObject, runtime: { parser_type: 'Untrusted.Parser' } }), stderr: '' }, expectedClassification: 'ast.parser_identity' },
     { id: 'CONTROL-AST-MALFORMED-SCHEMA', result: { status: 0, signal: null,
       stdout: JSON.stringify({ ...validObject, returns: [{}] }), stderr: '' }, expectedClassification: 'ast.invalid_schema' },
-    { id: 'CONTROL-AST-STDERR', expectedClassification: 'ast.stderr', result: { status: 0, signal: null, stdout: validDocument, stderr: 'unexpected' } }
+    { id: 'CONTROL-AST-STDERR', expectedClassification: 'ast.stderr', result: { status: 0, signal: null, stdout: validDocument, stderr: 'unexpected',
+      diagnostics: { authoritative: false, available: true, last_phase: 'output_done' } } }
   ];
   const controls = specs.map((spec) => {
     let observedClassification = null;
