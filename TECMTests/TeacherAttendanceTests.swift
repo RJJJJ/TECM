@@ -234,10 +234,18 @@ final class TeacherAttendanceTests: XCTestCase {
         let viewModel = TeacherAttendanceViewModel(attendanceService: service)
 
         await viewModel.load(sessionID: sessionID)
+        XCTAssertFalse(viewModel.requiresSelectionConfirmation(studentID: studentID))
+        viewModel.confirmCurrentSelection(studentID: studentID)
+        XCTAssertEqual(viewModel.students.first?.status, .present)
+
         viewModel.updateStatus(for: studentID, status: .absent)
         viewModel.correctionReason = "保留原因"
         await viewModel.submit(sessionID: sessionID, sessionEnded: true)
         let originalRequest = try! XCTUnwrap(service.requests.first)
+        XCTAssertFalse(viewModel.requiresSelectionConfirmation(studentID: studentID))
+        viewModel.confirmCurrentSelection(studentID: studentID)
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID), originalRequest)
+        XCTAssertEqual(viewModel.students.first?.status, .absent)
 
         await viewModel.load(sessionID: sessionID)
 
@@ -343,7 +351,7 @@ final class TeacherAttendanceTests: XCTestCase {
         XCTAssertNotNil(viewModel.successMessage)
     }
 
-    func testDiscardedUncertainConflictIsNotReinsertedForMissingOrNilRevisionRoster() async {
+    func testDiscardedUncertainConflictRequiresSameValueConfirmationForNilRevisionRoster() async {
         let sessionID = UUID()
         let studentID = UUID()
         let initial = TeacherSessionStudent(
@@ -384,10 +392,16 @@ final class TeacherAttendanceTests: XCTestCase {
         viewModel.updateStatus(for: studentID, status: .absent)
         viewModel.correctionReason = "原因 A"
         await viewModel.submit(sessionID: sessionID)
+        let originalRequest = service.requests[0]
         await viewModel.load(sessionID: sessionID)
         await viewModel.submit(sessionID: sessionID)
 
         XCTAssertEqual(service.requests.count, 2)
+        XCTAssertEqual(service.requests[1], originalRequest)
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID), originalRequest)
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID)?.status, .absent)
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID)?.reason, "原因 A")
+        XCTAssertEqual(viewModel.conflictingDrafts.first?.status, .absent)
         XCTAssertTrue(viewModel.requiresAuthoritativeReload)
         XCTAssertNil(viewModel.successMessage)
         await viewModel.load(sessionID: sessionID)
@@ -399,6 +413,13 @@ final class TeacherAttendanceTests: XCTestCase {
         XCTAssertTrue(viewModel.hasSubmissionConflict(studentID: studentID))
         XCTAssertTrue(viewModel.canDiscardDraft(studentID: studentID))
         XCTAssertNil(viewModel.authoritativeStatusTitle(for: studentID))
+        XCTAssertTrue(viewModel.requiresSelectionConfirmation(studentID: studentID))
+
+        viewModel.correctionReason = "原因 B"
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID), originalRequest)
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID)?.status, .absent)
+        XCTAssertEqual(viewModel.pendingSubmission(for: studentID)?.reason, "原因 A")
+        XCTAssertEqual(viewModel.conflictingDrafts.first?.status, .absent)
 
         viewModel.discardConflictingDraft(studentID: studentID)
         XCTAssertNil(viewModel.pendingSubmission(for: studentID))
@@ -417,15 +438,19 @@ final class TeacherAttendanceTests: XCTestCase {
         await viewModel.submit(sessionID: sessionID)
         XCTAssertEqual(service.requests.count, 2)
         XCTAssertNil(viewModel.successMessage)
+        XCTAssertTrue(viewModel.requiresSelectionConfirmation(studentID: studentID))
+        XCTAssertEqual(viewModel.students.first?.status, .present)
+        XCTAssertNil(viewModel.students.first?.attendanceRevision)
 
-        viewModel.correctionReason = "原因 B"
-        viewModel.updateStatus(for: studentID, status: .absent)
+        viewModel.confirmCurrentSelection(studentID: studentID)
+        XCTAssertFalse(viewModel.requiresSelectionConfirmation(studentID: studentID))
+        XCTAssertEqual(viewModel.students.first?.status, .present)
         await viewModel.submit(sessionID: sessionID, sessionEnded: true)
 
         XCTAssertEqual(service.requests.count, 3)
         XCTAssertNotEqual(service.requests[2].requestID, service.requests[0].requestID)
         XCTAssertNil(service.requests[2].expectedRevision)
-        XCTAssertEqual(service.requests[2].status, .absent)
+        XCTAssertEqual(service.requests[2].status, .present)
         XCTAssertEqual(service.requests[2].reason, "原因 B")
         XCTAssertEqual(viewModel.students.first?.attendanceRevision, 1)
         XCTAssertNotNil(viewModel.successMessage)
@@ -482,6 +507,10 @@ final class TeacherAttendanceTests: XCTestCase {
         XCTAssertTrue(viewModel.requiresAuthoritativeReload)
         XCTAssertEqual(viewModel.pendingSubmission(for: first.id)?.status, .absent)
         XCTAssertEqual(viewModel.conflictingDrafts.map(\.id), [first.id])
+        XCTAssertTrue(viewModel.requiresSelectionConfirmation(studentID: first.id))
+        viewModel.confirmCurrentSelection(studentID: first.id)
+        XCTAssertEqual(viewModel.pendingSubmission(for: first.id)?.status, .absent)
+        XCTAssertEqual(viewModel.conflictingDrafts.map(\.id), [first.id])
 
         service.fetchError = TestAttendanceError.transport
         await viewModel.load(sessionID: sessionID)
@@ -490,6 +519,9 @@ final class TeacherAttendanceTests: XCTestCase {
         XCTAssertEqual(viewModel.pendingSubmission(for: first.id)?.status, .absent)
         XCTAssertEqual(viewModel.conflictingDrafts.map(\.id), [first.id])
         XCTAssertFalse(viewModel.canDiscardDraft(studentID: first.id))
+        viewModel.confirmCurrentSelection(studentID: first.id)
+        XCTAssertEqual(viewModel.pendingSubmission(for: first.id)?.status, .absent)
+        XCTAssertEqual(viewModel.conflictingDrafts.map(\.id), [first.id])
 
         service.fetchError = nil
         await viewModel.load(sessionID: sessionID)
@@ -507,6 +539,20 @@ final class TeacherAttendanceTests: XCTestCase {
         XCTAssertTrue(viewModel.hasSubmissionConflict(studentID: first.id))
         XCTAssertEqual(viewModel.students.first(where: { $0.id == second.id })?.attendanceRevision, 2)
         XCTAssertNil(viewModel.successMessage)
+
+        let requestsAfterOtherDraft = service.requests
+        XCTAssertTrue(viewModel.requiresSelectionConfirmation(studentID: first.id))
+        XCTAssertEqual(viewModel.students.first(where: { $0.id == first.id })?.status, .excused)
+        viewModel.confirmCurrentSelection(studentID: first.id)
+        XCTAssertFalse(viewModel.requiresSelectionConfirmation(studentID: first.id))
+        XCTAssertFalse(viewModel.hasSubmissionConflict(studentID: first.id))
+        XCTAssertNil(viewModel.pendingSubmission(for: first.id))
+        XCTAssertEqual(viewModel.students.first(where: { $0.id == first.id })?.status, .excused)
+        XCTAssertEqual(viewModel.students.first(where: { $0.id == first.id })?.attendanceRevision, 2)
+
+        await viewModel.submit(sessionID: sessionID)
+
+        XCTAssertEqual(service.requests, requestsAfterOtherDraft)
     }
 
     func testOrdinaryReloadPreservesUnsentDraftAndReason() async {

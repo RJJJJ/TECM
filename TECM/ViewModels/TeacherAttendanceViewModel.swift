@@ -105,6 +105,20 @@ final class TeacherAttendanceViewModel: ObservableObject {
         noticeMessage = nil
     }
 
+    func requiresSelectionConfirmation(studentID: UUID) -> Bool {
+        explicitlyDiscardedDraftIDs.contains(studentID)
+            || conflictingDrafts.contains(where: { $0.id == studentID })
+    }
+
+    func confirmCurrentSelection(studentID: UUID) {
+        guard requiresSelectionConfirmation(studentID: studentID),
+              canEdit(studentID: studentID),
+              let currentStatus = students.first(where: { $0.id == studentID })?.status else {
+            return
+        }
+        updateStatus(for: studentID, status: currentStatus)
+    }
+
     func canEdit(studentID: UUID) -> Bool {
         guard !isSubmitting, !isLoading, !requiresAuthoritativeReload else { return false }
         guard let student = students.first(where: { $0.id == studentID }) else { return false }

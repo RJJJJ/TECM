@@ -98,7 +98,11 @@ struct TeacherAttendanceView: View {
                                 isEditable: viewModel.canEdit(studentID: student.id),
                                 pendingSubmission: viewModel.pendingSubmission(for: student.id),
                                 hasSubmissionConflict: viewModel.hasSubmissionConflict(studentID: student.id),
-                                authoritativeStatusTitle: viewModel.authoritativeStatusTitle(for: student.id)
+                                authoritativeStatusTitle: viewModel.authoritativeStatusTitle(for: student.id),
+                                requiresSelectionConfirmation: viewModel.requiresSelectionConfirmation(studentID: student.id),
+                                onConfirmCurrentSelection: {
+                                    viewModel.confirmCurrentSelection(studentID: student.id)
+                                }
                             )
                         }
                     }
@@ -232,6 +236,8 @@ private struct TeacherAttendanceStudentRow: View {
     let pendingSubmission: AttendanceSubmissionRequest?
     let hasSubmissionConflict: Bool
     let authoritativeStatusTitle: String?
+    let requiresSelectionConfirmation: Bool
+    let onConfirmCurrentSelection: () -> Void
 
     private var isPending: Bool {
         pendingSubmission != nil
@@ -307,6 +313,15 @@ private struct TeacherAttendanceStudentRow: View {
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
+
+                if requiresSelectionConfirmation {
+                    Text("確認目前選擇，或選擇其他狀態後，再提交出席紀錄。")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                    Button("確認目前選擇：\(selection.title)", action: onConfirmCurrentSelection)
+                        .font(Theme.Typography.caption.weight(.semibold))
+                        .disabled(!isEditable)
+                }
             }
         }
     }
@@ -325,7 +340,9 @@ private struct TeacherAttendanceRowsPreview: View {
                         isEditable: true,
                         pendingSubmission: nil,
                         hasSubmissionConflict: false,
-                        authoritativeStatusTitle: nil
+                        authoritativeStatusTitle: nil,
+                        requiresSelectionConfirmation: false,
+                        onConfirmCurrentSelection: {}
                     )
                 }
             }
