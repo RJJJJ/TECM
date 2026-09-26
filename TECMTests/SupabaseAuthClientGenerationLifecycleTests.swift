@@ -395,8 +395,12 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
     @MainActor
     func testT10AuthCallbackDuringRetirementIsRejectedAndLaterCallbackOnFreshGenerationSucceeds() async throws {
         let gate = GatedSDKSignOutObserver(testCase: self)
+        let deadline = ManualSignOutDeadline(testCase: self)
         let fixture = makeFixture()
         let lifecycle = fixture.makeLifecycle(
+            waitForDeadline: { duration in
+                await deadline.wait(for: duration)
+            },
             observeSignOutEvent: { auth, onSignedOut in
                 await gate.observe(auth: auth, onSignedOut: onSignedOut)
             },
@@ -430,7 +434,10 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
         let logoutTask = Task {
             try await lifecycle.signOutCurrentGeneration()
         }
-        await fulfillment(of: [gate.observerRegistered, gate.genuineEventObserved], timeout: 1)
+        await fulfillment(
+            of: [gate.observerRegistered, gate.genuineEventObserved, deadline.waitStarted],
+            timeout: 1
+        )
 
         await viewModel.handleAuthCallback(
             url: URL(string: "tecm://auth/callback?code=retiring")!
@@ -481,6 +488,54 @@ final class SupabaseAuthClientGenerationLifecycleTests: XCTestCase {
         XCTAssertEqual(fresh.client.auth.currentSession?.user.id, freshUser.id)
         XCTAssertEqual(try fresh.sessionPersistence.signOutCleanupContext()?.sessionID, "t10-fresh")
         XCTAssertEqual(try fixture.fence.read(projectKey: fixture.projectKey), .allowsRestore)
+    }
+
+    @MainActor
+    func testControlledDeadlineWinsBeforeLateSDKSignOutCallbackAndKeepsFenceLoggedOut() async throws {
+        let gate = GatedSDKSignOutObserver(testCase: self)
+        let deadline = ManualSignOutDeadline(testCase: self)
+        let fixture = makeFixture()
+        let lifecycle = fixture.makeLifecycle(
+            waitForDeadline: { duration in
+                await deadline.wait(for: duration)
+            },
+            observeSignOutEvent: { auth, onSignedOut in
+                await gate.observe(auth: auth, onSignedOut: onSignedOut)
+            },
+            disposeGeneration: { _ in }
+        )
+        let old = lifecycle.current
+        try lifecycle.activate(
+            makeGenerationSession(user: makeGenerationUser(), sessionID: "t10-deadline-old"),
+            in: old
+        )
+
+        let logoutTask = Task {
+            try await lifecycle.signOutCurrentGeneration()
+        }
+        await fulfillment(
+            of: [gate.observerRegistered, gate.genuineEventObserved, deadline.waitStarted],
+            timeout: 1
+        )
+        XCTAssertTrue(lifecycle.current === old)
+
+        deadline.fire()
+        let result = try await logoutTask.value
+        let fresh = lifecycle.current
+
+        XCTAssertEqual(result, .eventMissing)
+        XCTAssertEqual(fresh.identity, old.identity + 1)
+        XCTAssertFalse(fresh === old)
+        XCTAssertNil(fresh.client.auth.currentSession)
+        XCTAssertNil(try fixture.storage.retrieve(key: fixture.storageKey))
+        XCTAssertEqual(try fixture.fence.read(projectKey: fixture.projectKey), .loggedOut)
+
+        gate.release()
+
+        XCTAssertEqual(result, .eventMissing)
+        XCTAssertNil(fresh.client.auth.currentSession)
+        XCTAssertNil(try fixture.storage.retrieve(key: fixture.storageKey))
+        XCTAssertEqual(try fixture.fence.read(projectKey: fixture.projectKey), .loggedOut)
     }
 
     @MainActor
@@ -671,6 +726,9 @@ private struct GenerationFixture: @unchecked Sendable {
 
     func makeLifecycle(
         initialIdentity: UInt64 = 1,
+        waitForDeadline: @escaping SupabaseClientLifecycle.DeadlineWaiter = { duration in
+            try? await ContinuousClock().sleep(for: duration)
+        },
         observeSignOutEvent: SupabaseClientLifecycle.SignOutEventObserver? = nil,
         disposeGeneration: SupabaseClientLifecycle.GenerationDisposer? = nil
     ) -> SupabaseClientLifecycle {
@@ -683,6 +741,7 @@ private struct GenerationFixture: @unchecked Sendable {
             initialIdentity: initialIdentity,
             signOutEventTimeout: signOutEventTimeout,
             makeSession: makeURLSession,
+            waitForDeadline: waitForDeadline,
             observeSignOutEvent:
                 observeSignOutEvent ?? SupabaseClientLifecycle.observeGenuineSignOutEvent,
             disposeGeneration:
@@ -867,6 +926,58 @@ private final class GenerationURLProtocol: URLProtocol {
     }
 }
 
+private final class ManualSignOutDeadline: @unchecked Sendable {
+    let waitStarted: XCTestExpectation
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var hasResolved = false
+
+    init(testCase: XCTestCase) {
+        waitStarted = testCase.expectation(description: "sign-out deadline waiter started")
+    }
+
+    func wait(for _: Duration) async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let shouldResumeImmediately: Bool
+                lock.lock()
+                if hasResolved {
+                    shouldResumeImmediately = true
+                } else {
+                    self.continuation = continuation
+                    shouldResumeImmediately = false
+                }
+                lock.unlock()
+
+                waitStarted.fulfill()
+                if shouldResumeImmediately {
+                    continuation.resume()
+                }
+            }
+        } onCancel: {
+            self.resolve()
+        }
+    }
+
+    func fire() {
+        resolve()
+    }
+
+    private func resolve() {
+        let continuationToResume: CheckedContinuation<Void, Never>?
+        lock.lock()
+        guard !hasResolved else {
+            lock.unlock()
+            return
+        }
+        hasResolved = true
+        continuationToResume = continuation
+        continuation = nil
+        lock.unlock()
+        continuationToResume?.resume()
+    }
+}
+
 private final class GatedSDKSignOutObserver: @unchecked Sendable {
     let observerRegistered: XCTestExpectation
     let genuineEventObserved: XCTestExpectation
@@ -1021,3 +1132,135 @@ private func makeGenerationJWT(sessionID: String, userID: UUID) -> String {
         .replacingOccurrences(of: "=", with: "")
     return "test-header.\(encoded).test-signature"
 }
+
+#if DEBUG
+final class NetworkDiagnosticsFileConcurrencyTests: XCTestCase {
+    func testConcurrentDelegateWavesAppendAllStartedRecords() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TECM-network-diagnostics-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let logFileURL = directory.appendingPathComponent("diagnostics.jsonl")
+        let expected = NetworkDiagnosticsExpectedEvents()
+        defer {
+            expected.sessionsForCleanup().forEach { $0.invalidateAndCancel() }
+            NetworkDiagnosticsDelegate.drainFileQueueForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let waveCount = 3
+        let delegatesPerWave = 12
+        let tasksPerDelegate = 5
+        let expectedEventCount = waveCount * delegatesPerWave * tasksPerDelegate
+
+        for wave in 0..<waveCount {
+            DispatchQueue.concurrentPerform(iterations: delegatesPerWave) { delegateIndex in
+                let diagnosticsDelegate = NetworkDiagnosticsDelegate(logFileURL: logFileURL)
+                let session = URLSession(configuration: .ephemeral)
+                let sessionID = diagnosticsDelegate.sessionID.uuidString
+                var paths: Set<String> = []
+                var taskIdentifiers: Set<Int> = []
+
+                for taskIndex in 0..<tasksPerDelegate {
+                    let marker = "wave-\(wave)-delegate-\(delegateIndex)-task-\(taskIndex)"
+                    let url = URL(string: "https://diagnostics.invalid/\(marker)?secret=not-logged")!
+                    let task = session.dataTask(with: url)
+                    diagnosticsDelegate.urlSession(session, didCreateTask: task)
+                    paths.insert("/\(marker)")
+                    taskIdentifiers.insert(task.taskIdentifier)
+                }
+
+                expected.add(
+                    sessionID: sessionID,
+                    paths: paths,
+                    taskIdentifiers: taskIdentifiers,
+                    session: session
+                )
+                // The delegate leaves scope here, before the shared queue is drained.
+            }
+
+            NetworkDiagnosticsDelegate.drainFileQueueForTesting()
+        }
+
+        let contents = try String(contentsOf: logFileURL, encoding: .utf8)
+        let lines = contents.split(whereSeparator: \.isNewline)
+        XCTAssertEqual(lines.count, expectedEventCount)
+
+        let loggedEvents = try lines.map { line -> NetworkDiagnosticsLoggedEvent in
+            let json = try JSONSerialization.jsonObject(with: Data(line.utf8))
+            let object = try XCTUnwrap(json as? [String: Any])
+            return NetworkDiagnosticsLoggedEvent(
+                sessionID: try XCTUnwrap(object["session_id"] as? String),
+                taskIdentifier: try XCTUnwrap(object["task_identifier"] as? Int),
+                event: try XCTUnwrap(object["event"] as? String),
+                path: try XCTUnwrap(object["path"] as? String),
+                method: try XCTUnwrap(object["method"] as? String)
+            )
+        }
+
+        let expectedBySession = expected.recordsBySession()
+        var loggedBySession: [String: [NetworkDiagnosticsLoggedEvent]] = [:]
+        for event in loggedEvents {
+            loggedBySession[event.sessionID, default: []].append(event)
+        }
+
+        XCTAssertEqual(Set(loggedBySession.keys), Set(expectedBySession.keys))
+        XCTAssertEqual(Set(loggedEvents.map(\.path)).count, expectedEventCount)
+        XCTAssertEqual(loggedEvents.count, expectedEventCount)
+
+        for (sessionID, expectedRecords) in expectedBySession {
+            let sessionEvents = loggedBySession[sessionID] ?? []
+            XCTAssertEqual(sessionEvents.count, expectedRecords.paths.count, "Unexpected record count for session \(sessionID)")
+            XCTAssertEqual(Set(sessionEvents.map(\.path)), expectedRecords.paths)
+            XCTAssertEqual(Set(sessionEvents.map(\.taskIdentifier)), expectedRecords.taskIdentifiers)
+            XCTAssertTrue(sessionEvents.allSatisfy { $0.event == "task_started" && $0.method == "GET" })
+            XCTAssertFalse(sessionEvents.contains { $0.path.contains("?") })
+        }
+    }
+}
+
+private struct NetworkDiagnosticsLoggedEvent {
+    let sessionID: String
+    let taskIdentifier: Int
+    let event: String
+    let path: String
+    let method: String
+}
+
+private struct NetworkDiagnosticsExpectedSession {
+    let paths: Set<String>
+    let taskIdentifiers: Set<Int>
+}
+
+private final class NetworkDiagnosticsExpectedEvents: @unchecked Sendable {
+    private let lock = NSLock()
+    private var bySession: [String: NetworkDiagnosticsExpectedSession] = [:]
+    private var sessions: [URLSession] = []
+
+    func add(
+        sessionID: String,
+        paths: Set<String>,
+        taskIdentifiers: Set<Int>,
+        session: URLSession
+    ) {
+        lock.lock()
+        bySession[sessionID] = NetworkDiagnosticsExpectedSession(
+            paths: paths,
+            taskIdentifiers: taskIdentifiers
+        )
+        sessions.append(session)
+        lock.unlock()
+    }
+
+    func recordsBySession() -> [String: NetworkDiagnosticsExpectedSession] {
+        lock.lock()
+        defer { lock.unlock() }
+        return bySession
+    }
+
+    func sessionsForCleanup() -> [URLSession] {
+        lock.lock()
+        defer { lock.unlock() }
+        return sessions
+    }
+}
+#endif

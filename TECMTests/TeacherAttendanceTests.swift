@@ -4,6 +4,53 @@ import XCTest
 
 @MainActor
 final class TeacherAttendanceTests: XCTestCase {
+    func testReadFailureDoesNotClaimSubmissionFailure() async {
+        let service = MockAttendanceService(rosters: [], outcomes: [])
+        service.fetchError = AttendanceServiceError.retryable
+        let viewModel = TeacherAttendanceViewModel(attendanceService: service)
+
+        await viewModel.load(sessionID: UUID())
+
+        XCTAssertEqual(viewModel.errorFeedbackTitle, "無法載入學生出席")
+        XCTAssertEqual(viewModel.errorMessage, "無法載入學生出席，請稍後重新載入。")
+        XCTAssertFalse(viewModel.hasPendingUncertainRequests)
+        XCTAssertTrue(service.requests.isEmpty)
+        XCTAssertTrue(viewModel.requiresAuthoritativeReload)
+    }
+
+    func testReadFailurePreservesPriorUncertainSubmissionFeedbackAndPayload() async {
+        let sessionID = UUID()
+        let student = TeacherSessionStudent(id: UUID(), displayName: "Owned", schoolName: nil,
+            status: .present, attendanceRevision: 1, attendanceStatusRawValue: "present")
+        let service = MockAttendanceService(rosters: [[student]],
+            outcomes: [.failure(AttendanceServiceError.retryable)])
+        let viewModel = TeacherAttendanceViewModel(attendanceService: service)
+        await viewModel.load(sessionID: sessionID)
+        viewModel.updateStatus(for: student.id, status: .absent)
+        viewModel.correctionReason = "原提交原因"
+        await viewModel.submit(sessionID: sessionID, sessionEnded: true)
+        let request = viewModel.pendingSubmission(for: student.id)
+        XCTAssertNotNil(request)
+        XCTAssertEqual(viewModel.errorFeedbackTitle, "提交未完成")
+
+        service.fetchError = AttendanceServiceError.retryable
+        await viewModel.load(sessionID: sessionID)
+
+        XCTAssertEqual(viewModel.errorFeedbackTitle, "提交結果待確認")
+        XCTAssertEqual(viewModel.pendingSubmission(for: student.id), request)
+        XCTAssertEqual(request?.status, .absent)
+        XCTAssertEqual(request?.reason, "原提交原因")
+        XCTAssertEqual(request?.expectedRevision, 1)
+        XCTAssertEqual(service.requests.count, 1)
+        XCTAssertTrue(viewModel.requiresAuthoritativeReload)
+        XCTAssertFalse(viewModel.canDiscardDraft(studentID: student.id))
+
+        service.fetchError = nil
+        await viewModel.load(sessionID: sessionID)
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertEqual(viewModel.pendingSubmission(for: student.id), request)
+    }
+
     func testRosterDTOPreservesNullStatusAndRevisionAsNewEditableRow() throws {
         let studentID = UUID()
         let json = """

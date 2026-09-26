@@ -56,6 +56,12 @@ final class TeacherAttendanceViewModel: ObservableObject {
     private var uncertainRequestIDs: Set<UUID> = []
     private var preservedDrafts: [UUID: PreservedDraft] = [:]
     private var explicitlyDiscardedDraftIDs: Set<UUID> = []
+    private var errorOccurredDuringLoad = false
+
+    var errorFeedbackTitle: String {
+        guard errorOccurredDuringLoad else { return "提交未完成" }
+        return uncertainRequestIDs.isEmpty ? "無法載入學生出席" : "提交結果待確認"
+    }
 
     init(attendanceService: AttendanceServicing = AttendanceService()) {
         self.attendanceService = attendanceService
@@ -65,6 +71,7 @@ final class TeacherAttendanceViewModel: ObservableObject {
         guard !isSubmitting, !isLoading, !Task.isCancelled else { return }
 
         let wasAuthoritativeReloadRequired = requiresAuthoritativeReload
+        errorOccurredDuringLoad = true
         isLoading = true
         errorMessage = nil
         noticeMessage = nil
@@ -83,7 +90,9 @@ final class TeacherAttendanceViewModel: ObservableObject {
             preserveCurrentDrafts()
             clearActiveRosterForReload()
             requiresAuthoritativeReload = true
-            errorMessage = "無法載入學生出席：\(safeErrorMessage(error))"
+            errorMessage = (error as? AttendanceServiceError) == .authorizationDenied
+                ? "目前無法取得這堂課的學生出席權限，請確認帳號後重新載入。"
+                : "無法載入學生出席，請稍後重新載入。"
         }
     }
 
@@ -196,6 +205,7 @@ final class TeacherAttendanceViewModel: ObservableObject {
 
     func submit(sessionID: UUID, sessionEnded: Bool = false) async {
         guard !isSubmitting, !isLoading, !requiresAuthoritativeReload, !Task.isCancelled else { return }
+        errorOccurredDuringLoad = false
 
         isSubmitting = true
         errorMessage = nil
