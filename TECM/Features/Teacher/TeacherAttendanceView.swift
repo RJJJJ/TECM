@@ -173,7 +173,7 @@ struct TeacherAttendanceView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(Theme.Colors.warning)
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                    Text("提交未完成")
+                    Text(viewModel.errorFeedbackTitle)
                         .font(Theme.Typography.cardTitle)
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(message)
@@ -276,7 +276,7 @@ private struct TeacherAttendanceStudentRow: View {
 
                 if let pendingSubmission {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                        Text("伺服器目前狀態：\(authoritativeStatusTitle ?? "尚未取得")")
+                        Text("最後已知伺服器狀態：\(authoritativeStatusTitle ?? "尚未取得")")
                             .font(Theme.Typography.caption.weight(.semibold))
                             .foregroundStyle(Theme.Colors.textSecondary)
                         Text("待確認的原提交：\(pendingSubmission.status.title)")
