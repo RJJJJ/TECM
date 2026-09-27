@@ -111,3 +111,18 @@ test('release workflow requires the helper and contains no echoed fixture email 
   assert.doesNotMatch(workflow, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
   assert.doesNotMatch(workflow, /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])/i);
 });
+
+test('release E2E preserves safe diagnostics and clears credentials even after a failed run', () => {
+  const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/release-validation.yml'), 'utf8');
+  const steps = workflow.slice(workflow.indexOf('  admin-e2e:'), workflow.indexOf('\n  ios:'));
+  assert.match(steps, /export NODE_OPTIONS=.*--require=\$\{PWD\}\/scripts\/e2e-network-diagnostics\.cjs/);
+  assert.match(steps, /export DEBUG=.*pw:webserver/);
+  assert.match(steps, /npm run test:e2e\s+npm run test:e2e:verify/);
+  assert.match(steps, /name: Clear Admin E2E credential environment\s+if: always\(\)/);
+  assert.match(steps, /name: Preserve safe Admin E2E diagnostics and result\s+if: always\(\)/);
+  const upload = steps.slice(steps.indexOf('      - name: Preserve safe Admin E2E'));
+  assert.match(upload, /tecm-admin-e2e-diagnostics\/\*\.jsonl/);
+  assert.match(upload, /test-results\/playwright-results-\*\.json/);
+  assert.doesNotMatch(upload, /(?:^|\n)\s+(?:admin-web\/)?(?:test-results\/?\s*$|playwright-report|.*\.zip)/m);
+  assert.match(steps, /timeout-minutes: 30/);
+});
