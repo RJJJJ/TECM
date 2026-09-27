@@ -195,8 +195,16 @@ jobs:
               "$NEXT_PUBLIC_SUPABASE_URL/auth/v1/admin/users/$user_id" >/dev/null
           done
           cd admin-web
+          # Passive, local-only metadata; inherited by Playwright and Next child processes.
+          export TECM_E2E_DIAGNOSTICS_DIR="${RUNNER_TEMP}/tecm-admin-e2e-diagnostics"
+          export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--require=${PWD}/scripts/e2e-network-diagnostics.cjs"
+          export DEBUG="${DEBUG:+$DEBUG,}pw:webserver"
           npm run test:e2e
           npm run test:e2e:verify
+      - name: Clear Admin E2E credential environment
+        if: always()
+        shell: bash
+        run: |
           for variable in \
             NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY \
             SUPABASE_SERVICE_ROLE_KEY TECM_ORGANIZATION_ID TECM_E2E_AUTH_IDS \
@@ -206,6 +214,17 @@ jobs:
             PLAYWRIGHT_RUN_ID PLAYWRIGHT_RESULT_FILE PLAYWRIGHT_EXPECTED_TESTS; do
             printf '%s=\n' "$variable" >> "$GITHUB_ENV"
           done
+      - name: Preserve safe Admin E2E diagnostics and result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-e2e-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/tecm-admin-e2e-diagnostics/*.jsonl
+            admin-web/test-results/playwright-results-*.json
+          if-no-files-found: warn
+          retention-days: 14
+          # Raw traces, HTML and error-context can contain Auth data; exclude them.
 
   ios:
     runs-on: macos-15
